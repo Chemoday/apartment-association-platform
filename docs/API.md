@@ -558,7 +558,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 - **Building:** entrance 1 has apartments 1, 2, 3; entrance 2 has 13, 14, 15. Apartments 3 and 13 have no app users. Every apartment has a cold and a hot water meter; the basement has a cold and a hot water master meter.
 - **History:** `2026-07`, `2026-08`, `2026-09` are `LOCKED` with readings for every meter. Readings of apartments without app users were entered by the chairman (`ADMIN_OVERRIDE`); Apt 13 in `2026-08` is `AUTO_ESTIMATED`. The master meters show a small loss over the apartments. Apt 14's cold water reading of `2026-09` was corrected once, so its history has two entries.
 - **October (`2026-10`, `OPEN_FOR_RESIDENTS`):** Apt 1 submitted both meters and Apt 2 its cold water. Apt 15's hot water is a confirmed anomaly (31 m³, a leaking tap). **Apt 14 has submitted nothing**, so the demo can start there; a normal value is its previous value plus about 4.8 m³ (cold) or 2.2 m³ (hot). A delta above 3 × its 3-month average (about 14.4 m³ cold, 6.5 m³ hot) or above the meter limit (25 / 15 m³) triggers the two popups.
-- **Communication:** an active `EMERGENCY` (hot water off) targeted at entrance 2, so Apt 14 sees the banner and Apt 2 does not; an `OFFICIAL_NOTICE` without comments; two forum topics with comments from several residents; an `APARTMENT_THREAD` from the chairman to Apt 14 with the owner's reply (the board and Apt 14 see it, Apt 2 does not); a `BOARD_TOPIC` about the keys with a reply of the board member (only the chairman and the board see it, by name). Every demo membership starts on 2024-06-01.
+- **Communication:** an active `EMERGENCY` (hot water off) targeted at entrance 2, so Apt 14 sees the banner and Apt 2 does not; an `OFFICIAL_NOTICE` without comments; two forum topics with comments from several residents; an `APARTMENT_THREAD` from the chairman to Apt 14 with the owner's reply (the board and Apt 14 see it, Apt 2 does not); a `BOARD_TOPIC` about the keys with a reply of the board member (only the chairman and the board see it, by name). Polls: an open poll about the Saturday of the spring clean-up (one answer per apartment, all residents), answered by Apt 1. Every demo membership starts on 2024-06-01.
 - Seeding publishes and stores no domain events, so no notifications are sent, now or later.
 
 ## 6. Notifications (`notifications`), epic E1
@@ -590,8 +590,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   fixed system text in the user's `locale`. The chairman cannot change system texts. What leaves
   the system on external channels: the event type, the emergency title and body (written by the
   board), the target (e.g. "entrance 2"), the period code and due date, that a message between the
-  board and an apartment exists and the apartment number, and a link to the site. Comments, forum
-  posts, thread messages and author names never do.
+  board and an apartment exists and the apartment number, that a poll was opened and its deadline
+  date, and a link to the site. Comments, forum posts, thread messages and author names never do.
 - **Who gets what:**
 
 | `event_type` | Recipients | Mandatory |
@@ -602,6 +602,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `PERIOD_REVIEW` | the chairman and accountants when a period moves to `REVIEW_BY_BOARD`, except the person who moved it | no |
 | `APARTMENT_MESSAGE` | a new thread or reply (`APARTMENT_THREAD`, section 4): the active members of the thread's apartment who see the thread, except the author. A board member who is also such a member gets only this one, once | no |
 | `APARTMENT_MESSAGE_TO_BOARD` | a new thread or reply written from the apartment (not by the board): the chairman and the board members, except the author and those who already get `APARTMENT_MESSAGE`. A message written by the board notifies no other board member | no |
+| `POLL_OPENED` | a poll was opened (section 8): everyone who may answer it (the eligible members of the snapshot apartments, or the snapshot people), never the board member who opened it | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -612,6 +613,13 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   collapses the messages of one thread into the latest one (the collapse key is the post).
   An in-app notification stays in the feed after its recipient lost access to the thread; opening
   its subject then answers `404 POST_NOT_FOUND`.
+- **A new poll** (epic E3, task V3) notifies once, when the poll opens: "The board started a poll.
+  Please answer by 12.11.2026." (the local deadline date), without the title or the questions.
+  Right before an external message is sent, a poll that is no longer open (closed or cancelled
+  meanwhile) is skipped with `POLL_NOT_OPEN`, and a recipient who may no longer answer it (moved
+  out, or no longer an owner of a targeted apartment for an owners-only poll) with
+  `SUBJECT_NOT_FOUND`. The text names the poll's current deadline, so an extension made before
+  sending is in it.
 
 - Users who join, link a channel or add a device while an emergency is active see it as the banner
   (`GET /api/v1/communication/emergencies/active`); old alerts are not sent to them on any channel.
@@ -636,6 +644,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `PERIOD_REVIEW` | on | on | off | off |
 | `APARTMENT_MESSAGE` | on | on | on | on |
 | `APARTMENT_MESSAGE_TO_BOARD` | on | off | off | off |
+| `POLL_OPENED` | on | on | on | on |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences.
@@ -655,12 +664,14 @@ member can switch on e-mail, Telegram or WebPush in the preferences.
 }
 ```
 - `subject_type` `post` links to `GET /api/v1/communication/posts/{subject_id}`; `period` links to
-  the readings of that period (`params.period_code`).
+  the readings of that period (`params.period_code`); `poll` links to
+  `GET /api/v1/governance/polls/{subject_id}`.
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
   `from_board` (`true`: the board wrote; `false`: a resident of the apartment wrote). The subject
-  is the thread (`subject_type` `post`), also for a reply.
+  is the thread (`subject_type` `post`), also for a reply; `POLL_OPENED` `closes_at` (the
+  deadline when the poll opened, UTC; the board may extend it later, the poll has the current one).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -699,7 +710,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 24 combinations of `event_type` and `channel` (30 once
+- `preferences` always has all 28 combinations of `event_type` and `channel` (35 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -715,7 +726,7 @@ Only the listed combinations change. Response: the same body as the `GET`.
 
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
-`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -1332,7 +1343,8 @@ chair@example.com`.
 
 The board asks the residents or the owners questions; everyone sees totals only. Design and owner
 decisions: docs/epics/E3_GOVERNANCE_VOTING.md section 3. Results (`GET /polls/{id}/results`) come
-with task V2 and the "new poll" notification with V3. Every endpoint needs a signed-in user;
+with task V2; opening a poll notifies everyone who may answer (`POLL_OPENED`, section 6).
+Every endpoint needs a signed-in user;
 "the board" is `CHAIRMAN` or `BOARD`.
 
 ### Poll object (`PollView`)
@@ -1401,7 +1413,8 @@ with task V2 and the "new poll" notification with V3. Every endpoint needs a sig
 ### `GET /api/v1/governance/polls?status=OPEN&limit=50&offset=0`
 The polls the caller sees (`PollView` without `questions` and `my_ballots`, plus `answered`:
 whether every unit the caller may answer for has answered; `false` when there is none and
-for a cancelled poll, which also has `can_answer: false` and no `answerable_apartment_ids`). Open polls first, by `closes_at`;
+for a cancelled poll, which also has `can_answer: false` and no
+`answerable_apartment_ids`). Open polls first, by `closes_at`;
 then the others, newest `opened_at` (drafts: newest `created_at`) first. `status` filters
 (optional); `limit` 1..100, `offset` 0..100000.
 
@@ -1488,6 +1501,10 @@ Answers, or replaces the caller's unit's answer; the last answer counts. Respons
   the apartment confirming them does add one).
 - `answers` in `my_ballots` follow the order of the questions, and `option_ids` the order of the
   options.
+
+### Domain events
+Stored durably with the request (docs/ARCHITECTURE.md 2), ids only:
+- `PollOpened`: `poll_id`, `building_id`, `opened_by_user_id`; drives `POLL_OPENED` (section 6).
 
 ### Error codes of this section
 | Status | `error_code` |

@@ -426,8 +426,14 @@ header, so they need a real sign-in even in demo mode.
 
 ## 13. Polls (epic E3)
 
-Contract: docs/API.md section 8. Results and the "new poll" notification follow in tasks V2 and
-V3.
+Contract: docs/API.md section 8. Results follow in task V2.
+
+- **Notification:** `POLL_OPENED` (`subject_type` `poll`, `params.closes_at`) reads "The board
+  started a poll. Please answer by `<local date of closes_at>`" and opens the poll page.
+  `params.closes_at` is the deadline at opening; the poll page shows the poll's own `closes_at`,
+  which the board may have extended since.
+- **Deadline picker:** the board picks a day; send the end of that day in local time (23:59:59),
+  so "answer by <date>" names the last day on which answers are taken.
 
 - **Board:** a "Polls" page with drafts, open and closed polls. A draft is edited freely
   (`PUT /governance/polls/{id}`) and opened with `POST .../open`; after that the questions are
