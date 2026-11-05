@@ -24,6 +24,7 @@ from src.core.event_bus import DomainEvent
 _MODULE_EVENT_MODULES = (
     "src.modules.auth.events",
     "src.modules.communication.events",
+    "src.modules.governance.events",
     "src.modules.meters.events",
 )
 

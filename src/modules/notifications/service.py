@@ -30,6 +30,8 @@ from src.modules.communication.events import (
     EmergencyAlertResolved,
 )
 from src.modules.communication.service import CommunicationService
+from src.modules.governance.events import PollOpened
+from src.modules.governance.service import GovernanceService
 from src.modules.meters.events import ReadingPeriodStatusChanged
 from src.modules.meters.schemas import PeriodStatus
 from src.modules.notifications.models import ChannelBinding, Delivery, LinkCode, Preference
@@ -44,6 +46,7 @@ from src.modules.notifications.policies import (
     is_enabled,
     is_mandatory,
     period_review_key,
+    poll_opened_key,
     priority_for,
     split_message_recipients,
     unsubscribe_delivery_id,
@@ -406,6 +409,7 @@ class NotificationsSubscriber:
         bus.subscribe(EmergencyAlertResolved, self.on_emergency_resolved)
         bus.subscribe(ReadingPeriodStatusChanged, self.on_period_status_changed)
         bus.subscribe(ApartmentMessagePosted, self.on_apartment_message)
+        bus.subscribe(PollOpened, self.on_poll_opened)
         bus.subscribe(UserAccountClosed, self.on_account_closed)
 
     async def on_account_closed(self, event: UserAccountClosed) -> None:
@@ -564,6 +568,30 @@ class NotificationsSubscriber:
                     subject=subject,
                     params=params,
                 )
+            await session.commit()
+
+    async def on_poll_opened(self, event: PollOpened) -> None:
+        """A new poll: everyone who may answer it, never the board member who opened it.
+
+        The audience comes from governance (the poll's snapshot and the current memberships). A
+        poll closed or cancelled before the event is processed notifies nobody.
+        """
+        async with self._session() as session:
+            properties = PropertyService(session)
+            audience = await GovernanceService(session, properties).get_poll_audience(event.poll_id)
+            if audience is None or not audience.is_open:
+                return
+            recipients = await properties.get_recipients(
+                user_id for user_id in audience.user_ids if user_id != event.opened_by_user_id
+            )
+            await self.notify(
+                session,
+                recipients,
+                event_type=NotificationEventType.POLL_OPENED,
+                dedup_key=poll_opened_key(event.poll_id),
+                subject=(SubjectType.POLL, event.poll_id),
+                params={"closes_at": audience.closes_at.isoformat()},
+            )
             await session.commit()
 
     @staticmethod

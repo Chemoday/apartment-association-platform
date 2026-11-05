@@ -308,6 +308,18 @@ class PropertyService:
         found = row.first()
         return RecipientDTO(user_id=found.id, locale=found.locale) if found else None
 
+    async def get_recipients(self, user_ids: Iterable[uuid.UUID]) -> list[RecipientDTO]:
+        """The active users among these as notification recipients, in a stable order."""
+        ids = list(set(user_ids))
+        if not ids:
+            return []
+        rows = await self.session.execute(
+            select(User.id, User.locale)
+            .where(User.id.in_(ids), User.is_active.is_(True))
+            .order_by(User.id)
+        )
+        return [RecipientDTO(user_id=user_id, locale=locale) for user_id, locale in rows.all()]
+
     async def reading_submitters(self, apartment_ids: Iterable[uuid.UUID]) -> list[RecipientDTO]:
         """Active members of these apartments who may submit readings, once each."""
         ids = list(apartment_ids)

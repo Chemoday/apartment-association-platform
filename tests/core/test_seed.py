@@ -361,3 +361,19 @@ async def test_the_board_shares_a_topic_by_name(
         "Peeter Saar"
     ]
     assert owner.json() == []
+
+
+async def test_the_building_has_an_open_poll_answered_by_apartment_1(
+    seeded: AsyncSession, api_client: AsyncClient
+) -> None:
+    url = "/api/v1/governance/polls"
+    owner_1 = (await api_client.get(url, headers=as_demo(DemoUserKey.OWNER_1))).json()
+    owner_14 = (await api_client.get(url, headers=as_demo(DemoUserKey.OWNER_14))).json()
+
+    (poll,) = owner_1
+    assert (poll["status"], poll["answered"], poll["can_answer"]) == ("OPEN", True, True)
+    assert (owner_14[0]["answered"], owner_14[0]["can_answer"]) == (False, True)
+    detail = await api_client.get(f"{url}/{poll['id']}", headers=as_demo(DemoUserKey.OWNER_14))
+    day, note = detail.json()["questions"]
+    assert day["value_type"] == "DATE" and len(day["options"]) == 2
+    assert note["answer_mode"] == "OWN_VALUE"

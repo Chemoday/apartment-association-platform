@@ -21,6 +21,7 @@ from src.modules.notifications.policies import (
     keyed_hash,
     next_reminder_hours,
     period_review_key,
+    poll_opened_key,
     priority_for,
     reminder_deadline,
     reminder_due,
@@ -74,6 +75,7 @@ def test_dedup_keys() -> None:
     comment = uuid.uuid4()
     assert apartment_message_key(post, None) == f"apartment_message:{post}"
     assert apartment_message_key(post, comment) == f"apartment_message:{post}:{comment}"
+    assert poll_opened_key(post) == f"poll_opened:{post}"
 
 
 def test_external_channels_are_not_used_for_late_events() -> None:

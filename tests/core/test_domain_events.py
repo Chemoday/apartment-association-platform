@@ -35,6 +35,7 @@ from src.modules.communication.events import (
     PostDeleted,
 )
 from src.modules.communication.schemas import PostCategory, PostType, TargetScope
+from src.modules.governance.events import PollOpened
 from src.modules.meters.events import MeterReadingSubmitted, ReadingPeriodStatusChanged
 from src.modules.meters.schemas import PeriodStatus, ReadingSource
 from src.modules.property.models import Building
@@ -81,6 +82,7 @@ def _samples() -> dict[str, DomainEvent]:
         "EmergencyAlertResolved": EmergencyAlertResolved(
             post_id=post, building_id=building, resolved_by_user_id=user
         ),
+        "PollOpened": PollOpened(poll_id=post, building_id=building, opened_by_user_id=user),
         "PostDeleted": PostDeleted(
             post_id=post,
             building_id=building,

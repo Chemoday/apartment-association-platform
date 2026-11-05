@@ -105,10 +105,15 @@ def compose(
         key = "FROM_BOARD" if params.get("from_board") else "FROM_RESIDENT"
         subject = catalog.render(f"subject.APARTMENT_MESSAGE.{key}", locale)
         text = catalog.render(f"text.APARTMENT_MESSAGE.{key}", locale)
-    else:  # APARTMENT_MESSAGE_TO_BOARD
+    elif event_type == E.APARTMENT_MESSAGE_TO_BOARD:
         number = params["apartment_number"]
         subject = catalog.render(subject_key, locale, apartment_number=number)
         text = catalog.render("text.APARTMENT_MESSAGE_TO_BOARD", locale, apartment_number=number)
+    else:  # POLL_OPENED: no title and no questions, only the local deadline date
+        subject = catalog.render(subject_key, locale)
+        text = catalog.render(
+            "text.POLL_OPENED", locale, closes_at=_local_date(params["closes_at"], timezone)
+        )
     footer = catalog.render("footer", locale, site_url=site_url)
     # A subject is one line: a title may contain line breaks (also U+2028), which a mail header
     # cannot carry, and the mandatory alert must not fail because of them.

@@ -244,3 +244,26 @@ class PollView(PollBase):
     can_answer: bool
     answerable_apartment_ids: list[uuid.UUID]
     my_ballots: list[BallotView]
+
+
+class PollRefDTO(BaseModel):
+    """A poll's state for the notifications module (system-level, no content)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    poll_id: uuid.UUID
+    building_id: uuid.UUID
+    is_open: bool
+    closes_at: datetime
+
+
+class PollAudienceDTO(BaseModel):
+    """Who may answer a poll now, for the notifications module (system-level, ids only)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    poll_id: uuid.UUID
+    building_id: uuid.UUID
+    is_open: bool
+    closes_at: datetime
+    user_ids: tuple[uuid.UUID, ...]

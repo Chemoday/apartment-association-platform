@@ -13,8 +13,10 @@ from sqlalchemy import ColumnElement, Text, and_, case, delete, func, literal, o
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database import DbSession
+from src.core.database import DbSession, get_event_outbox
+from src.core.event_bus import EventOutbox
 from src.core.exceptions import DomainError
+from src.modules.governance.events import PollOpened
 from src.modules.governance.models import (
     Ballot,
     BallotAnswer,
@@ -43,9 +45,11 @@ from src.modules.governance.schemas import (
     DeadlineUpdate,
     Eligibility,
     OptionView,
+    PollAudienceDTO,
     PollBase,
     PollDraftRequest,
     PollKind,
+    PollRefDTO,
     PollStatus,
     PollSummary,
     PollUnit,
@@ -125,9 +129,84 @@ def _answer_rows(
 
 
 class GovernanceService:
-    def __init__(self, session: AsyncSession, property_service: PropertyService):
+    def __init__(
+        self,
+        session: AsyncSession,
+        property_service: PropertyService,
+        outbox: EventOutbox | None = None,
+    ):
         self.session = session
         self.property_service = property_service
+        # Events go out only after the request's transaction commits. None only for
+        # system-level readers (the notifications module), which never write.
+        self.outbox = outbox
+
+    # --- System-level reads (no request caller; used by the notifications module) ---------------
+
+    async def get_poll_ref(self, poll_id: uuid.UUID) -> PollRefDTO | None:
+        """The poll's state now (open or not, the current deadline). None for an unknown poll."""
+        poll = await self.session.get(Poll, poll_id, populate_existing=True)
+        if poll is None:
+            return None
+        return PollRefDTO(
+            poll_id=poll.id,
+            building_id=poll.building_id,
+            is_open=self._status(poll) == PollStatus.OPEN,
+            closes_at=poll.closes_at,
+        )
+
+    async def may_answer(self, user: CurrentUserDTO, poll_id: uuid.UUID) -> bool:
+        """Whether this user sees the open poll and may answer it now (the same rules as
+        `PUT .../ballot`); checked again right before a new-poll message is sent."""
+        poll = await self.session.scalar(
+            select(Poll)
+            .where(Poll.id == poll_id, self._visible_to(user))
+            .execution_options(populate_existing=True)
+        )
+        if poll is None or self._status(poll) != PollStatus.OPEN:
+            return False
+        return bool((await self._caller_units(user, [poll]))[poll.id])
+
+    async def get_poll_audience(self, poll_id: uuid.UUID) -> PollAudienceDTO | None:
+        """Who may answer the poll now: the eligible current members of its snapshot apartments,
+        or its snapshot people. None for an unknown poll."""
+        poll = await self.session.get(Poll, poll_id)
+        if poll is None:
+            return None
+        if poll.unit == PollUnit.PERSON:
+            user_ids = sorted(
+                {
+                    user_id
+                    for user_id in await self.session.scalars(
+                        select(PollElector.user_id).where(PollElector.poll_id == poll.id)
+                    )
+                    if user_id is not None
+                },
+                key=str,
+            )
+        else:
+            apartments = [
+                apartment_id
+                for apartment_id in await self.session.scalars(
+                    select(PollElector.apartment_id).where(PollElector.poll_id == poll.id)
+                )
+                if apartment_id is not None
+            ]
+            electors = await self.property_service.poll_electors(
+                poll.building_id,
+                TargetScope.APARTMENT_LIST,
+                None,
+                apartments,
+                owners_only=poll.eligibility == Eligibility.OWNERS,
+            )
+            user_ids = sorted({elector.user_id for elector in electors}, key=str)
+        return PollAudienceDTO(
+            poll_id=poll.id,
+            building_id=poll.building_id,
+            is_open=self._status(poll) == PollStatus.OPEN,
+            closes_at=poll.closes_at,
+            user_ids=tuple(user_ids),
+        )
 
     # --- The board's actions --------------------------------------------------------------------
 
@@ -207,6 +286,11 @@ class GovernanceService:
         )
         poll.status, poll.opened_at, poll.updated_at = PollStatus.OPEN, now, now
         await self.session.flush()
+        if self.outbox is None:
+            raise RuntimeError("opening a poll needs the request outbox")
+        self.outbox.add(
+            PollOpened(poll_id=poll.id, building_id=poll.building_id, opened_by_user_id=user.id)
+        )
         return await self._view(user, poll)
 
     async def close_poll(self, user: CurrentUserDTO, poll_id: uuid.UUID) -> PollView:
@@ -737,6 +821,8 @@ class GovernanceService:
 
 
 def get_governance_service(
-    session: DbSession, property_service: PropertyService = Depends(get_property_service)
+    session: DbSession,
+    property_service: PropertyService = Depends(get_property_service),
+    outbox: EventOutbox = Depends(get_event_outbox),
 ) -> GovernanceService:
-    return GovernanceService(session, property_service)
+    return GovernanceService(session, property_service, outbox)

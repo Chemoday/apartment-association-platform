@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.database import build_engine
+from src.core.event_bus import EventOutbox, InMemoryEventBus
 from src.core.exceptions import DomainError
 from src.core.migrations import alembic_config
 from src.modules.governance.models import BallotRevision
@@ -37,7 +38,9 @@ async def committed(database_url: str) -> AsyncIterator[tuple[AsyncEngine, dict]
         async with AsyncSession(engine, expire_on_commit=False) as session:
             world: PollWorld = await build_poll_world(session)
             chairman = await PropertyService(session).get_current_user(world.chairman.id)
-            service = GovernanceService(session, PropertyService(session))
+            service = GovernanceService(
+                session, PropertyService(session), EventOutbox(InMemoryEventBus())
+            )
             draft = PollDraftRequest(
                 title="Clean-up",
                 eligibility=Eligibility.RESIDENTS,

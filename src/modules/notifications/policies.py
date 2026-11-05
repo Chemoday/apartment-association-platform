@@ -46,6 +46,10 @@ DEFAULT_PREFERENCES: Mapping[tuple[NotificationEventType, Channel], bool] = {
     (_E.APARTMENT_MESSAGE_TO_BOARD, _C.EMAIL): False,
     (_E.APARTMENT_MESSAGE_TO_BOARD, _C.TELEGRAM): False,
     (_E.APARTMENT_MESSAGE_TO_BOARD, _C.WEBPUSH): False,
+    (_E.POLL_OPENED, _C.IN_APP): True,
+    (_E.POLL_OPENED, _C.EMAIL): True,
+    (_E.POLL_OPENED, _C.TELEGRAM): True,
+    (_E.POLL_OPENED, _C.WEBPUSH): True,
 }
 
 APARTMENT_MESSAGE_EVENTS = frozenset(
@@ -174,6 +178,10 @@ def apartment_message_key(post_id: uuid.UUID, comment_id: uuid.UUID | None) -> s
     if comment_id is None:
         return f"apartment_message:{post_id}"
     return f"apartment_message:{post_id}:{comment_id}"
+
+
+def poll_opened_key(poll_id: uuid.UUID) -> str:
+    return f"poll_opened:{poll_id}"
 
 
 def split_message_recipients(

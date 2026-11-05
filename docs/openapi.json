@@ -7755,7 +7755,8 @@
           "READING_DEADLINE",
           "PERIOD_REVIEW",
           "APARTMENT_MESSAGE",
-          "APARTMENT_MESSAGE_TO_BOARD"
+          "APARTMENT_MESSAGE_TO_BOARD",
+          "POLL_OPENED"
         ],
         "title": "NotificationEventType"
       },
@@ -8935,7 +8936,7 @@
               "$ref": "#/components/schemas/PreferenceChange"
             },
             "type": "array",
-            "maxItems": 24,
+            "maxItems": 28,
             "title": "Preferences"
           }
         },
@@ -9837,7 +9838,8 @@
         "type": "string",
         "enum": [
           "post",
-          "period"
+          "period",
+          "poll"
         ],
         "title": "SubjectType"
       },
