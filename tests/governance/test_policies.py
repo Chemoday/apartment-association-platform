@@ -7,12 +7,16 @@ import pytest
 
 from src.modules.governance.policies import (
     AnswerProblem,
+    CheckedAnswer,
     GivenAnswer,
     QuestionSpec,
+    ResultQuestion,
     canonical_value,
     check_ballot,
     effective_status,
     electorate_units,
+    results_available,
+    tally,
     target_problem,
 )
 from src.modules.governance.schemas import AnswerMode, PollStatus, PollUnit, ValueType
@@ -144,3 +148,88 @@ def test_a_ballot_that_does_not_fit_is_refused(answers: list, reason: str) -> No
         check_ballot([CHOICE, DAY], answers)
 
     assert problem.value.reason == reason
+
+
+# --- Results -------------------------------------------------------------------------------------
+
+
+def _question(mode: AnswerMode, value_type: ValueType, options: int = 0) -> ResultQuestion:
+    return ResultQuestion(
+        id=uuid.uuid4(),
+        answer_mode=mode,
+        value_type=value_type,
+        option_ids=tuple(uuid.uuid4() for _ in range(options)),
+    )
+
+
+def _own(question: ResultQuestion, value: str) -> list[CheckedAnswer]:
+    return [CheckedAnswer(question_id=question.id, option_ids=(), value=value)]
+
+
+@pytest.mark.parametrize(
+    ("values", "average"),
+    [
+        (["1", "1", "2"], "1.333333"),
+        (["0.000001", "0.000002"], "0.000002"),  # 0.0000015, half-even
+        (["0.000001", "0"], "0"),  # 0.0000005, half-even to the even 0
+        (["-2", "2"], "0"),
+        (["999999999999.999999", "999999999999.999999"], "999999999999.999999"),
+    ],
+)
+def test_the_average_of_own_numbers_is_exact_and_rounded_half_even(
+    values: list[str], average: str
+) -> None:
+    question = _question(AnswerMode.OWN_VALUE, ValueType.NUMBER)
+
+    _, [result] = tally([question], 5, [_own(question, value) for value in values], with_texts=True)
+
+    assert result.number is not None and result.number.average == average
+    assert result.answered == len(values)
+
+
+def test_totals_count_options_dates_and_texts() -> None:
+    choice = _question(AnswerMode.MULTIPLE_CHOICE, ValueType.TEXT, options=3)
+    day = _question(AnswerMode.OWN_VALUE, ValueType.DATE)
+    number = _question(AnswerMode.OWN_VALUE, ValueType.NUMBER)
+    note = _question(AnswerMode.OWN_VALUE, ValueType.TEXT)
+    a, b, c = choice.option_ids
+    ballots = [
+        [CheckedAnswer(choice.id, (a, c), None), *_own(day, "2026-05-02"), *_own(note, "b")],
+        [CheckedAnswer(choice.id, (c,), None), *_own(day, "2026-04-30"), *_own(note, "B")],
+        [*_own(day, "2026-05-02"), *_own(note, "a")],
+        [],  # answered nothing (all optional), still took part
+    ]
+
+    participation, [chosen, days, numbers, notes] = tally(
+        [choice, day, number, note], 6, ballots, with_texts=True
+    )
+
+    assert (participation.answered, participation.electorate) == (4, 6)
+    assert chosen.answered == 2
+    assert [(o.option_id, o.count) for o in chosen.options or []] == [(a, 1), (b, 0), (c, 2)]
+    assert [(d.value, d.count) for d in days.dates or []] == [("2026-04-30", 1), ("2026-05-02", 2)]
+    assert (numbers.answered, numbers.number) == (0, None)
+    assert [(t.value, t.count) for t in notes.texts or []] == [("a", 1), ("B", 1), ("b", 1)]
+    assert (chosen.number, chosen.dates, chosen.texts, days.options) == (None, None, None, None)
+
+
+def test_texts_stay_hidden_without_permission() -> None:
+    note = _question(AnswerMode.OWN_VALUE, ValueType.TEXT)
+
+    _, [result] = tally([note], 1, [_own(note, "secret")], with_texts=False)
+
+    assert (result.answered, result.texts) == (1, None)
+
+
+@pytest.mark.parametrize(
+    ("status", "board", "available"),
+    [
+        (PollStatus.DRAFT, True, False),
+        (PollStatus.OPEN, True, True),
+        (PollStatus.OPEN, False, False),
+        (PollStatus.CLOSED, False, True),
+        (PollStatus.CANCELLED, True, False),
+    ],
+)
+def test_who_sees_results_when(status: PollStatus, board: bool, available: bool) -> None:
+    assert results_available(status, board=board) is available

@@ -228,6 +228,8 @@ class PollBase(BaseModel):
     closed_at: datetime | None
     cancelled_at: datetime | None
     created_at: datetime
+    # Whether GET .../results answers for the caller now (the board once open, others closed).
+    results_available: bool
 
 
 class PollSummary(PollBase):
@@ -244,6 +246,49 @@ class PollView(PollBase):
     can_answer: bool
     answerable_apartment_ids: list[uuid.UUID]
     my_ballots: list[BallotView]
+
+
+class OptionResult(BaseModel):
+    option_id: uuid.UUID
+    count: int
+
+
+class NumberResult(BaseModel):
+    min: str
+    max: str
+    average: str
+
+
+class ValueCountResult(BaseModel):
+    value: str
+    count: int
+
+
+class QuestionResult(BaseModel):
+    """Totals of one question; at most one of options, number, dates and texts is set, by its
+    kind (number stays null while nobody answered, texts are for the board only)."""
+
+    question_id: uuid.UUID
+    answered: int
+    options: list[OptionResult] | None
+    number: NumberResult | None
+    dates: list[ValueCountResult] | None
+    texts: list[ValueCountResult] | None
+
+
+class Participation(BaseModel):
+    answered: int
+    electorate: int
+
+
+class PollResults(BaseModel):
+    """GET /governance/polls/{id}/results: totals only, never who answered or how."""
+
+    poll_id: uuid.UUID
+    status: PollStatus
+    unit: PollUnit
+    participation: Participation
+    questions: list[QuestionResult]
 
 
 class PollRefDTO(BaseModel):

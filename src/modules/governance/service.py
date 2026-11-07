@@ -32,10 +32,13 @@ from src.modules.governance.policies import (
     CheckedAnswer,
     GivenAnswer,
     QuestionSpec,
+    ResultQuestion,
     check_ballot,
     effective_status,
     electorate_units,
     is_board,
+    results_available,
+    tally,
     target_problem,
 )
 from src.modules.governance.schemas import (
@@ -50,6 +53,7 @@ from src.modules.governance.schemas import (
     PollDraftRequest,
     PollKind,
     PollRefDTO,
+    PollResults,
     PollStatus,
     PollSummary,
     PollUnit,
@@ -92,6 +96,15 @@ def _not_open(status: PollStatus) -> DomainError:
         status_code=409,
         error_code="POLL_NOT_OPEN",
         message="The poll is not open.",
+        extra={"status": status.value},
+    )
+
+
+def _results_not_available(status: PollStatus) -> DomainError:
+    return DomainError(
+        status_code=409,
+        error_code="RESULTS_NOT_AVAILABLE",
+        message="The results of this poll are not available now.",
         extra={"status": status.value},
     )
 
@@ -347,7 +360,7 @@ class GovernanceService:
         )
         return [
             PollSummary(
-                **self._base(poll, now).model_dump(),
+                **self._base(user, poll, now).model_dump(),
                 can_answer=self._status(poll, now) == PollStatus.OPEN and bool(units[poll.id]),
                 answerable_apartment_ids=self._apartments(units[poll.id]),
                 answered=bool(units[poll.id])
@@ -358,6 +371,67 @@ class GovernanceService:
 
     async def get_poll(self, user: CurrentUserDTO, poll_id: uuid.UUID) -> PollView:
         return await self._view(user, await self._visible_poll(user, poll_id))
+
+    async def get_results(self, user: CurrentUserDTO, poll_id: uuid.UUID) -> PollResults:
+        """Totals of a poll: the board from opening, everyone else who sees it after closing.
+
+        Ballots and their answers are read in one statement, so a concurrent answer is either in
+        the totals completely or not at all.
+        """
+        poll = await self._visible_poll(user, poll_id)
+        board = is_board(user.building_role)
+        status = self._status(poll)
+        if not results_available(status, board=board):
+            raise _results_not_available(status)
+        questions, options = await self._questions(poll.id)
+        electorate = await self.session.scalar(
+            select(func.count()).select_from(PollElector).where(PollElector.poll_id == poll.id)
+        )
+        rows = await self.session.execute(
+            select(Ballot.id, BallotAnswer.question_id, BallotAnswer.option_id, BallotAnswer.value)
+            .outerjoin(BallotAnswer, BallotAnswer.ballot_id == Ballot.id)
+            .where(Ballot.poll_id == poll.id)
+        )
+        # Per ballot (also one that left every optional question out), per question: the chosen
+        # options and the own value.
+        answers: dict[uuid.UUID, dict[uuid.UUID, tuple[list[uuid.UUID], str | None]]] = {}
+        for ballot_id, question_id, option_id, value in rows:
+            questions_of = answers.setdefault(ballot_id, {})
+            if question_id is None:
+                continue
+            option_ids, own = questions_of.setdefault(question_id, ([], None))
+            if option_id is not None:
+                option_ids.append(option_id)
+            else:
+                questions_of[question_id] = (option_ids, value or own)
+        ballots = [
+            [
+                CheckedAnswer(question_id=question_id, option_ids=tuple(option_ids), value=own)
+                for question_id, (option_ids, own) in by_question.items()
+            ]
+            for by_question in answers.values()
+        ]
+        participation, totals = tally(
+            [
+                ResultQuestion(
+                    id=question.id,
+                    answer_mode=question.answer_mode,
+                    value_type=question.value_type,
+                    option_ids=tuple(option.id for option in options.get(question.id, [])),
+                )
+                for question in questions
+            ],
+            electorate or 0,
+            ballots,
+            with_texts=board,
+        )
+        return PollResults(
+            poll_id=poll.id,
+            status=status,
+            unit=poll.unit,
+            participation=participation,
+            questions=totals,
+        )
 
     async def answer(
         self, user: CurrentUserDTO, poll_id: uuid.UUID, request: BallotRequest
@@ -666,13 +740,14 @@ class GovernanceService:
     def _status(poll: Poll, now: datetime | None = None) -> PollStatus:
         return effective_status(PollStatus(poll.status), poll.closes_at, now or _now())
 
-    def _base(self, poll: Poll, now: datetime) -> PollBase:
+    def _base(self, user: CurrentUserDTO, poll: Poll, now: datetime) -> PollBase:
+        status = self._status(poll, now)
         return PollBase(
             id=poll.id,
             kind=poll.kind,
             title=poll.title,
             description=poll.description,
-            status=self._status(poll, now),
+            status=status,
             target_scope=poll.target_scope,
             target_entrance=poll.target_entrance,
             target_apartment_ids=(
@@ -687,6 +762,7 @@ class GovernanceService:
             closed_at=poll.closed_at,
             cancelled_at=poll.cancelled_at,
             created_at=poll.created_at,
+            results_available=results_available(status, board=is_board(user.building_role)),
         )
 
     async def _question_specs(self, poll_id: uuid.UUID) -> list[QuestionSpec]:
@@ -729,7 +805,7 @@ class GovernanceService:
         electors = (await self._caller_units(user, [poll]))[poll.id]
         ballots = await self._ballots(electors, questions, options)
         return PollView(
-            **self._base(poll, now).model_dump(),
+            **self._base(user, poll, now).model_dump(),
             questions=[
                 QuestionView(
                     id=question.id,

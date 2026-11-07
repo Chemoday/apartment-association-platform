@@ -12,6 +12,7 @@ from src.modules.governance.schemas import (
     BallotRequest,
     DeadlineUpdate,
     PollDraftRequest,
+    PollResults,
     PollStatus,
     PollSummary,
     PollView,
@@ -177,3 +178,16 @@ async def answer_poll(
 ) -> PollView:
     """Answer, or replace the answer of, the caller's apartment or person; the last one counts."""
     return await service.answer(user, poll_id, body)
+
+
+@router.get(
+    "/polls/{poll_id}/results",
+    response_model=PollResults,
+    responses=error_responses(
+        {404: ["POLL_NOT_FOUND"], 409: ["RESULTS_NOT_AVAILABLE"], 422: ["VALIDATION_ERROR"]}
+    ),
+)
+async def poll_results(poll_id: uuid.UUID, user: Caller, service: Service) -> PollResults:
+    """Totals of a poll: the board from opening, everyone else after closing; free texts for
+    the board only, never who answered or how."""
+    return await service.get_results(user, poll_id)

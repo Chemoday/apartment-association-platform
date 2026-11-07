@@ -5072,6 +5072,98 @@
         }
       }
     },
+    "/api/v1/governance/polls/{poll_id}/results": {
+      "get": {
+        "tags": [
+          "governance"
+        ],
+        "summary": "Poll Results",
+        "description": "Totals of a poll: the board from opening, everyone else after closing; free texts for\nthe board only, never who answered or how.",
+        "operationId": "poll_results_api_v1_governance_polls__poll_id__results_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "poll_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Poll Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PollResults"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `POLL_NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state. error_code: `RESULTS_NOT_AVAILABLE`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notifications/feed": {
       "get": {
         "tags": [
@@ -7813,6 +7905,48 @@
         ],
         "title": "NotificationView"
       },
+      "NumberResult": {
+        "properties": {
+          "min": {
+            "type": "string",
+            "title": "Min"
+          },
+          "max": {
+            "type": "string",
+            "title": "Max"
+          },
+          "average": {
+            "type": "string",
+            "title": "Average"
+          }
+        },
+        "type": "object",
+        "required": [
+          "min",
+          "max",
+          "average"
+        ],
+        "title": "NumberResult"
+      },
+      "OptionResult": {
+        "properties": {
+          "option_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Option Id"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "option_id",
+          "count"
+        ],
+        "title": "OptionResult"
+      },
       "OptionView": {
         "properties": {
           "id": {
@@ -7864,6 +7998,24 @@
           "apartment_number"
         ],
         "title": "OwnerInvitationCreate"
+      },
+      "Participation": {
+        "properties": {
+          "answered": {
+            "type": "integer",
+            "title": "Answered"
+          },
+          "electorate": {
+            "type": "integer",
+            "title": "Electorate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "answered",
+          "electorate"
+        ],
+        "title": "Participation"
       },
       "PasswordLoginRequest": {
         "properties": {
@@ -8235,6 +8387,41 @@
         ],
         "title": "PollKind"
       },
+      "PollResults": {
+        "properties": {
+          "poll_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Poll Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PollStatus"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/PollUnit"
+          },
+          "participation": {
+            "$ref": "#/components/schemas/Participation"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionResult"
+            },
+            "type": "array",
+            "title": "Questions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "poll_id",
+          "status",
+          "unit",
+          "participation",
+          "questions"
+        ],
+        "title": "PollResults",
+        "description": "GET /governance/polls/{id}/results: totals only, never who answered or how."
+      },
       "PollStatus": {
         "type": "string",
         "enum": [
@@ -8347,6 +8534,10 @@
             "format": "date-time",
             "title": "Created At"
           },
+          "results_available": {
+            "type": "boolean",
+            "title": "Results Available"
+          },
           "can_answer": {
             "type": "boolean",
             "title": "Can Answer"
@@ -8381,6 +8572,7 @@
           "closed_at",
           "cancelled_at",
           "created_at",
+          "results_available",
           "can_answer",
           "answerable_apartment_ids",
           "answered"
@@ -8498,6 +8690,10 @@
             "format": "date-time",
             "title": "Created At"
           },
+          "results_available": {
+            "type": "boolean",
+            "title": "Results Available"
+          },
           "questions": {
             "items": {
               "$ref": "#/components/schemas/QuestionView"
@@ -8542,6 +8738,7 @@
           "closed_at",
           "cancelled_at",
           "created_at",
+          "results_available",
           "questions",
           "can_answer",
           "answerable_apartment_ids",
@@ -9062,6 +9259,82 @@
         ],
         "title": "QuestionDraft",
         "description": "One question of a draft. `policies.check_question` validates it and makes its option\nvalues and bounds canonical."
+      },
+      "QuestionResult": {
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Question Id"
+          },
+          "answered": {
+            "type": "integer",
+            "title": "Answered"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OptionResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NumberResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ValueCountResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dates"
+          },
+          "texts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ValueCountResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Texts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_id",
+          "answered",
+          "options",
+          "number",
+          "dates",
+          "texts"
+        ],
+        "title": "QuestionResult",
+        "description": "Totals of one question; at most one of options, number, dates and texts is set, by its\nkind (number stays null while nobody answered, texts are for the board only)."
       },
       "QuestionView": {
         "properties": {
@@ -9964,6 +10237,24 @@
           "type"
         ],
         "title": "ValidationErrorItem"
+      },
+      "ValueCountResult": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "count"
+        ],
+        "title": "ValueCountResult"
       },
       "ValueType": {
         "type": "string",

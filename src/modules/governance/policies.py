@@ -6,10 +6,11 @@ decisions) adds its majority and quorum rules here.
 
 import re
 import uuid
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
 from typing import TYPE_CHECKING
 
 from src.core.validation import clean_text
@@ -17,8 +18,13 @@ from src.modules.governance.schemas import (
     OPTION_MAX_LENGTH,
     OWN_TEXT_MAX_LENGTH,
     AnswerMode,
+    NumberResult,
+    OptionResult,
+    Participation,
     PollStatus,
     PollUnit,
+    QuestionResult,
+    ValueCountResult,
     ValueType,
 )
 from src.modules.property.schemas import BuildingRole, TargetScope
@@ -65,8 +71,7 @@ def canonical_value(value_type: ValueType, raw: str, *, max_length: int) -> str:
             number = Decimal(text)
         except InvalidOperation as exc:  # pragma: no cover - the pattern already guards it
             raise ValueError("not a number") from exc
-        canonical = format(number.normalize(), "f")
-        return "0" if canonical in ("-0", "0") else canonical
+        return _plain(number)
     text = raw.strip()
     if not _DATE.fullmatch(text):
         raise ValueError("a date is written as YYYY-MM-DD")
@@ -74,6 +79,12 @@ def canonical_value(value_type: ValueType, raw: str, *, max_length: int) -> str:
         return date.fromisoformat(text).isoformat()
     except ValueError as exc:
         raise ValueError("not a calendar date") from exc
+
+
+def _plain(number: Decimal) -> str:
+    """A decimal as a plain string without trailing zeros or exponent ("2.50" -> "2.5")."""
+    text = format(number.normalize(), "f")
+    return "0" if text in ("-0", "0") else text
 
 
 def value_key(value_type: ValueType, canonical: str) -> Decimal | date | str:
@@ -270,3 +281,96 @@ def _check_answer(question: QuestionSpec, answer: GivenAnswer) -> CheckedAnswer:
     if not low <= len(chosen) <= high:
         raise AnswerProblem(question.id, "CHOICES")
     return CheckedAnswer(question_id=question.id, option_ids=chosen, value=None)
+
+
+# --- Results -------------------------------------------------------------------------------------
+
+# The average of own numbers: at most 6 decimals, like the answers themselves.
+_AVERAGE_STEP = Decimal("0.000001")
+
+
+def results_available(status: PollStatus, *, board: bool) -> bool:
+    """The board sees the totals from opening (live), everyone else after closing; nobody sees
+    the answers of a draft or a cancelled poll."""
+    return status == PollStatus.CLOSED or (board and status == PollStatus.OPEN)
+
+
+@dataclass(frozen=True)
+class ResultQuestion:
+    """A question as the totals need it: its kind and its options in their order."""
+
+    id: uuid.UUID
+    answer_mode: AnswerMode
+    value_type: ValueType
+    option_ids: tuple[uuid.UUID, ...]
+
+
+def tally(
+    questions: Sequence[ResultQuestion],
+    electorate: int,
+    ballots: Iterable[Sequence[CheckedAnswer]],
+    *,
+    with_texts: bool,
+) -> tuple[Participation, list[QuestionResult]]:
+    """The totals of a poll from its snapshot size and the current ballots (one per unit, each
+    with its answers). Every unit counts 1 in part A; part B adds weights and majorities here.
+
+    Nothing in the result follows the order or the time of the answers.
+    """
+    answers: dict[uuid.UUID, list[CheckedAnswer]] = {question.id: [] for question in questions}
+    answered = 0
+    for ballot in ballots:
+        answered += 1
+        for answer in ballot:
+            if answer.question_id in answers:
+                answers[answer.question_id].append(answer)
+    return (
+        Participation(answered=answered, electorate=electorate),
+        [
+            _tally_question(question, answers[question.id], with_texts=with_texts)
+            for question in questions
+        ],
+    )
+
+
+def _counts(counter: Counter[str], order: Iterable[str]) -> list[ValueCountResult]:
+    return [ValueCountResult(value=value, count=counter[value]) for value in order]
+
+
+def _tally_question(
+    question: ResultQuestion, answers: Sequence[CheckedAnswer], *, with_texts: bool
+) -> QuestionResult:
+    result = QuestionResult(
+        question_id=question.id,
+        answered=len(answers),
+        options=None,
+        number=None,
+        dates=None,
+        texts=None,
+    )
+    if question.answer_mode != AnswerMode.OWN_VALUE:
+        chosen = Counter(option_id for answer in answers for option_id in answer.option_ids)
+        result.options = [
+            OptionResult(option_id=option_id, count=chosen[option_id])
+            for option_id in question.option_ids
+        ]
+        return result
+    values = [answer.value for answer in answers if answer.value is not None]
+    if question.value_type == ValueType.NUMBER:
+        if values:
+            numbers = [Decimal(value) for value in values]
+            with localcontext() as context:
+                context.prec = 60  # 12 integer digits and 6 decimals, summed over any building
+                average = (sum(numbers, Decimal(0)) / len(numbers)).quantize(
+                    _AVERAGE_STEP, rounding=ROUND_HALF_EVEN
+                )
+            result.number = NumberResult(
+                min=_plain(min(numbers)), max=_plain(max(numbers)), average=_plain(average)
+            )
+    elif question.value_type == ValueType.DATE:
+        counter = Counter(values)
+        result.dates = _counts(counter, sorted(counter, key=date.fromisoformat))
+    elif with_texts:
+        counter = Counter(values)
+        result.texts = _counts(counter, sorted(counter, key=lambda text: (text.casefold(), text)))
+    return result
