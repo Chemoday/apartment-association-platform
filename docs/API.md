@@ -25,7 +25,7 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
 | 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN` | The request is valid, but conflicts with the current state |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
 | 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
@@ -1342,8 +1342,8 @@ chair@example.com`.
 ## 8. Polls (`governance`), epic E3 part A
 
 The board asks the residents or the owners questions; everyone sees totals only. Design and owner
-decisions: docs/epics/E3_GOVERNANCE_VOTING.md section 3. Results (`GET /polls/{id}/results`) come
-with task V2; opening a poll notifies everyone who may answer (`POLL_OPENED`, section 6).
+decisions: docs/epics/E3_GOVERNANCE_VOTING.md section 3. Results: `GET /polls/{id}/results`
+(task V2); opening a poll notifies everyone who may answer (`POLL_OPENED`, section 6).
 Every endpoint needs a signed-in user;
 "the board" is `CHAIRMAN` or `BOARD`.
 
@@ -1378,6 +1378,7 @@ Every endpoint needs a signed-in user;
   ],
   "can_answer": true,
   "answerable_apartment_ids": ["uuid"],
+  "results_available": false,
   "my_ballots": [
     {"apartment_id": "uuid", "answers": [{"question_id": "uuid", "option_ids": ["uuid"], "value": null}], "updated_at": "2026-11-05T10:00:00Z"}
   ]
@@ -1402,6 +1403,8 @@ Every endpoint needs a signed-in user;
 - `my_ballots`: the current answers of the caller's units: for unit `APARTMENT` one per
   answerable apartment that has answered, whoever in the apartment answered (never who); for unit
   `PERSON` the caller's own. `value` is set for `OWN_VALUE` questions, `option_ids` for choices.
+- `results_available`: whether `GET .../results` answers for the caller now: the board once the
+  poll is open, everyone else after it closed; never for a draft or a cancelled poll.
 - Never in a payload: who created the poll, who answered, how another unit answered.
 
 ### Who sees a poll
@@ -1411,7 +1414,8 @@ Every endpoint needs a signed-in user;
   other polls and other buildings: `404 POLL_NOT_FOUND`.
 
 ### `GET /api/v1/governance/polls?status=OPEN&limit=50&offset=0`
-The polls the caller sees (`PollView` without `questions` and `my_ballots`, plus `answered`:
+The polls the caller sees (`PollView` without `questions` and `my_ballots`, with
+`results_available`, plus `answered`:
 whether every unit the caller may answer for has answered; `false` when there is none and
 for a cancelled poll, which also has `can_answer: false` and no
 `answerable_apartment_ids`). Open polls first, by `closes_at`;
@@ -1502,6 +1506,53 @@ Answers, or replaces the caller's unit's answer; the last answer counts. Respons
 - `answers` in `my_ballots` follow the order of the questions, and `option_ids` the order of the
   options.
 
+### `GET /api/v1/governance/polls/{poll_id}/results`
+Totals of a poll (task V2): the board at any time after opening (live while the poll is open),
+everyone else who sees the poll after it closed (a tenant also for an owners-only poll).
+```json
+{
+  "poll_id": "uuid",
+  "status": "CLOSED",
+  "unit": "APARTMENT",
+  "participation": {"answered": 12, "electorate": 30},
+  "questions": [
+    {
+      "question_id": "uuid", "answered": 11,
+      "options": [{"option_id": "uuid", "count": 7}, {"option_id": "uuid", "count": 6}],
+      "number": null, "dates": null, "texts": null
+    },
+    {
+      "question_id": "uuid", "answered": 9,
+      "options": null,
+      "number": {"min": "1", "max": "4", "average": "2.333333"}, "dates": null, "texts": null
+    },
+    {
+      "question_id": "uuid", "answered": 3,
+      "options": null, "number": null, "dates": null,
+      "texts": [{"value": "Bring gloves", "count": 2}, {"value": "Not before 10", "count": 1}]
+    }
+  ]
+}
+```
+- `participation`: `answered` units (apartments or people with a current answer; a ballot that
+  left every optional question out counts too) of the `electorate` (the units of the snapshot
+  taken at opening). Every unit counts 1 in part A.
+- Per question, in question order, `answered` is the number of units that answered it (optional
+  questions can be left out), and at most one of the following is set by the question's kind;
+  the others are `null`:
+  - choice questions: `options`, every option in option order with the units that chose it (with
+    `MULTIPLE_CHOICE` the counts add up to more than `answered`);
+  - `OWN_VALUE` with `NUMBER`: `number` with `min`, `max` and `average` as decimal strings
+    (`average` rounded half-even to at most 6 decimals); `null` while nobody answered;
+  - `OWN_VALUE` with `DATE`: `dates`, each answered date with its count, by date;
+  - `OWN_VALUE` with `TEXT`: `texts`, for the board only: each distinct text with its count, in
+    alphabetical order (never the answer order), without authors. Everyone else gets `null` and
+    sees `answered` only.
+- Never returned: who answered, how a unit answered, the answer times.
+- Errors: `404 POLL_NOT_FOUND` (not visible, as for `GET` of the poll); `409 RESULTS_NOT_AVAILABLE`
+  with `status` for a draft, a cancelled poll (its answers are never shown), and an open poll
+  for a caller who is not on the board.
+
 ### Domain events
 Stored durably with the request (docs/ARCHITECTURE.md 2), ids only:
 - `PollOpened`: `poll_id`, `building_id`, `opened_by_user_id`; drives `POLL_OPENED` (section 6).
@@ -1511,5 +1562,5 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids only:
 | :--- | :--- |
 | 403 | `FORBIDDEN` (board endpoints), `NOT_ELIGIBLE` |
 | 404 | `POLL_NOT_FOUND` |
-| 409 | `POLL_NOT_DRAFT`, `POLL_NOT_OPEN` |
+| 409 | `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` |
 | 422 | `VALIDATION_ERROR`, `INVALID_TARGET`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` |

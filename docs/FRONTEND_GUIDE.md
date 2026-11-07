@@ -426,7 +426,7 @@ header, so they need a real sign-in even in demo mode.
 
 ## 13. Polls (epic E3)
 
-Contract: docs/API.md section 8. Results follow in task V2.
+Contract: docs/API.md section 8.
 
 - **Notification:** `POLL_OPENED` (`subject_type` `poll`, `params.closes_at`) reads "The board
   started a poll. Please answer by `<local date of closes_at>`" and opens the poll page.
@@ -454,4 +454,10 @@ Contract: docs/API.md section 8. Results follow in task V2.
 - **Status:** `OPEN` polls with a passed `closes_at` come back as `CLOSED`; trust `status`, do not
   compare times yourself. A `CANCELLED` poll shows no answers.
 - `422 INVALID_ANSWER` names the question (`question_id`) and the `reason`; mark that question.
+- **Results:** show a "Results" link when `results_available` is true (the board: from opening,
+  live; everyone else: after closing) and load `GET .../results`. Show the participation ("12 of
+  30 apartments answered", or people for unit `PERSON`), and per question the bars of `options`
+  (labels from the poll's options by `option_id`), the `number` minimum, maximum and average, the
+  `dates` counts, or for text answers only `answered` (the board also gets `texts`). Render
+  numbers and dates in the reader's language. Percentages are of `answered`.
 

@@ -119,7 +119,9 @@ the denominator of "12 of 30 apartments answered".
   `DATE` the count per date, with `TEXT` the count only; and the participation (units answered /
   units in the snapshot).
 - **Free-text answers:** the board only, without authors, in a stable order that does not follow
-  the answer time (so the order reveals nothing).
+  the answer time (so the order reveals nothing): each distinct text with its count,
+  alphabetically.
+- No results for a cancelled poll, for anyone; a draft has none.
 - Never returned: who answered, how an apartment or a person answered. Small numbers can still
   hint (one answer from a small entrance); the board's poll form says so.
 
@@ -189,6 +191,11 @@ apartment field), elections of the board (B-9), and the legal weight of an elect
 - Comments on a poll (today: the forum), a CSV export of results, and polls for the board only
   (board decisions).
 - Whether informative polls should allow a "results visible while open" option per poll.
+- An answer checked just before the deadline can commit a few milliseconds after it, so totals
+  read as `CLOSED` in that moment can still change once (an early close is serialized with
+  answering and is safe). Accepted for informative polls; part B closes the poll with a write
+  under the poll lock (or checks the deadline in the database) so that a closed vote never
+  changes.
 - With unit `PERSON` the voters are fixed at opening, but who sees the poll still follows the
   current memberships: a voter who moved out no longer sees it. Part B decides whether
   visibility follows the snapshot too (the record of voting must reach every voter).
