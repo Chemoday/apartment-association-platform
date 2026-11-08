@@ -601,7 +601,8 @@ Users and apartments are referenced by id only; names and badges come from `Prop
 | `place` | `VARCHAR(200)` | `NOT NULL, CHECK not blank` | |
 | `title` | `VARCHAR(120)` | `NOT NULL, CHECK not blank` | |
 | `description` | `TEXT` | `NOT NULL, DEFAULT ''` | Up to 2000 characters (checked by the API) |
-| `urgent` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | |
+| `urgent` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Cleared by the board for a false alarm (task I2) |
+| `reported_urgent` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | As reported, never changed: a cleared flag still counts for `issues.urgent_per_apartment_per_day` |
 | `status` | `VARCHAR(32)` | `NOT NULL, CHECK` | `REPORTED`, `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR`, `RESOLVED`, `DUPLICATE`, `DECLINED`, `WITHDRAWN` |
 | `duplicate_of_id` | `UUID` | `FK(iss_issues.id), NULLABLE` | Set exactly for `DUPLICATE` (task I2) |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
@@ -623,15 +624,20 @@ Users and apartments are referenced by id only; names and badges come from `Prop
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 
 ### Table: `iss_status_changes`
-*(The timeline and the board's action log; one row per status, the first is `REPORTED`.)*
+*(The timeline and the board's action log; one row per status change (the first is `REPORTED`)
+and per cleared urgent flag.)*
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `UUID` | `PK` | |
 | `issue_id` | `UUID` | `FK(iss_issues.id) ON DELETE CASCADE, NOT NULL, INDEX` | |
 | `from_status` | `VARCHAR(32)` | `NULLABLE` | `NULL` for the first row |
-| `to_status` | `VARCHAR(32)` | `NOT NULL` | |
-| `changed_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | Shown to the board only (task I2) |
+| `to_status` | `VARCHAR(32)` | `NOT NULL` | For `URGENT_CLEARED` the status at that moment |
+| `action` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'STATUS', CHECK IN ('STATUS', 'URGENT_CLEARED')` | `URGENT_CLEARED` is shown to the board only (task I2) |
+| `changed_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | Shown to the board only, as a privacy badge (task I2) |
 | `changed_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 
 - Seeding (`src/core/seed.py`) adds two demo issues (task I1): an open one with a "+1" and a
   withdrawn one.
+- A status change locks the issue (`FOR UPDATE`); marking a duplicate also locks the original, the
+  two rows in id order, so two board members merging in opposite directions cannot deadlock or
+  make a cycle.

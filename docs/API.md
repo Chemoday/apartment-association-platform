@@ -25,9 +25,9 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
 | 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED` | The request is valid, but conflicts with the current state |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
-| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
+| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION`, `INVALID_DUPLICATE` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
 | other | `HTTP_<status>` | Any other framework-level HTTP error |
 
@@ -1628,8 +1628,9 @@ Changes some settings at once and returns the same body as `GET`.
 
 Problems in common areas (entrance, stairs, basement, roof, yard) reported once and visible to the
 whole building. Design and owner decisions: docs/epics/E9_ISSUE_TRACKER.md. Task I1 (this
-section) covers reporting, the list, "+1" and who sees what; the board's statuses follow in task
-I2. Every endpoint needs a signed-in user.
+section) covers reporting, the list, "+1" and who sees what; task I2 the board's work (statuses,
+duplicates, the action log), in the same section; task I3 the notifications (section 6).
+Every endpoint needs a signed-in user.
 
 ### Who sees the tracker
 - Every active user with an active membership in the building, the chairman and the board. An
@@ -1671,13 +1672,16 @@ I2. Every endpoint needs a signed-in user.
   `place`: where exactly, 1..200 characters.
 - `status`: `REPORTED`, `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR` (open), `RESOLVED`, `DUPLICATE`,
   `DECLINED`, `WITHDRAWN` (ended, with `ended_at`). `duplicate_of`: the original's id for
-  `DUPLICATE`, else `null`. In task I1 only `REPORTED` and `WITHDRAWN` occur.
+  `DUPLICATE`, else `null`.
 - `followers`: the reporter plus everyone who pressed "+1"; never who. `i_reported`, `i_follow`:
   about the caller.
 - `can_edit`: the caller is the reporter and the issue is `REPORTED` (fix the text, withdraw).
   `can_follow`: the issue is open and the caller does not follow it yet.
-- `timeline`: every status with its time, oldest first; never who changed it (the board's view
-  in task I2 adds that).
+- `timeline`: every status with its time, oldest first: `{"status", "at", "action",
+  "changed_by"}`. For the chairman and the board it is the action log: `action` is `STATUS`, or
+  `URGENT_CLEARED` when the board cleared the urgent flag (such entries keep the current
+  `status`), and `changed_by` the privacy badge of section 0. For everyone else `action` is
+  always `STATUS`, `changed_by` is `null`, and `URGENT_CLEARED` entries are left out.
 - `reporter`: `null` for everyone except the chairman and the board, who get
   `{"badge": AuthorBadge, "apartment_id": "uuid" | null}`. The badge is the privacy badge of
   section 0 (the reporter's mode in that apartment), never a raw name or contacts;
@@ -1749,11 +1753,37 @@ reporter: `403 FORBIDDEN`.
 on an ended issue: `409 ISSUE_ENDED`; `DELETE` always works (the reporter may stop following
 too, and follow again later).
 
+### `POST /api/v1/issues/{issue_id}/status` (chairman and board)
+The board's work (task I2): `{"status": "IN_PROGRESS"}`, or `{"status": "DUPLICATE",
+"duplicate_of": "uuid"}`. Returns the `IssueView`; every change is a timeline entry with who made
+it.
+- `status`: `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR`, `RESOLVED`, `DUPLICATE` or `DECLINED`.
+  `REPORTED` and `WITHDRAWN` belong to the reporter and are refused (`422 VALIDATION_ERROR`).
+- From an open status: any of them. From `RESOLVED`, `DUPLICATE` or `DECLINED`: only
+  `IN_PROGRESS` (reopen), within 30 days of `ended_at`; reopening clears `ended_at` and
+  `duplicate_of`. A `WITHDRAWN` issue never changes. Otherwise `409 INVALID_ISSUE_TRANSITION`
+  with `status`. The current status again changes nothing (no entry).
+- `DECLINED`: not a common-area issue, or not the association's to fix (e.g. inside a flat: write
+  to the apartment, section 4).
+- `DUPLICATE` needs `duplicate_of` (and nothing else takes it, `422 VALIDATION_ERROR`): another
+  issue of the building that residents still see (open, or ended within 30 days) and that is not
+  itself `DUPLICATE` or `WITHDRAWN`, else `422 INVALID_DUPLICATE`. Every follower of the
+  duplicate becomes a follower of the original (once); they keep following the duplicate too.
+  An original that is still `REPORTED` moves to `IN_PROGRESS` (an entry by the same board
+  member), so its reporter can no longer rewrite or withdraw what others now follow. The
+  transition is checked first: a refused or repeated change never looks at the original.
+- Anyone else: `403 FORBIDDEN` (`404 ISSUE_NOT_FOUND` when they do not see the issue at all).
+
+### `POST /api/v1/issues/{issue_id}/urgent/clear` (chairman and board)
+Clears the urgent flag (a false alarm); returns the `IssueView`. Logged as an `URGENT_CLEARED`
+entry. The report still counts as urgent for the apartment's urgent limit. Already not urgent:
+changes nothing. On an ended issue: `409 ISSUE_ENDED`.
+
 ### Error codes of this section
 | Status | `error_code` |
 | :--- | :--- |
 | 403 | `FORBIDDEN` |
 | 404 | `ISSUE_NOT_FOUND` |
-| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED` |
-| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION` |
+| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` |
+| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE` |
 | 429 | `RATE_LIMITED` |

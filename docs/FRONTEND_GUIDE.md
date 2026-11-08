@@ -485,7 +485,7 @@ Contract: docs/API.md section 9.
 
 ## 15. Issue tracker (epic E9)
 
-Contract: docs/API.md section 10. The board's statuses come with task I2, notifications with I3.
+Contract: docs/API.md section 10. Notifications come with task I3.
 
 - **Page:** "Issues" for everyone with an apartment and for the board (an accountant without an
   apartment gets `403`: hide the menu entry, from `GET /property/me`). Open issues first, then
@@ -505,3 +505,10 @@ Contract: docs/API.md section 10. The board's statuses come with task I2, notifi
 - **Board view:** `reporter` shows the badge and a link to the apartment's card and thread
   (`apartment_id`); nobody else ever sees who reported or who follows.
 - `404 ISSUE_NOT_FOUND`: "This issue is not available" (withdrawn, too old, or not yours to see).
+- **The board's work** (chairman and board): on the issue page a status menu with "In progress",
+  "Waiting for contractor", "Resolved", "Duplicate of..." (pick the original from the open and
+  recently ended issues; offer the ones of the same category and entrance first) and "Declined"
+  (suggest writing to the apartment when it is inside a flat). On an ended issue, "Reopen" within
+  30 days. "Not urgent" clears the flag. Show the action log (`timeline` with `changed_by` and
+  `action`) to the board; residents see the timeline with dates only.
+- `409 INVALID_ISSUE_TRANSITION`: reload the issue (someone else changed it meanwhile).
