@@ -28,12 +28,15 @@ from src.modules.communication.events import (
     ApartmentMessagePosted,
     EmergencyAlertPublished,
     EmergencyAlertResolved,
+    OfficialNoticePublished,
 )
 from src.modules.communication.service import CommunicationService
 from src.modules.governance.events import PollOpened
 from src.modules.governance.service import GovernanceService
 from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
 from src.modules.issues.service import IssuesService
+from src.modules.maintenance.events import MaintenanceTaskDue
+from src.modules.maintenance.service import MaintenanceService
 from src.modules.meters.events import ReadingPeriodStatusChanged
 from src.modules.meters.schemas import PeriodStatus
 from src.modules.notifications.models import ChannelBinding, Delivery, LinkCode, Preference
@@ -49,6 +52,8 @@ from src.modules.notifications.policies import (
     is_mandatory,
     issue_reported_key,
     issue_status_key,
+    maintenance_due_key,
+    notice_published_key,
     period_review_key,
     poll_opened_key,
     priority_for,
@@ -87,6 +92,7 @@ _PERIOD_REVIEW_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.ACCOUNTANT)
 # Candidates for APARTMENT_MESSAGE_TO_BOARD; communication's visibility rule has the last word.
 _THREAD_BOARD_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
 _ISSUE_BOARD_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
+_MAINTENANCE_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
 
 
 def _now() -> datetime:
@@ -418,6 +424,8 @@ class NotificationsSubscriber:
         bus.subscribe(IssueReported, self.on_issue_reported)
         bus.subscribe(IssueStatusChanged, self.on_issue_status_changed)
         bus.subscribe(IssueMerged, self.on_issue_merged)
+        bus.subscribe(MaintenanceTaskDue, self.on_maintenance_due)
+        bus.subscribe(OfficialNoticePublished, self.on_notice_published)
         bus.subscribe(UserAccountClosed, self.on_account_closed)
 
     async def on_account_closed(self, event: UserAccountClosed) -> None:
@@ -675,6 +683,56 @@ class NotificationsSubscriber:
                     "status": "DUPLICATE",
                     "merged": True,
                 },
+            )
+            await session.commit()
+
+    async def on_maintenance_due(self, event: MaintenanceTaskDue) -> None:
+        """The calendar published a task or reminded of it: the chairman and the board. Nobody
+        acted, so nobody is left out; an occurrence closed meanwhile notifies nobody."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            ref = await MaintenanceService(session, properties).get_occurrence_ref(
+                event.occurrence_id
+            )
+            if ref is None or not ref.is_open or not ref.task_active:
+                return
+            if ref.due_date != event.due_date:
+                return  # moved meanwhile: the move publishes or reminds again on its own
+            await self.notify(
+                session,
+                await properties.users_with_roles(ref.building_id, _MAINTENANCE_ROLES),
+                event_type=NotificationEventType.MAINTENANCE_DUE,
+                dedup_key=maintenance_due_key(
+                    event.occurrence_id, event.due_date, event.reminder_number
+                ),
+                subject=(SubjectType.MAINTENANCE_TASK, ref.task_id),
+                params={
+                    "occurrence_id": str(event.occurrence_id),
+                    "due_date": event.due_date.isoformat(),
+                    "overdue": event.overdue,
+                    "reminder_number": event.reminder_number,
+                },
+            )
+            await session.commit()
+
+    async def on_notice_published(self, event: OfficialNoticePublished) -> None:
+        """Every official notice: the active users of its target, never its author. The text
+        never leaves the app; the message says only that there is a notice."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            recipients = await properties.resolve_recipients(
+                event.building_id,
+                event.target_scope,
+                event.target_entrance,
+                event.target_apartment_ids,
+            )
+            await self.notify(
+                session,
+                [r for r in recipients if r.user_id != event.published_by_user_id],
+                event_type=NotificationEventType.NOTICE_PUBLISHED,
+                dedup_key=notice_published_key(event.post_id),
+                subject=(SubjectType.POST, event.post_id),
+                params={},
             )
             await session.commit()
 

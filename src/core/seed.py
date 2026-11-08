@@ -14,9 +14,10 @@ are the same on every instance (see DEMO_USERS and GET /api/v1/demo/users).
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy import func, select
@@ -27,7 +28,7 @@ from src.core.database import build_engine, transaction
 from src.core.telemetry import configure_logging
 from src.core.validation import canonical_email
 from src.modules.communication.models import Comment, Post
-from src.modules.communication.schemas import PostCategory, PostType, TargetScope
+from src.modules.communication.schemas import PostCategory, PostOrigin, PostType, TargetScope
 from src.modules.governance.models import (
     Ballot,
     BallotAnswer,
@@ -47,6 +48,10 @@ from src.modules.governance.schemas import (
 )
 from src.modules.issues.models import Issue, IssueFollower, IssueStatusChange
 from src.modules.issues.schemas import IssueCategory, IssueStatus
+from src.modules.maintenance.messages import local_date, render
+from src.modules.maintenance.models import LogEntry, Occurrence, Task
+from src.modules.maintenance.policies import add_months
+from src.modules.maintenance.schemas import LogKind, OccurrenceStatus, PeriodUnit, TaskStatus
 from src.modules.meters.models import MeterDevice, MeterReading, MeterReadingLog, ReadingPeriod
 from src.modules.meters.policies import period_due_date
 from src.modules.meters.schemas import MeterUnit, PeriodStatus, ReadingSource, ResourceType
@@ -205,6 +210,9 @@ _INSERT_ORDER = (
     Issue,
     IssueFollower,
     IssueStatusChange,
+    Task,
+    Occurrence,
+    LogEntry,
 )
 
 
@@ -594,6 +602,152 @@ class _Builder:
         )
         self.add(poll, day, note, *options, *electors.values(), ballot, answer, revision)
 
+    # --- maintenance ---
+
+    def maintenance(self, building: Building, now: datetime) -> None:
+        """Three maintenance tasks (E10): the extinguishers next spring, the gutters soon with a
+        notice for residents, and the heating substation 10 days overdue, already published with
+        one reminder. Two log entries with costs."""
+        chairman = self.users[DemoUserKey.CHAIRMAN]
+        today = now.astimezone(ZoneInfo(settings.INSTANCE_TIMEZONE)).date()
+        april = date(today.year + (1 if (today.month, today.day) >= (4, 1) else 0), 4, 15)
+
+        def task(
+            key: str,
+            title: str,
+            unit: PeriodUnit,
+            count: int,
+            lead: int,
+            anchor: date,
+            instructions: str,
+            day: int | None = None,
+            **notice: object,
+        ) -> Task:
+            return Task(
+                id=demo_id(f"maintenance:{key}"),
+                building_id=building.id,
+                title=title,
+                instructions=instructions,
+                period_unit=unit,
+                period_count=count,
+                lead_days=lead,
+                anchor_date=anchor,
+                anchor_day=day or anchor.day,
+                status=TaskStatus.ACTIVE,
+                created_by_user_id=chairman.id,
+                updated_by_user_id=chairman.id,
+                created_at=now - timedelta(days=200),
+                updated_at=now - timedelta(days=200),
+                **notice,
+            )
+
+        extinguishers = task(
+            "extinguishers",
+            "Inspect the fire extinguishers",
+            PeriodUnit.MONTH,
+            12,
+            14,
+            april,
+            "Basement and every landing. The service company has the keys list.",
+        )
+        gutters_due = today + timedelta(days=20)
+        gutters = task(
+            "gutters",
+            "Clean the gutters",
+            PeriodUnit.MONTH,
+            6,
+            14,
+            add_months(gutters_due, -6),
+            "Book the lift truck a week ahead.",
+            day=gutters_due.day,
+            notice_title="Gutters are cleaned",
+            notice_body="A lift truck works in the yard. Please move cars from the yard by 08:00.",
+            notice_category=PostCategory.MAINTENANCE.value,
+            notice_target_scope=TargetScope.ALL_BUILDING.value,
+            notice_comments_enabled=False,
+        )
+        heating_due = today - timedelta(days=10)
+        heating = task(
+            "heating",
+            "Check the heating substation",
+            PeriodUnit.DAY,
+            30,
+            5,
+            heating_due - timedelta(days=30),
+            "Pressure and filters; write the readings down.",
+        )
+
+        def occurrence(key: str, owner: Task, seq: int, due: date, closed: bool) -> Occurrence:
+            return Occurrence(
+                id=demo_id(f"maintenance:{key}"),
+                task_id=owner.id,
+                building_id=building.id,
+                seq=seq,
+                due_date=due,
+                status=OccurrenceStatus.DONE if closed else OccurrenceStatus.OPEN,
+                closed_at=now - timedelta(days=40) if closed else None,
+            )
+
+        gutters_done = occurrence("gutters:0", gutters, 0, gutters.anchor_date, True)
+        heating_done = occurrence("heating:0", heating, 0, heating.anchor_date, True)
+        heating_open = occurrence("heating:1", heating, 1, heating_due, False)
+        published_at = now - timedelta(days=15)
+        locale = settings.DEFAULT_LOCALE
+        due_text = local_date(heating_due)
+        topic = Post(
+            id=demo_id("maintenance:heating:topic"),
+            building_id=building.id,
+            author_user_id=chairman.id,
+            post_type=PostType.BOARD_TOPIC,
+            category=PostCategory.MAINTENANCE,
+            title=render("board.title.DUE", locale, title=heating.title, date=due_text),
+            body=f"{heating.instructions}\n\n{render('board.footer', locale)}",
+            origin=PostOrigin.MAINTENANCE,
+            created_at=published_at,
+        )
+        reminder = Comment(
+            id=demo_id("maintenance:heating:reminder:1"),
+            post_id=topic.id,
+            building_id=building.id,
+            author_user_id=chairman.id,
+            body=render("comment.overdue", locale, date=due_text, number=1),
+            created_at=now - timedelta(days=9),
+        )
+        topic.last_activity_at = reminder.created_at
+        heating_open.published_at, heating_open.board_post_id = published_at, topic.id
+        heating_open.last_reminded_on, heating_open.reminder_count = today - timedelta(days=9), 1
+        heating_open.next_remind_on = today - timedelta(days=2)
+
+        def entry(key: str, done: Occurrence, owner: Task, cost: str, note: str) -> LogEntry:
+            return LogEntry(
+                id=demo_id(f"maintenance:log:{key}"),
+                building_id=building.id,
+                task_id=owner.id,
+                occurrence_id=done.id,
+                kind=LogKind.DONE,
+                closed_on=done.due_date + timedelta(days=2),
+                note=note,
+                cost=Decimal(cost),
+                recorded_by_user_id=chairman.id,
+                created_at=now - timedelta(days=40),
+                updated_at=now - timedelta(days=40),
+            )
+
+        self.add(
+            extinguishers,
+            gutters,
+            heating,
+            occurrence("extinguishers:0", extinguishers, 0, april, False),
+            gutters_done,
+            occurrence("gutters:1", gutters, 1, gutters_due, False),
+            heating_done,
+            heating_open,
+            topic,
+            reminder,
+            entry("gutters", gutters_done, gutters, "80.50", "Both sides, one downpipe cleared."),
+            entry("heating", heating_done, heating, "145.00", "Filters changed."),
+        )
+
     # --- issues ---
 
     def issues(self, building: Building, now: datetime) -> None:
@@ -729,6 +883,7 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
     builder.posts(building, now)
     builder.poll(building, now)
     builder.issues(building, now)
+    builder.maintenance(building, now)
     await builder.insert()
     logger.info(
         "seed_completed",

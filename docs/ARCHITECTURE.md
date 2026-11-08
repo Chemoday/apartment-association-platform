@@ -128,6 +128,7 @@ System-level methods (no request caller; `can_read_post` and `may_answer` take a
 | `governance` | `get_poll_ref(poll_id)` | `PollRefDTO(poll_id, building_id, is_open, closes_at)` or `None`: the poll's state right before a `POLL_OPENED` message is sent (`POLL_NOT_OPEN`, the current deadline in the text) |
 | `issues` | `get_issue_ref(issue_id)` | `IssueRefDTO(issue_id, building_id, status, is_open, urgent, category, entrance)` or `None`: the issue's state for the texts and the send-time checks (`ISSUE_ENDED`, `URGENT_CLEARED`, `STATUS_OUTDATED`) |
 | `issues` | `follower_ids(issue_id)` | `list[UUID]`: who follows the issue (`ISSUE_STATUS_CHANGED`); never returned by the API |
+| `maintenance` | `get_occurrence_ref(occurrence_id)` | `OccurrenceRefDTO(occurrence_id, task_id, building_id, title, due_date, is_open, task_active)` or `None`: the task's title and state right before a `MAINTENANCE_DUE` message is sent (`TASK_DONE`, `TASK_NOT_ACTIVE`) |
 | `issues` | `can_see(user, issue_id)` | `bool`: whether this user (a `CurrentUserDTO`) sees the issue under the rules of `GET /issues/{id}`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 | `governance` | `may_answer(user, poll_id)` | `bool`: whether this user (a `CurrentUserDTO`) may answer the open poll now, under the rules of `PUT .../ballot`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 
@@ -332,3 +333,31 @@ section 10.
   there.
 - **Limits:** counted per apartment from `iss_issues` (no separate counter); a transaction-scoped
   advisory lock on the apartment serializes concurrent reports.
+
+## 8. Module `maintenance` (epic E10)
+
+Design: docs/epics/E10_MAINTENANCE_CALENDAR.md. Tables: docs/SCHEMA.md section 11. API:
+docs/API.md section 11.
+
+- **Place:** reads users and badges through `PropertyService` (`get_named_author_badges` for the
+  log), validates the notice target through `CommunicationService.notice_target_problem` (task
+  M1), and in task M2 publishes posts through `CommunicationService` as a current board member.
+  Only `notifications` imports it (task M3): the event `MaintenanceTaskDue` and
+  `get_occurrence_ref`.
+- **Rules as pure functions** in `maintenance/policies.py`: month arithmetic with day clamping,
+  always from the anchor date; the next occurrence after done or skip (the first schedule date
+  after both the planned and the done date, found in closed form with a bounded correction); the
+  shown state; the period and lead-time bounds.
+- **Time:** due dates are calendar dates in `INSTANCE_TIMEZONE`; "today" is the local date of
+  now, so a change of daylight saving time never moves them.
+- **The publisher** (`maintenance/publisher.py`, task M2) is a background loop like the
+  notifications scheduler: `Publisher.tick(now=None)` every 10 minutes, only 09:00-21:00 local
+  time, switched by `MAINTENANCE_PUBLISHER_ENABLED`. It reads the candidates once, then handles
+  **one task per transaction** (`transaction(session)` with `session_outbox`): the task row is
+  locked `FOR UPDATE SKIP LOCKED`, the occurrence checked again, the posts written through
+  `CommunicationService.create_post` / `add_comment` as a current board member
+  (`PropertyService.get_current_user`, `users_with_roles`), and the events stored with the
+  change. It never uses a savepoint around a write that adds an event: a rolled-back savepoint
+  would drop the stored event row while the in-memory event would still be published.
+- **Events:** `MaintenanceTaskDue` (`task_id`, `occurrence_id`, `building_id`, `due_date`,
+  `overdue`, `reminder_number`) after each publication and reminder, for task M3.

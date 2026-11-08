@@ -278,10 +278,10 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `channel` | `VARCHAR(16)` | `NOT NULL` | Enum `channel` |
 | `binding_id` | `UUID` | `FK(notif_channel_bindings.id), NULLABLE` | Set exactly for `telegram` and `webpush` |
 | `event_type` | `VARCHAR(32)` | `NOT NULL` | Enum `event_type` |
-| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}`, `issue_reported:{issue_id}`, `issue_status:{change_id}` (the timeline entry of a status change or a merge) |
-| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue')` | What the notification is about (`poll` since migration 016, `issue` since 019) |
-| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id`, `gov_polls.id` or `iss_issues.id` (no FK: other modules' tables) |
-| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at`; for an issue `category`, `entrance`, and for a status notice `status`, `merged` |
+| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}`, `issue_reported:{issue_id}`, `issue_status:{change_id}` (the timeline entry of a status change or a merge), `maintenance_due:{occurrence_id}:{due_date}:{reminder_number}` (a moved occurrence is published again under its new date), `notice_published:{post_id}` |
+| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue', 'maintenance_task')` | What the notification is about (`poll` since migration 016, `issue` since 019, `maintenance_task` since 021) |
+| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id`, `gov_polls.id`, `iss_issues.id` or `maint_tasks.id` (no FK: other modules' tables) |
+| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at`; for an issue `category`, `entrance`, and for a status notice `status`, `merged`; for a maintenance reminder `occurrence_id`, `due_date`, `overdue`, `reminder_number` |
 | `locale` | `VARCHAR(5)` | `NOT NULL, CHECK IN ('et', 'ru', 'en')` | Language for the external text, resolved at insert time (`core_users.locale` or `DEFAULT_LOCALE`) |
 | `priority` | `SMALLINT` | `NOT NULL` | `0` for `EMERGENCY_PUBLISHED` only, `1` for everything else; lower is sent first |
 | `status` | `VARCHAR(16)` | `NOT NULL` | Enum delivery `status` |
@@ -289,7 +289,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `next_attempt_at` | `TIMESTAMPTZ` | `NOT NULL` | When a `PENDING` row is due |
 | `lease_until` | `TIMESTAMPTZ` | `NULLABLE` | Set while `SENDING`; an expired lease is claimed again |
 | `last_attempt_at` | `TIMESTAMPTZ` | `NULLABLE` | |
-| `error_code` | `VARCHAR(64)` | `NULLABLE` | Machine code of the last failure or skip reason. Skips: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, `USER_INACTIVE`, `NO_EMAIL`, `PREFERENCE_OFF`, `POST_RESOLVED`, `EMERGENCY_TOO_OLD`, `DEADLINE_PASSED` (a reading reminder after `due_date`), `SUBJECT_NOT_FOUND`, `POLL_NOT_OPEN` (a poll closed or cancelled before sending), `ISSUE_ENDED` (an issue report that ended before sending), `URGENT_CLEARED` (an urgent issue alert whose flag the board cleared before sending), `STATUS_OUTDATED` (an issue status notice whose status changed again), `BINDING_REVOKED`. Failures: `SMTP_REJECTED`, `SMTP_AUTH_FAILED`, `SMTP_NOT_SUPPORTED`, `EMAIL_INVALID`, `TELEGRAM_BLOCKED`, `TELEGRAM_CHAT_NOT_FOUND`, `WEBPUSH_GONE` (404/410), `WEBPUSH_ENDPOINT_REJECTED`, `WEBPUSH_INVALID_KEYS` (these five also revoke the binding), `TELEGRAM_BAD_REQUEST`, `TELEGRAM_AUTH_FAILED`, `WEBPUSH_AUTH_FAILED`, `WEBPUSH_PAYLOAD_TOO_LARGE`, `WEBPUSH_REJECTED`, `LEASE_EXPIRED`, or the last retryable code (`SMTP_TEMPORARY`, `SMTP_UNAVAILABLE`, `TELEGRAM_RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `WEBPUSH_RATE_LIMITED`, `WEBPUSH_UNAVAILABLE`, `CHANNEL_TIMEOUT`, `CHANNEL_ERROR`, `PREPARE_ERROR`) after 5 attempts. Never provider text |
+| `error_code` | `VARCHAR(64)` | `NULLABLE` | Machine code of the last failure or skip reason. Skips: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, `USER_INACTIVE`, `NO_EMAIL`, `PREFERENCE_OFF`, `POST_RESOLVED`, `EMERGENCY_TOO_OLD`, `DEADLINE_PASSED` (a reading reminder after `due_date`), `SUBJECT_NOT_FOUND`, `POLL_NOT_OPEN` (a poll closed or cancelled before sending), `ISSUE_ENDED` (an issue report that ended before sending), `URGENT_CLEARED` (an urgent issue alert whose flag the board cleared before sending), `TASK_DONE` / `TASK_NOT_ACTIVE` / `TASK_MOVED` (a maintenance reminder whose occurrence was closed, whose task was paused, or whose date was moved before sending), `STATUS_OUTDATED` (an issue status notice whose status changed again), `BINDING_REVOKED`. Failures: `SMTP_REJECTED`, `SMTP_AUTH_FAILED`, `SMTP_NOT_SUPPORTED`, `EMAIL_INVALID`, `TELEGRAM_BLOCKED`, `TELEGRAM_CHAT_NOT_FOUND`, `WEBPUSH_GONE` (404/410), `WEBPUSH_ENDPOINT_REJECTED`, `WEBPUSH_INVALID_KEYS` (these five also revoke the binding), `TELEGRAM_BAD_REQUEST`, `TELEGRAM_AUTH_FAILED`, `WEBPUSH_AUTH_FAILED`, `WEBPUSH_PAYLOAD_TOO_LARGE`, `WEBPUSH_REJECTED`, `LEASE_EXPIRED`, or the last retryable code (`SMTP_TEMPORARY`, `SMTP_UNAVAILABLE`, `TELEGRAM_RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `WEBPUSH_RATE_LIMITED`, `WEBPUSH_UNAVAILABLE`, `CHANNEL_TIMEOUT`, `CHANNEL_ERROR`, `PREPARE_ERROR`) after 5 attempts. Never provider text |
 | `trace_id` | `VARCHAR(32)` | `NULLABLE` | Trace of the request that caused the event |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 | `sent_at` | `TIMESTAMPTZ` | `NULLABLE` | |
@@ -644,3 +644,91 @@ and per cleared urgent flag.)*
 - A status change locks the issue (`FOR UPDATE`); marking a duplicate also locks the original, the
   two rows in id order, so two board members merging in opposite directions cannot deadlock or
   make a cycle.
+
+---
+
+## 11. Module: `maintenance` (epic E10: the maintenance calendar and log)
+
+*Design: docs/epics/E10_MAINTENANCE_CALENDAR.md. API: docs/API.md section 11. Migration 020.
+Users are referenced by id only; names come from `PropertyService`.*
+
+### Table: `maint_tasks`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `title` | `VARCHAR(120)` | `NOT NULL, CHECK not blank` | |
+| `instructions` | `TEXT` | `NOT NULL, DEFAULT ''` | Board-only notes, up to 4000 characters (checked by the API) |
+| `period_unit` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('DAY', 'MONTH', 'YEAR')` | |
+| `period_count` | `INTEGER` | `NOT NULL, CHECK BETWEEN 1 AND 3650` | Bounds per unit checked by the API |
+| `lead_days` | `INTEGER` | `NOT NULL, CHECK BETWEEN 0 AND 90` | |
+| `anchor_date` | `DATE` | `NOT NULL` | Occurrence k falls on anchor + k periods |
+| `anchor_day` | `INTEGER` | `NOT NULL, CHECK BETWEEN 1 AND 31` | The rhythm's day of the month, clamped in shorter months; kept when a new period re-anchors on a clamped date |
+| `status` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('ACTIVE', 'PAUSED', 'ARCHIVED')` | |
+| `notice_title` | `VARCHAR(255)` | `NULLABLE` | The residents' notice; all `notice_*` columns are set together or not at all |
+| `notice_body` | `TEXT` | `NULLABLE` | |
+| `notice_category` | `VARCHAR(50)` | `NULLABLE` | A post category |
+| `notice_target_scope` | `VARCHAR(32)` | `NULLABLE` | Target as for `comm_posts`, the same consistency check |
+| `notice_target_entrance` | `INTEGER` | `NULLABLE` | |
+| `notice_target_apartment_ids` | `JSONB` | `NULLABLE` | |
+| `notice_comments_enabled` | `BOOLEAN` | `NULLABLE` | |
+| `created_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
+| `updated_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `archived_at` | `TIMESTAMPTZ` | `NULLABLE` | Set exactly when `ARCHIVED` |
+
+- `ix_maint_tasks_building_status`: `(building_id, status)`.
+
+### Table: `maint_occurrences`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `task_id` | `UUID` | `FK(maint_tasks.id), NOT NULL` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `seq` | `INTEGER` | `NOT NULL, CHECK >= 0` | k of the schedule from the task's current anchor |
+| `due_date` | `DATE` | `NOT NULL` | |
+| `status` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('OPEN', 'DONE', 'SKIPPED', 'CANCELLED')` | |
+| `closed_at` | `TIMESTAMPTZ` | `NULLABLE` | Set exactly when not `OPEN` |
+| `published_at` | `TIMESTAMPTZ` | `NULLABLE` | Task M2: when the board topic went out |
+| `board_post_id` | `UUID` | `NULLABLE` | Task M2: the board topic (`comm_posts.id`, no FK across modules) |
+| `notice_post_id` | `UUID` | `NULLABLE` | Task M2: the residents' notice |
+| `notice_failed` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Task M2: the notice target was no longer valid |
+| `last_reminded_on` | `DATE` | `NULLABLE` | Task M2: the local date of the last publication or reminder |
+| `next_remind_on` | `DATE` | `NULLABLE` | Task M2: the local date of the next overdue reminder (the day after the due date, then every N days); the publisher selects only rows due today |
+| `reminder_count` | `INTEGER` | `NOT NULL, DEFAULT 0` | Task M2: overdue reminders sent |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- `uq_maint_occurrences_one_open`: unique `(task_id) WHERE status = 'OPEN'`.
+- `ix_maint_occurrences_open_due`: `(due_date) WHERE status = 'OPEN'` and
+  `ix_maint_occurrences_open_remind`: `(next_remind_on) WHERE status = 'OPEN'`, for the publisher
+  (M2), which reads its candidates in pages so a long list never hides the last ones.
+
+### Table: `maint_log_entries`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `task_id` | `UUID` | `FK(maint_tasks.id), NOT NULL` | |
+| `occurrence_id` | `UUID` | `FK(maint_occurrences.id), NOT NULL, UNIQUE` | |
+| `kind` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('DONE', 'SKIPPED')` | |
+| `closed_on` | `DATE` | `NOT NULL` | The done date, or the skip date |
+| `note` | `VARCHAR(1000)` | `NOT NULL, DEFAULT ''` | Required (not blank) for `SKIPPED`, checked by the API |
+| `cost` | `NUMERIC(12,2)` | `NULLABLE, CHECK >= 0` | Only for `DONE` (`ck_maint_log_entries_cost_done`) |
+| `recorded_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
+| `updated_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- `ix_maint_log_entries_building_closed`: `(building_id, closed_on)`;
+  `ix_maint_log_entries_task_closed`: `(task_id, closed_on)`.
+- Every write to a task or its occurrences locks the task row (`FOR UPDATE`), so two board
+  members closing the same occurrence get one entry and one `409 OCCURRENCE_CLOSED`; an edit of a
+  log entry locks that entry.
+- **Publishing (task M2):** the publisher locks a task with `FOR UPDATE SKIP LOCKED` (a task
+  being changed is taken on the next run), checks the occurrence again and writes its posts and
+  the `published_at` / `board_post_id` / `notice_post_id` / `last_reminded_on` marks in one
+  transaction per task, so two workers never publish twice.
+- Migration 021 (task M3) adds `MAINTENANCE_DUE` and `NOTICE_PUBLISHED` to the `event_type`
+  checks of `notif_preferences` and `notif_deliveries`, and `maintenance_task` to `subject_type`
+  (section 5).
+- **`comm_posts.origin`** (task M2, migration 020): `VARCHAR(32) NULLABLE, CHECK IN
+  ('MAINTENANCE')`; set only by the service for posts the maintenance calendar publishes.

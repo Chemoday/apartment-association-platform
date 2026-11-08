@@ -130,6 +130,7 @@ def db_app(app: FastAPI, db_session: AsyncSession) -> Iterator[FastAPI]:
     app.dependency_overrides[get_db_session] = override_db_session
     app.state.notifications_session_factory = subscriber_session
     app.state.auth_session_factory = subscriber_session  # background work of module auth
+    app.state.maintenance_session_factory = subscriber_session  # the publisher's ticks
     yield app
     app.dependency_overrides.pop(get_db_session, None)
 

@@ -36,6 +36,12 @@ class PostType(StrEnum):
     BOARD_TOPIC = "BOARD_TOPIC"
 
 
+class PostOrigin(StrEnum):
+    """Who published a post when it was not a person writing it (epic E10)."""
+
+    MAINTENANCE = "MAINTENANCE"
+
+
 class PostCategory(StrEnum):
     GENERAL = "GENERAL"
     WATER_SHUTOFF = "WATER_SHUTOFF"
@@ -124,6 +130,8 @@ class PostView(BaseModel):
     created_at: datetime
     # The newest comment's time, or created_at without comments; the thread inbox sorts by it.
     last_activity_at: datetime
+    # MAINTENANCE for a reminder or notice the maintenance calendar published (epic E10).
+    origin: PostOrigin | None = None
 
 
 class EmergencyView(PostView):

@@ -1,0 +1,11 @@
+key,en,ru,et
+board.title.DUE,"Maintenance: {title}, due {date}","Обслуживание: {title}, срок {date}","Hooldus: {title}, tähtaeg {date}"
+board.title.OVERDUE,"Maintenance: {title}, overdue since {date}","Обслуживание: {title}, просрочено с {date}","Hooldus: {title}, tähtaeg möödus {date}"
+board.footer,Mark it done or skip it in the maintenance calendar.,Отметьте выполнение или пропуск в календаре обслуживания.,Märkige see hoolduskalendris tehtuks või jätke vahele.
+board.notice_failed,The residents' notice could not be published: its target is no longer valid.,Объявление для жильцов не опубликовано: его адресаты больше не существуют.,Elanike teadet ei saanud avaldada: selle sihtrühma enam ei ole.
+notice.planned,Planned date: {date},Плановая дата: {date},Planeeritud kuupäev: {date}
+comment.overdue,Still not done: overdue since {date} (reminder {number}).,Всё ещё не выполнено: просрочено с {date} (напоминание {number}).,Endiselt tegemata: tähtaeg möödus {date} (meeldetuletus {number}).
+comment.moved,Moved to {date}.,Перенесено на {date}.,Edasi lükatud kuupäevale {date}.
+comment.due,Due on {date}.,Срок: {date}.,Tähtaeg: {date}.
+comment.done,Done on {date}.,Выполнено {date}.,Tehtud {date}.
+comment.skipped,Skipped this time: {note},Пропущено в этот раз: {note},Seekord vahele jäetud: {note}

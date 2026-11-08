@@ -24,8 +24,8 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 401 | `NOT_AUTHENTICATED` / `INVALID_TOKEN` / `UNKNOWN_USER` | No credentials, a bad or expired token, or an unknown or inactive user (sent with `WWW-Authenticate: Bearer`) |
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
-| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` | The request is valid, but conflicts with the current state |
+| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
 | 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION`, `INVALID_DUPLICATE` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
@@ -432,10 +432,15 @@ Anyone else gets `403 FORBIDDEN`. Comments use the commenter's first apartment u
   "comments_enabled": true,
   "comments_count": 3,
   "created_at": "2026-10-25T10:00:00Z",
-  "last_activity_at": "2026-10-26T18:30:00Z"
+  "last_activity_at": "2026-10-26T18:30:00Z",
+  "origin": null
 }
 ```
-- `post_type`: `EMERGENCY` | `OFFICIAL_NOTICE` | `FORUM_TOPIC` | `APARTMENT_THREAD`. `category`: `GENERAL` | `WATER_SHUTOFF` | `MAINTENANCE` | `MARKETPLACE`.
+- `post_type`: `EMERGENCY` | `OFFICIAL_NOTICE` | `FORUM_TOPIC` | `APARTMENT_THREAD` | `BOARD_TOPIC`.
+- `origin`: `null` for a post a person wrote; `MAINTENANCE` for one the maintenance calendar
+  published (section 11, task M2): a board topic reminding of a task, or an official notice of
+  a task. Its author is the board member it was published for (the badge as usual); show it as
+  "automatic reminder from the maintenance calendar". `category`: `GENERAL` | `WATER_SHUTOFF` | `MAINTENANCE` | `MARKETPLACE`.
 - `is_active` is `false` only for a resolved emergency; every other post is always active.
 - `last_activity_at`: the time of the newest comment, or `created_at` while there is none.
 
@@ -525,6 +530,9 @@ Published on the event bus **after** the request's transaction commits (never fo
 - `EmergencyAlertPublished`: `post_id`, `building_id`, `category`, `target_scope`, `target_entrance`, `target_apartment_ids`, `published_by_user_id`.
 - `EmergencyAlertResolved`: `post_id`, `building_id`, `resolved_by_user_id`.
 - `PostDeleted` (E8/P4): a forum topic or a board topic was deleted. `post_id`, `building_id`, `post_type`, `deleted_by_user_id`. Nobody subscribes to it; it is the record of the deletion.
+- `OfficialNoticePublished` (E10/M2): every new `OFFICIAL_NOTICE`, written by hand or published
+  by the maintenance calendar. `post_id`, `building_id`, `target_scope`, `target_entrance`,
+  `target_apartment_ids`, `published_by_user_id`; drives `NOTICE_PUBLISHED` (section 6, task M3).
 - `ApartmentMessagePosted` (E8/P3): a new `APARTMENT_THREAD` or a comment on one. `post_id`, `comment_id` (`null` for the thread itself), `building_id`, `apartment_id`, `author_user_id`, `from_board` (the author wrote as the board, without an apartment).
 
 Further moderation (authors deleting their own posts, hiding single comments, reports, a moderation log) is in the Phase 2 backlog, docs/ROADMAP_MVP.md.
@@ -591,8 +599,10 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   the system on external channels: the event type, the emergency title and body (written by the
   board), the target (e.g. "entrance 2"), the period code and due date, that a message between the
   board and an apartment exists and the apartment number, that a poll was opened and its deadline
-  date, the category, entrance and status of an issue, and a link to the site. Comments, forum
-  posts, thread messages, issue titles and descriptions, and author names never do.
+  date, the category, entrance and status of an issue, that a notice was published, the title
+  and due date of a maintenance task (to the board only), and a link to the site. Comments, forum
+  posts, thread messages, notice texts, issue titles and descriptions, and author names never
+  do.
 - **Who gets what:**
 
 | `event_type` | Recipients | Mandatory |
@@ -607,6 +617,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_REPORTED` | an issue was reported (section 10): the chairman and the board members, never the reporter | no |
 | `ISSUE_URGENT` | an urgent issue was reported (instead of `ISSUE_REPORTED`): the chairman and the board members, never the reporter | yes |
 | `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
+| `MAINTENANCE_DUE` | the maintenance calendar published a task or reminded of an overdue one (section 11): the chairman and the board members | no |
+| `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target, never its author | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -639,6 +651,18 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   in progress -> waiting -> in progress, both "in progress" notices go out). `ISSUE_URGENT` is
   mandatory and goes out first, like an emergency; withdrawing, editing, "+1" and clearing the
   urgent flag notify nobody.
+- **Maintenance and notices** (epic E10, task M3): `MAINTENANCE_DUE` names the task (the board's
+  own title, to the board only) and its date: "Maintenance due: Inspect the fire extinguishers,
+  15.04.2027", or "... overdue since 15.04.2027 (reminder 2)". The title is read right before
+  sending, so a renamed task is sent with its new name. Right before an external message is
+  sent: an occurrence done, skipped or cancelled meanwhile is skipped with `TASK_DONE`, a task
+  paused meanwhile with `TASK_NOT_ACTIVE`, an occurrence whose date was moved meanwhile with
+  `TASK_MOVED` (the move publishes or reminds again on its own), a recipient no longer on the
+  board with `SUBJECT_NOT_FOUND`; a message that would go out at night waits for 09:00 local
+  time. `NOTICE_PUBLISHED` says only "New notice from the board" with a link, never the
+  notice's title or text; it is for the residents of the notice's target (the board sees every
+  notice in the feed and is not told); a recipient who no longer sees the notice (moved out) is
+  skipped with `SUBJECT_NOT_FOUND`, and outside the app it also waits for 09:00 at night.
 
 - Users who join, link a channel or add a device while an emergency is active see it as the banner
   (`GET /api/v1/communication/emergencies/active`); old alerts are not sent to them on any channel.
@@ -667,6 +691,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_REPORTED` | on | off | off | off |
 | `ISSUE_URGENT` (mandatory) | on | on | on | on |
 | `ISSUE_STATUS_CHANGED` | on | on | on | on |
+| `MAINTENANCE_DUE` | on | off | off | off |
+| `NOTICE_PUBLISHED` | on | on | on | on |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
@@ -689,7 +715,8 @@ reports, but not for urgent ones (epic E9).
 - `subject_type` `post` links to `GET /api/v1/communication/posts/{subject_id}`; `period` links to
   the readings of that period (`params.period_code`); `poll` links to
   `GET /api/v1/governance/polls/{subject_id}`; `issue` links to
-  `GET /api/v1/issues/{subject_id}` (for a merge notice, the original).
+  `GET /api/v1/issues/{subject_id}` (for a merge notice, the original); `maintenance_task` links
+  to `GET /api/v1/maintenance/tasks/{subject_id}`.
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
@@ -698,7 +725,9 @@ reports, but not for urgent ones (epic E9).
   deadline when the poll opened, UTC; the board may extend it later, the poll has the current one);
   `ISSUE_REPORTED` and `ISSUE_URGENT` `category`, `entrance` (or `null`);
   `ISSUE_STATUS_CHANGED` `category`, `entrance`, `status` (the new one) and `merged` (`true` for
-  the merge notice, whose `status` is `DUPLICATE`).
+  the merge notice, whose `status` is `DUPLICATE`); `MAINTENANCE_DUE` `occurrence_id`,
+  `due_date`, `overdue` and `reminder_number` (0 for the publication; the title is loaded with
+  the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -737,7 +766,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 40 combinations of `event_type` and `channel` (50 once
+- `preferences` always has all 48 combinations of `event_type` and `channel` (60 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -754,7 +783,7 @@ Only the listed combinations change. Response: the same body as the `GET`.
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
 `PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
-`ISSUE_STATUS_CHANGED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -1625,6 +1654,7 @@ Every endpoint needs a signed-in user of the building.
 | `issues.reports_per_apartment_per_day` | `INTEGER` | 3 | 1..20 | Issue reports one apartment may file in 24 hours (epic E9) |
 | `issues.urgent_enabled` | `BOOLEAN` | `false` | | Residents may mark an issue report urgent |
 | `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
+| `maintenance.overdue_reminder_days` | `INTEGER` | 7 | 1..30 | Days between the reminders of an overdue maintenance task (epic E10) |
 
 ### `GET /api/v1/settings` (chairman and board)
 `{"settings": [SettingView, ...]}`, every declared setting, ordered by `key`. Anyone else:
@@ -1828,3 +1858,204 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (ta
 | 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` |
 | 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE` |
 | 429 | `RATE_LIMITED` |
+
+## 11. Maintenance calendar and log (`maintenance`), epic E10
+
+Recurring maintenance of the building: the board enters tasks ("inspect the fire extinguishers
+every 12 months"), marks each occurrence done or skipped, and keeps a log. Design and owner
+decisions: docs/epics/E10_MAINTENANCE_CALENDAR.md. Task M1 (this section) covers the tasks, the
+occurrences and the log; publishing reminders and notices follows in task M2, notifications in
+M3. Every endpoint needs a signed-in user. The chairman and the board use every endpoint; the
+accountant reads the log only (`GET /log`); anyone else gets `403 FORBIDDEN`. Another building's
+task: `404 MAINTENANCE_TASK_NOT_FOUND`. Dates are calendar dates (`YYYY-MM-DD`) in the instance
+time zone (`INSTANCE_TIMEZONE`).
+
+### Task object (`TaskView`)
+```json
+{
+  "id": "uuid",
+  "title": "Inspect the fire extinguishers",
+  "instructions": "Basement and every landing. The key is in the board's box.",
+  "period_unit": "MONTH",
+  "period_count": 12,
+  "lead_days": 14,
+  "anchor_date": "2027-04-15",
+  "status": "ACTIVE",
+  "notice": {
+    "title": "Fire extinguishers are inspected",
+    "body": "The service company checks every extinguisher on the stairs.",
+    "category": "MAINTENANCE",
+    "target_scope": "ALL_BUILDING",
+    "target_entrance": null,
+    "target_apartment_ids": null,
+    "comments_enabled": false
+  },
+  "current": {
+    "occurrence_id": "uuid",
+    "due_date": "2027-04-15",
+    "publish_on": "2027-04-01",
+    "state": "UPCOMING",
+    "published_at": null,
+    "board_post_id": null,
+    "notice_post_id": null,
+    "notice_failed": false,
+    "reminder_count": 0
+  },
+  "last_closed_on": null,
+  "created_at": "2026-11-08T10:00:00Z",
+  "updated_at": "2026-11-08T10:00:00Z",
+  "archived_at": null
+}
+```
+- `period_unit`: `DAY` (`period_count` 7..3650), `MONTH` (1..120) or `YEAR` (1..10). Every
+  occurrence is counted from `anchor_date` and keeps the rhythm's day of the month: monthly from
+  31 January gives 28 (or 29) February, then 31 March; yearly from 29 February gives 28 February
+  in common years.
+- `lead_days`: 0..90 and shorter than the period (DAY: the count; MONTH: 28 x the count; YEAR:
+  365 x the count). Reminders and the notice go out `lead_days` before the due date (task M2).
+- `instructions`: the board's internal notes (0..4000 characters); never shown to residents.
+- `notice`: an official notice for residents published with each occurrence (task M2), or
+  `null`. `title` 1..255, `body` 1..9500 (the calendar adds the planned date), `category` a post
+  category (default `MAINTENANCE`),
+  the target fields as for posts (section 4), `comments_enabled` (default `false`).
+- `status`: `ACTIVE`, `PAUSED` or `ARCHIVED`.
+- `current`: the open occurrence (`null` once archived). `publish_on` is `due_date - lead_days`.
+  `state`: `UPCOMING` (before `publish_on`), `DUE` (from `publish_on` up to the due date),
+  `OVERDUE` (after the due date), `PAUSED` (the task is paused).
+- `last_closed_on`: the date the last occurrence was done or skipped, or `null`.
+- Publishing (task M2): `published_at` when the board topic went out, `board_post_id` (open it in
+  the board's micro-forum), `notice_post_id` (the residents' notice, or `null`), `notice_failed`
+  (`true` when the notice could not be published because its target is no longer valid),
+  `reminder_count` (overdue reminders so far).
+
+### Publishing (task M2)
+A background job, every 10 minutes between 09:00 and 21:00 local time:
+- From `publish_on` on (also later, after a downtime: "due and not published yet", never "due
+  today"), for an active task it publishes once per occurrence:
+  - a **board topic** (`BOARD_TOPIC`, `origin` `MAINTENANCE`): "Maintenance: {title}, due
+    {date}" (or "overdue since {date}" when published late), with the task's instructions, in the
+    instance language (`DEFAULT_LOCALE`), comments on;
+  - an **official notice** for a task with a `notice`: the board's title and text as written,
+    plus a line with the planned date, to its target, `origin` `MAINTENANCE`. A target that is no
+    longer valid: the notice is not published, `notice_failed` becomes `true`, and the board
+    topic says so; it is never retried.
+- While the occurrence is overdue: the day after the due date (or at once when it was published
+  late), then every `maintenance.overdue_reminder_days` days (section 9), a comment on the same
+  board topic, "Still not done: overdue since {date} (reminder {n})". A board topic deleted
+  meanwhile is published again. Residents never get reminders.
+- Done or skipped: the board topic gets a closing comment ("Done on {date}" / "Skipped this time:
+  {note}").
+- **The author** is a current board member: the task's creator if still the chairman or on the
+  board, else the chairman, else a board member; without one the job waits.
+- A paused or archived task publishes nothing. Moving the due date of a published occurrence
+  (`PATCH ... next_due_date`) keeps its posts and adds a comment "Moved to {date}" to the board
+  topic. When the new date is beyond the lead time again, the occurrence is published once more
+  at its new `publish_on`: a comment "Due on {date}" on the same topic, a new notice for
+  residents with the new date, and the board's notification; otherwise the reminders start the
+  day after the new date.
+- `notice_failed` is never retried for that occurrence; a corrected `notice` target applies from
+  the next one.
+- The board topic follows the rules of the micro-forum (section 4): it notifies nobody; the
+  board's notification is `MAINTENANCE_DUE` (section 6, task M3).
+
+
+### `GET /api/v1/maintenance/tasks?status=ACTIVE&state=OVERDUE&limit=50&offset=0`
+The building's tasks as `TaskView`. Without `status`: active and paused tasks. Ordered by the
+current due date (archived ones: newest `archived_at` first). `state` filters by the current
+occurrence's state; `limit` 1..100, `offset` 0..100000.
+
+### `POST /api/v1/maintenance/tasks`
+Creates a task; `201` with the `TaskView`.
+```json
+{
+  "title": "Inspect the fire extinguishers",
+  "instructions": "Basement and every landing.",
+  "period_unit": "MONTH",
+  "period_count": 12,
+  "lead_days": 14,
+  "first_due_date": "2027-04-15",
+  "notice": null
+}
+```
+- `first_due_date` becomes the anchor and the first occurrence. It may be up to 366 days in the
+  past (the task is then overdue at once) and at most 10 years ahead, else `422 VALIDATION_ERROR`.
+- A notice target that does not fit the building (an unknown entrance or apartment):
+  `422 INVALID_TARGET` (with `unknown_apartment_ids` for unknown apartments, as for posts). Other problems: `422 VALIDATION_ERROR` (unknown fields are rejected).
+
+### `GET /api/v1/maintenance/tasks/{task_id}`
+The `TaskView`.
+
+### `PATCH /api/v1/maintenance/tasks/{task_id}`
+Changes any of `title`, `instructions`, `lead_days`, `notice` (an object replaces it, `null`
+removes it), `period_unit` with `period_count` (both together), and `next_due_date`. Returns the
+`TaskView`. `null` is refused (`422 VALIDATION_ERROR`) for every field except `notice` and
+`instructions`; a field sent with its current value changes nothing.
+- A new period continues from the current due date, which becomes the anchor; the rhythm keeps
+  its day of the month (a task of the 31st stays on the 31st).
+- `next_due_date` moves the open occurrence (same bounds as `first_due_date`) and becomes the
+  anchor with its day. Send `occurrence_id` (the shown `current.occurrence_id`) with it: if
+  someone closed that occurrence meanwhile, `409 OCCURRENCE_CLOSED` with
+  `current_occurrence_id` instead of moving the next one.
+- An archived task: `409 TASK_ARCHIVED`.
+
+### `POST /api/v1/maintenance/tasks/{task_id}/pause`, `.../resume` and `.../archive`
+- `pause`: `ACTIVE` -> `PAUSED` (nothing is published while paused). `resume`: `PAUSED` ->
+  `ACTIVE`, optionally with `{"next_due_date": "...", "occurrence_id": "..."}`. `archive`: an active or paused task ->
+  `ARCHIVED` for good; its open occurrence is cancelled; the log stays.
+- Any other state: `409 INVALID_TASK_TRANSITION` with `status`. Returns the `TaskView`.
+
+### `POST /api/v1/maintenance/tasks/{task_id}/done` and `.../skip`
+Closes the open occurrence and opens the next one; `201` with `{"entry": LogEntryView,
+"task": TaskView}`.
+```json
+{"occurrence_id": "uuid", "done_on": "2027-04-20", "note": "All 14 checked.", "cost": "145.00"}
+```
+- `done`: `done_on` not in the future, at most 366 days before the planned date and not before
+  the task's last closed occurrence; `note` 0..1000;
+  `cost` optional, a decimal string with up to 2 decimals (`"145"`, `"145.50"`), 0 or more.
+- `skip`: `{"occurrence_id": "uuid", "note": "The roof is being replaced"}`; `note` is required
+  (1..1000); the skip date is today.
+- The next due date keeps the planned rhythm: the first date of the schedule after both the
+  planned date and `done_on` (a task done very late does not leave missed dates behind; one done
+  early keeps its rhythm).
+- `occurrence_id` must be the task's open occurrence, else `409 OCCURRENCE_CLOSED` with
+  `current_occurrence_id` (someone else closed it meanwhile). An archived task:
+  `409 TASK_ARCHIVED`. A paused task may be marked done or skipped.
+
+### Log entry object (`LogEntryView`)
+```json
+{
+  "id": "uuid",
+  "task_id": "uuid",
+  "task_title": "Inspect the fire extinguishers",
+  "kind": "DONE",
+  "planned_date": "2027-04-15",
+  "closed_on": "2027-04-20",
+  "note": "All 14 checked.",
+  "cost": "145.00",
+  "recorded_by": {"display_label": "Oleg Sidorov", "role_badge": "BOARD"},
+  "recorded_at": "2027-04-20T15:00:00Z",
+  "updated_at": "2027-04-20T15:00:00Z",
+  "updated_by": null
+}
+```
+- `kind`: `DONE` or `SKIPPED`. `cost`: a decimal string with 2 decimals, or `null` (always `null`
+  for `SKIPPED`).
+- `recorded_by` / `updated_by`: who wrote or last changed the entry, by full name (the board acts
+  publicly for the association, as in the board's micro-forum, section 4).
+
+### `GET /api/v1/maintenance/log?task_id=&from=2027-01-01&to=2027-12-31&limit=50&offset=0`
+The chairman, the board and the accountant. Entries newest `closed_on` first; `from` / `to` filter
+`closed_on` (inclusive).
+
+### `PATCH /api/v1/maintenance/log/{entry_id}` (chairman and board)
+Changes `note` and `cost` (`cost` on a `SKIPPED` entry: `422 VALIDATION_ERROR`); `closed_on` never
+changes, because the schedule depends on it. `404 LOG_ENTRY_NOT_FOUND`.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 404 | `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND` |
+| 409 | `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` |
+| 422 | `VALIDATION_ERROR`, `INVALID_TARGET` |

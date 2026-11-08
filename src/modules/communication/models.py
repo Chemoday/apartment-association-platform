@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base, uuid_pk, varchar_enum
-from src.modules.communication.schemas import PostCategory, PostType, TargetScope
+from src.modules.communication.schemas import PostCategory, PostOrigin, PostType, TargetScope
 
 # Keep these texts identical to alembic/versions/003_communication.py: tests compare the catalogs.
 TARGET_CONSISTENT_CHECK = (
@@ -164,6 +164,10 @@ class Post(Base):
     )
     comments_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    # Set only by the service for posts the maintenance calendar publishes (epic E10).
+    origin: Mapped[PostOrigin | None] = mapped_column(
+        varchar_enum(PostOrigin, "ck_comm_posts_origin"), nullable=True
     )
     created_at: Mapped[datetime] = _timestamp(index=True)
     # Moved forward by every new comment (greatest(), so it never goes back).

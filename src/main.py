@@ -28,6 +28,8 @@ from src.modules.auth.router import router as auth_router
 from src.modules.communication.router import router as communication_router
 from src.modules.governance.router import router as governance_router
 from src.modules.issues.router import router as issues_router
+from src.modules.maintenance.publisher import Publisher, run_publisher_loop
+from src.modules.maintenance.router import router as maintenance_router
 from src.modules.meters.router import router as meters_router
 from src.modules.notifications.dispatcher import (
     Dispatcher,
@@ -67,6 +69,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         loops.append(
             asyncio.create_task(run_scheduler_loop(scheduler), name="notifications-scheduler")
         )
+    if settings.MAINTENANCE_PUBLISHER_ENABLED:
+        loops.append(
+            asyncio.create_task(
+                run_publisher_loop(app.state.maintenance_publisher), name="maintenance-publisher"
+            )
+        )
     if settings.AUTH_CLEANUP_ENABLED:
         loops.append(
             asyncio.create_task(
@@ -105,6 +113,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(governance_router)
     app.include_router(settings_router)
     app.include_router(issues_router)
+    app.include_router(maintenance_router)
+    # Posts go out even without notifications; the factory is read on every tick (tests swap it).
+    app.state.maintenance_session_factory = async_session_factory
+    app.state.maintenance_publisher = Publisher(
+        lambda: app.state.maintenance_session_factory, lambda: app.state.event_bus, settings
+    )
     # One registry per app instance, so enabling a plugin never leaks between apps or tests.
     # Plugins with incomplete settings raise here, so the app does not start half-configured.
     plugins = build_plugin_registry(settings)

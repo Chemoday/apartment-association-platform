@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     NOTIFICATIONS_DISPATCHER_ENABLED: bool = True
     # The loop that publishes reading reminders and deletes old rows (every 10 minutes).
     NOTIFICATIONS_SCHEDULER_ENABLED: bool = True
+    # The maintenance calendar's publisher loop (epic E10); tests call its tick directly.
+    MAINTENANCE_PUBLISHER_ENABLED: bool = True
     # Deliveries (and the in-app feed) older than this are deleted, and revoked bindings too.
     NOTIFICATIONS_RETENTION_DAYS: int = Field(default=180, ge=1)
     # Reminders start this many days before the local deadline day, between 09:00 and 21:00.

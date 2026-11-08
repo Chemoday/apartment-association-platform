@@ -21,6 +21,11 @@ text.ISSUE_URGENT,"An urgent issue was reported: {category}, {location}. Please 
 subject.ISSUE_STATUS_CHANGED,"Issue update: {category}, {location}","Обновление по проблеме: {category}, {location}","Probleemi uuendus: {category}, {location}"
 text.ISSUE_STATUS_CHANGED,"The issue you follow ({category}, {location}) is now: {status}.","Проблема, за которой вы следите ({category}, {location}), теперь: {status}.","Teie jälgitav probleem ({category}, {location}) on nüüd: {status}."
 text.ISSUE_STATUS_CHANGED.MERGED,"The issue you follow ({category}, {location}) was merged into another report of the same problem; you now follow that one.","Проблема, за которой вы следите ({category}, {location}), объединена с другим сообщением о той же проблеме; теперь вы следите за ним.","Teie jälgitav probleem ({category}, {location}) liideti sama probleemi teise teatega; nüüd jälgite seda."
+subject.MAINTENANCE_DUE,"Maintenance due: {title}, {due_date}","Обслуживание: {title}, срок {due_date}","Hooldus: {title}, tähtaeg {due_date}"
+text.MAINTENANCE_DUE,"The maintenance task ""{title}"" is due on {due_date}. Open it in the maintenance calendar on the site.",Задача обслуживания «{title}» назначена на {due_date}. Откройте её в календаре обслуживания на сайте.,"Hooldustöö ""{title}"" tähtaeg on {due_date}. Avage see veebilehe hoolduskalendris."
+text.MAINTENANCE_DUE.OVERDUE,"The maintenance task ""{title}"" is overdue since {due_date} (reminder {number}). Mark it done or skip it in the maintenance calendar.",Задача обслуживания «{title}» просрочена с {due_date} (напоминание {number}). Отметьте выполнение или пропуск в календаре обслуживания.,"Hooldustöö ""{title}"" tähtaeg möödus {due_date} (meeldetuletus {number}). Märkige see hoolduskalendris tehtuks või jätke vahele."
+subject.NOTICE_PUBLISHED,New notice from the board,Новое объявление правления,Uus teade juhatuselt
+text.NOTICE_PUBLISHED,The board published a notice. Open it on the site to read it.,"Правление опубликовало объявление. Откройте его на сайте, чтобы прочитать.",Juhatus avaldas teate. Lugemiseks avage see veebilehel.
 issue.category.LIGHTING,lighting,освещение,valgustus
 issue.category.DOORS_AND_LOCKS,doors and locks,двери и замки,uksed ja lukud
 issue.category.LIFT,lift,лифт,lift

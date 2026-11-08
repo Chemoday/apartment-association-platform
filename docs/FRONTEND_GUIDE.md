@@ -83,6 +83,8 @@ Build the navigation from `GET /api/v1/property/me` (`building_role`, `membershi
 | Building settings (`/settings`): see | no | yes | yes | no |
 | Issues: see, report, "+1" | own building | yes | yes | only as a member of an apartment |
 | Issues: see the reporter | no | yes | yes | no |
+| Maintenance calendar (`/maintenance`): tasks | no | yes | yes | no |
+| Maintenance log | no | yes | yes | read |
 | Building settings: change | no | no | yes | no |
 
 A user with no apartment gets `apartments: []` from the dashboard; hide the meter card, do not
@@ -520,3 +522,35 @@ Contract: docs/API.md section 10; notifications in docs/API.md section 6.
   `entrance: null`. Never show an issue title in a notification. The preferences matrix now has 40
   rows; show `ISSUE_REPORTED` and `ISSUE_URGENT` only to the chairman and the board, and
   `ISSUE_STATUS_CHANGED` to everyone who can use the tracker.
+
+## 16. Maintenance calendar and log (epic E10)
+
+Contract: docs/API.md section 11.
+
+- **Pages** for the chairman and the board: "Maintenance" with the tasks (next due date, state
+  badge: upcoming, due, overdue in red, paused) and "Log". The accountant sees the log only.
+  Residents see nothing of it; they get the notices (task M2).
+- **Task form:** title, internal instructions, "every N days / months / years", the first due
+  date, "remind N days before", and an optional notice for residents (title, text, category,
+  target as for notices). Explain that a monthly task from the 31st falls on the last day of
+  shorter months.
+- **Done / skip:** "Mark done" asks the date (default today), a note and an optional cost (a
+  decimal string, render it in the reader's language); "Skip this time" needs a note. Send the
+  shown `current.occurrence_id`; `409 OCCURRENCE_CLOSED` means someone was faster: reload.
+- **Edit:** changing the period or the next due date continues the rhythm from the new date; say
+  so next to the fields. Pause, resume (optionally with a new date) and archive have
+  confirmations; archived tasks are read only.
+- **Log:** newest first, filters by task and dates, `recorded_by` as the badge it is; costs only
+  here, never on a residents' page.
+- **Publishing (task M2):** show on the task when its reminder went out (`published_at`, link to
+  the board topic `board_post_id`), the residents' notice (`notice_post_id`), a warning when
+  `notice_failed` is true ("the notice could not be published: correct its target for the next
+  time"), and the number of overdue reminders.
+- **Notifications (task M3):** `MAINTENANCE_DUE` (`subject_type` `maintenance_task`, open the task)
+  "Maintenance due on {due_date}" or, with `overdue`, "overdue since {due_date}" (load the task for
+  its title); shown to the chairman and the board only in the settings. `NOTICE_PUBLISHED`
+  (`subject_type` `post`, open the notice) "New notice from the board"; shown to everyone with an
+  apartment. The preferences matrix now has 48 rows.
+- In the board room and the feed, a post with `origin`
+  `MAINTENANCE` gets a small "automatic reminder" (or "automatic notice") label next to the
+  author's badge.

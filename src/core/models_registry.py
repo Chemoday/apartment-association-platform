@@ -26,6 +26,7 @@ from src.modules.governance.models import (  # noqa: F401
     PollQuestion,
 )
 from src.modules.issues.models import Issue, IssueFollower, IssueStatusChange  # noqa: F401
+from src.modules.maintenance.models import LogEntry, Occurrence, Task  # noqa: F401
 from src.modules.meters.models import (  # noqa: F401
     MeterDevice,
     MeterReading,

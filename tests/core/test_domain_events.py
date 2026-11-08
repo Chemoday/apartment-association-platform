@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -32,11 +32,13 @@ from src.modules.communication.events import (
     ApartmentMessagePosted,
     EmergencyAlertPublished,
     EmergencyAlertResolved,
+    OfficialNoticePublished,
     PostDeleted,
 )
 from src.modules.communication.schemas import PostCategory, PostType, TargetScope
 from src.modules.governance.events import PollOpened
 from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
+from src.modules.maintenance.events import MaintenanceTaskDue
 from src.modules.meters.events import MeterReadingSubmitted, ReadingPeriodStatusChanged
 from src.modules.meters.schemas import PeriodStatus, ReadingSource
 from src.modules.property.models import Building
@@ -84,6 +86,22 @@ def _samples() -> dict[str, DomainEvent]:
             post_id=post, building_id=building, resolved_by_user_id=user
         ),
         "PollOpened": PollOpened(poll_id=post, building_id=building, opened_by_user_id=user),
+        "OfficialNoticePublished": OfficialNoticePublished(
+            post_id=post,
+            building_id=building,
+            target_scope=TargetScope.APARTMENT_LIST,
+            target_entrance=None,
+            target_apartment_ids=(uuid.uuid4(),),
+            published_by_user_id=user,
+        ),
+        "MaintenanceTaskDue": MaintenanceTaskDue(
+            task_id=post,
+            occurrence_id=uuid.uuid4(),
+            building_id=building,
+            due_date=date(2027, 4, 15),
+            overdue=True,
+            reminder_number=2,
+        ),
         "IssueReported": IssueReported(
             issue_id=post, building_id=building, reporter_user_id=user, urgent=True
         ),

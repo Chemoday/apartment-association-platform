@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-ALLOWED = {"src/modules/notifications/messages.csv", "src/modules/auth/messages.csv"}
+ALLOWED = {
+    "src/modules/notifications/messages.csv",
+    "src/modules/auth/messages.csv",
+    "src/modules/maintenance/messages.csv",
+}
 CYRILLIC = re.compile("[\u0400-\u04ff]")
 
 

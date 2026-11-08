@@ -6,7 +6,7 @@ badges come from PropertyService; property models are never imported or joined.
 """
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
 from fastapi import Depends
@@ -33,6 +33,7 @@ from src.modules.communication.events import (
     ApartmentMessagePosted,
     EmergencyAlertPublished,
     EmergencyAlertResolved,
+    OfficialNoticePublished,
     PostDeleted,
 )
 from src.modules.communication.models import Comment, EmergencyAck, Post
@@ -55,6 +56,7 @@ from src.modules.communication.schemas import (
     PostCategory,
     PostCreateRequest,
     PostDetail,
+    PostOrigin,
     PostType,
     PostView,
     ResolveResponse,
@@ -105,6 +107,20 @@ class CommunicationService:
         self.outbox = outbox
 
     # --- System-level reads (no caller; used by the notifications module) -----------------------
+
+    async def notice_target_problem(
+        self,
+        building_id: uuid.UUID,
+        scope: TargetScope,
+        entrance: int | None,
+        apartment_ids: Sequence[uuid.UUID] | None,
+    ) -> tuple[str, dict[str, object]] | None:
+        """Why an official notice with this target cannot be published in the building, as the
+        message and the extra fields of INVALID_TARGET, or None (the rules of POST /posts; used by
+        the maintenance calendar, epic E10)."""
+        if problem := target_problem(PostType.OFFICIAL_NOTICE, scope, entrance, apartment_ids):
+            return problem, {}
+        return await self._missing_target(building_id, scope, entrance, apartment_ids)
 
     async def get_emergency_ref(
         self, post_id: uuid.UUID, *, lock_for_share: bool = False
@@ -303,7 +319,15 @@ class CommunicationService:
             ],
         )
 
-    async def create_post(self, user: CurrentUserDTO, request: PostCreateRequest) -> PostView:
+    async def create_post(
+        self,
+        user: CurrentUserDTO,
+        request: PostCreateRequest,
+        *,
+        origin: PostOrigin | None = None,
+    ) -> PostView:
+        """A post by the caller. `origin` is set only by other modules' services (never by a
+        request): MAINTENANCE for what the maintenance calendar publishes as a board member."""
         if not can_publish(request.post_type, user.building_role):
             raise DomainError(
                 status_code=403,
@@ -345,6 +369,7 @@ class CommunicationService:
                 else None
             ),
             comments_enabled=request.comments_enabled,
+            origin=origin,
         )
         self.session.add(post)
         await self.session.flush()
@@ -356,6 +381,18 @@ class CommunicationService:
                     post_id=post.id,
                     building_id=post.building_id,
                     category=post.category,
+                    target_scope=post.target_scope,
+                    target_entrance=post.target_entrance,
+                    target_apartment_ids=tuple(request.target_apartment_ids or ()),
+                    published_by_user_id=user.id,
+                )
+            )
+        elif post.post_type == PostType.OFFICIAL_NOTICE:
+            assert self.outbox is not None, "writes need the request outbox"
+            self.outbox.add(
+                OfficialNoticePublished(
+                    post_id=post.id,
+                    building_id=post.building_id,
                     target_scope=post.target_scope,
                     target_entrance=post.target_entrance,
                     target_apartment_ids=tuple(request.target_apartment_ids or ()),
@@ -550,19 +587,35 @@ class CommunicationService:
         return post
 
     async def _check_target_exists(self, user: CurrentUserDTO, request: PostCreateRequest) -> None:
-        if request.target_scope == TargetScope.ALL_BUILDING:
-            return
-        apartments = await self.property_service.list_apartments(user.building_id)
-        if request.target_scope == TargetScope.ENTRANCE:
-            if request.target_entrance not in {apartment.entrance for apartment in apartments}:
-                raise _invalid_target(
-                    f"The building has no apartments in entrance {request.target_entrance}."
-                )
-        elif unknown := set(request.target_apartment_ids or ()) - {a.id for a in apartments}:
-            raise _invalid_target(
+        if problem := await self._missing_target(
+            user.building_id,
+            request.target_scope,
+            request.target_entrance,
+            request.target_apartment_ids,
+        ):
+            message, extra = problem
+            raise _invalid_target(message, **extra)
+
+    async def _missing_target(
+        self,
+        building_id: uuid.UUID,
+        scope: TargetScope,
+        entrance: int | None,
+        apartment_ids: Sequence[uuid.UUID] | None,
+    ) -> tuple[str, dict[str, object]] | None:
+        """Why the target does not exist in the building (message, extra), or None."""
+        if scope == TargetScope.ALL_BUILDING:
+            return None
+        apartments = await self.property_service.list_apartments(building_id)
+        if scope == TargetScope.ENTRANCE:
+            if entrance not in {apartment.entrance for apartment in apartments}:
+                return f"The building has no apartments in entrance {entrance}.", {}
+        elif unknown := set(apartment_ids or ()) - {a.id for a in apartments}:
+            return (
                 "Some target apartments are not in this building.",
-                unknown_apartment_ids=sorted(str(apartment_id) for apartment_id in unknown),
+                {"unknown_apartment_ids": sorted(str(apartment_id) for apartment_id in unknown)},
             )
+        return None
 
     @staticmethod
     def _author_apartment(
@@ -706,6 +759,7 @@ class CommunicationService:
             comments_count=comments_count,
             created_at=post.created_at,
             last_activity_at=post.last_activity_at,
+            origin=post.origin,
         )
 
     @staticmethod
