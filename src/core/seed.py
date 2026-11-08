@@ -45,6 +45,8 @@ from src.modules.governance.schemas import (
     PollUnit,
     ValueType,
 )
+from src.modules.issues.models import Issue, IssueFollower, IssueStatusChange
+from src.modules.issues.schemas import IssueCategory, IssueStatus
 from src.modules.meters.models import MeterDevice, MeterReading, MeterReadingLog, ReadingPeriod
 from src.modules.meters.policies import period_due_date
 from src.modules.meters.schemas import MeterUnit, PeriodStatus, ReadingSource, ResourceType
@@ -200,6 +202,9 @@ _INSERT_ORDER = (
     Ballot,
     BallotAnswer,
     BallotRevision,
+    Issue,
+    IssueFollower,
+    IssueStatusChange,
 )
 
 
@@ -589,6 +594,74 @@ class _Builder:
         )
         self.add(poll, day, note, *options, *electors.values(), ballot, answer, revision)
 
+    # --- issues ---
+
+    def issues(self, building: Building, now: datetime) -> None:
+        """Two issues (E9): an open one reported by apartment 14 with a "+1" from apartment 2,
+        and one that apartment 2 withdrew (seen only by its reporter and the board)."""
+        users, apartments = self.users, self.apartments
+        owner_14, tenant_2 = users[DemoUserKey.OWNER_14], users[DemoUserKey.TENANT_2]
+        light_at, door_at = now - timedelta(days=2), now - timedelta(days=1)
+        light = Issue(
+            id=demo_id("issue:stair-light"),
+            building_id=building.id,
+            reporter_user_id=owner_14.id,
+            reporter_apartment_id=apartments["14"].id,
+            category=IssueCategory.LIGHTING,
+            entrance=2,
+            place="3rd floor landing",
+            title="No light on the 3rd floor landing",
+            description="The lamp flickered for a week and went out yesterday evening.",
+            status=IssueStatus.REPORTED,
+            created_at=light_at,
+            updated_at=light_at,
+        )
+        door = Issue(
+            id=demo_id("issue:door-closer"),
+            building_id=building.id,
+            reporter_user_id=tenant_2.id,
+            reporter_apartment_id=apartments["2"].id,
+            category=IssueCategory.DOORS_AND_LOCKS,
+            entrance=1,
+            place="Front door",
+            title="The front door slams",
+            status=IssueStatus.WITHDRAWN,
+            created_at=door_at,
+            updated_at=door_at + timedelta(hours=2),
+            ended_at=door_at + timedelta(hours=2),
+        )
+        self.add(
+            light,
+            door,
+            IssueFollower(issue_id=light.id, user_id=owner_14.id, created_at=light_at),
+            IssueFollower(
+                issue_id=light.id, user_id=tenant_2.id, created_at=light_at + timedelta(hours=5)
+            ),
+            IssueFollower(issue_id=door.id, user_id=tenant_2.id, created_at=door_at),
+            IssueStatusChange(
+                id=demo_id("issue:stair-light:reported"),
+                issue_id=light.id,
+                to_status=IssueStatus.REPORTED,
+                changed_by_user_id=owner_14.id,
+                changed_at=light_at,
+            ),
+            IssueStatusChange(
+                id=demo_id("issue:door-closer:reported"),
+                issue_id=door.id,
+                to_status=IssueStatus.REPORTED,
+                changed_by_user_id=tenant_2.id,
+                changed_at=door_at,
+            ),
+            IssueStatusChange(
+                id=demo_id("issue:door-closer:withdrawn"),
+                issue_id=door.id,
+                from_status=IssueStatus.REPORTED,
+                to_status=IssueStatus.WITHDRAWN,
+                changed_by_user_id=tenant_2.id,
+                changed_at=door_at + timedelta(hours=2),
+            ),
+        )
+
 
 async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> bool:
     """Add the demo building to an empty database. Returns False when nothing was done.
@@ -655,6 +728,7 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
 
     builder.posts(building, now)
     builder.poll(building, now)
+    builder.issues(building, now)
     await builder.insert()
     logger.info(
         "seed_completed",
