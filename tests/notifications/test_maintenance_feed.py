@@ -108,7 +108,8 @@ async def test_a_notice_tells_its_target_but_not_its_author(
         response.json()["id"],
         {},
     )
-    for user in (world.board_15, world.tenant_2, world.chairman, world.other_resident):
+    assert len(await feed(api_client, world.chairman, "NOTICE_PUBLISHED")) == 1, "the board"
+    for user in (world.board_15, world.tenant_2, world.accountant, world.other_resident):
         assert await feed(api_client, user, "NOTICE_PUBLISHED") == []
 
 
@@ -168,5 +169,5 @@ async def test_a_notice_for_listed_apartments(api_client: AsyncClient, world: No
     assert response.status_code == 201, response.text
 
     assert len(await feed(api_client, world.tenant_2, "NOTICE_PUBLISHED")) == 1
-    for user in (world.owner_14, world.board_15):
-        assert await feed(api_client, user, "NOTICE_PUBLISHED") == []
+    assert len(await feed(api_client, world.board_15, "NOTICE_PUBLISHED")) == 1, "the board"
+    assert await feed(api_client, world.owner_14, "NOTICE_PUBLISHED") == []
