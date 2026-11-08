@@ -313,3 +313,18 @@ docs/API.md section 9.
 - **Writing:** only `PUT /api/v1/settings` (the chairman). A module never writes settings.
 - **Logs and spans:** a change logs `building_setting_changed` with the key (and the request's
   usual `user_id` and `trace_id`); the values stay in the database.
+
+## 7. Module `issues` (epic E9)
+
+Design: docs/epics/E9_ISSUE_TRACKER.md. Tables: docs/SCHEMA.md section 10. API: docs/API.md
+section 10.
+
+- **Place:** reads users, apartments, memberships and badges only through `PropertyService`
+  (`get_masked_author_badges` for the board's reporter badge, `list_apartments` for the
+  entrances) and its settings through `BuildingSettings` (section 6). No other module imports it;
+  task I3 adds its durable events for notifications.
+- **Rules as pure functions** in `issues/policies.py`: which statuses are open or ended, who sees
+  an issue, the limit check and the retry time, so the board's transitions (task I2) add rules
+  there.
+- **Limits:** counted per apartment from `iss_issues` (no separate counter); a transaction-scoped
+  advisory lock on the apartment serializes concurrent reports.

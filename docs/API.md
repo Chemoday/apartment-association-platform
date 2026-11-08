@@ -24,10 +24,10 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 401 | `NOT_AUTHENTICATED` / `INVALID_TOKEN` / `UNKNOWN_USER` | No credentials, a bad or expired token, or an unknown or inactive user (sent with `WWW-Authenticate: Bearer`) |
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
-| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` | The request is valid, but conflicts with the current state |
+| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
-| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
+| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
 | other | `HTTP_<status>` | Any other framework-level HTTP error |
 
@@ -1623,3 +1623,137 @@ Changes some settings at once and returns the same body as `GET`.
 | :--- | :--- |
 | 403 | `FORBIDDEN` |
 | 422 | `VALIDATION_ERROR` |
+
+## 10. Issue tracker (`issues`), epic E9
+
+Problems in common areas (entrance, stairs, basement, roof, yard) reported once and visible to the
+whole building. Design and owner decisions: docs/epics/E9_ISSUE_TRACKER.md. Task I1 (this
+section) covers reporting, the list, "+1" and who sees what; the board's statuses follow in task
+I2. Every endpoint needs a signed-in user.
+
+### Who sees the tracker
+- Every active user with an active membership in the building, the chairman and the board. An
+  accountant (or anyone else) without an apartment: `403 FORBIDDEN` on every endpoint.
+- Seen: every open issue, and ended ones (`RESOLVED`, `DUPLICATE`, `DECLINED`) for 30 days after
+  `ended_at`. A `WITHDRAWN` issue only by its reporter and the board, in lists also for 30 days;
+  by its link (`GET /issues/{id}`) they open it at any age. The board also lists older ended
+  issues with `include_old=true`, and opens any issue of the building by its link.
+- Not visible (another building, too old, withdrawn by someone else): `404 ISSUE_NOT_FOUND`.
+
+### Issue object (`IssueView`)
+```json
+{
+  "id": "uuid",
+  "category": "LIGHTING",
+  "entrance": 2,
+  "place": "3rd floor landing",
+  "title": "No light on the stairs",
+  "description": "The lamp flickers and went out yesterday evening.",
+  "status": "REPORTED",
+  "urgent": false,
+  "duplicate_of": null,
+  "followers": 3,
+  "i_reported": false,
+  "i_follow": true,
+  "can_edit": false,
+  "can_follow": true,
+  "created_at": "2026-11-08T18:00:00Z",
+  "updated_at": "2026-11-08T18:00:00Z",
+  "ended_at": null,
+  "timeline": [{"status": "REPORTED", "at": "2026-11-08T18:00:00Z"}],
+  "reporter": null
+}
+```
+- `category`: `LIGHTING`, `DOORS_AND_LOCKS`, `LIFT`, `HEATING`, `WATER_AND_SEWAGE`, `ELECTRICITY`,
+  `CLEANING`, `WASTE`, `YARD`, `ROOF_AND_FACADE`, `OTHER` (more may be added; show an unknown one
+  as "Other").
+- `entrance`: an entrance of the building, or `null` for the yard, the roof or the whole building.
+  `place`: where exactly, 1..200 characters.
+- `status`: `REPORTED`, `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR` (open), `RESOLVED`, `DUPLICATE`,
+  `DECLINED`, `WITHDRAWN` (ended, with `ended_at`). `duplicate_of`: the original's id for
+  `DUPLICATE`, else `null`. In task I1 only `REPORTED` and `WITHDRAWN` occur.
+- `followers`: the reporter plus everyone who pressed "+1"; never who. `i_reported`, `i_follow`:
+  about the caller.
+- `can_edit`: the caller is the reporter and the issue is `REPORTED` (fix the text, withdraw).
+  `can_follow`: the issue is open and the caller does not follow it yet.
+- `timeline`: every status with its time, oldest first; never who changed it (the board's view
+  in task I2 adds that).
+- `reporter`: `null` for everyone except the chairman and the board, who get
+  `{"badge": AuthorBadge, "apartment_id": "uuid" | null}`. The badge is the privacy badge of
+  section 0 (the reporter's mode in that apartment), never a raw name or contacts;
+  `apartment_id` links to the apartment's card and thread (epic E8).
+- Never in a payload: who reported (except `reporter` for the board), who follows.
+
+### `GET /api/v1/issues/form`
+What the report form needs: `{"urgent_enabled": false, "apartment_ids": ["uuid"], "entrances": [1, 2]}`.
+`urgent_enabled` is the chairman's setting `issues.urgent_enabled` (section 9); `apartment_ids`
+the caller's apartments in the building (choose one when there are several); `entrances` the
+building's entrances.
+
+### `POST /api/v1/issues`
+Reports an issue; `201` with the `IssueView`. The reporter follows it from the start.
+```json
+{
+  "category": "LIGHTING",
+  "entrance": 2,
+  "place": "3rd floor landing",
+  "title": "No light on the stairs",
+  "description": "The lamp flickers and went out yesterday evening.",
+  "urgent": false,
+  "apartment_id": "uuid"
+}
+```
+- `title` 1..120, `description` 0..2000 (optional), `place` 1..200 characters; free-text rules of
+  section 4. `urgent` (default `false`) only while `issues.urgent_enabled` is on, else
+  `422 VALIDATION_ERROR` (`loc` `["body", "urgent"]`).
+- `apartment_id`: the apartment the report comes from. May be omitted (or `null`) when the caller
+  has exactly one apartment; required with several (`422 VALIDATION_ERROR`); must be the caller's
+  own, else `422 INVALID_AUTHOR_APARTMENT`. The chairman and the board report without an
+  apartment when they send `"apartment_id": null` explicitly (or have none); then the report
+  counts for no apartment.
+- `entrance`: one of `GET /issues/form` `entrances`, or `null`; else `422 INVALID_LOCATION`.
+- **Limits per apartment:** at most `issues.reports_per_apartment_per_day` reports from the same
+  apartment in the last 24 hours (whoever in it filed them; withdrawn ones count), of them at
+  most `issues.urgent_per_apartment_per_day` urgent. Over a limit: `429 RATE_LIMITED` with
+  `retry_after_seconds` and a `Retry-After` header (when the oldest report in the window is 24
+  hours old). The chairman and the board are never limited (their reports still count for the
+  apartment).
+- A problem inside a flat does not belong here: the form says to write to the board instead
+  (section 4, `APARTMENT_THREAD`).
+
+### `GET /api/v1/issues?status=OPEN&category=LIGHTING&entrance=2&include_old=false&limit=50&offset=0`
+The issues the caller sees as `IssueView` without `description` and `timeline`. Open ones first
+(newest first), then ended ones (newest `ended_at` first). Filters (optional): `status` (`OPEN`,
+`ENDED` or one status), `category`, `entrance` (a number; `0` = without an entrance),
+`include_old` (the board only; ended issues of any age and withdrawn ones). `limit` 1..100,
+`offset` 0..100000.
+
+### `GET /api/v1/issues/{issue_id}`
+The full `IssueView`. `404 ISSUE_NOT_FOUND` when not visible.
+
+### `PATCH /api/v1/issues/{issue_id}` (the reporter)
+Fixes the text while the issue is `REPORTED`: any of `category`, `entrance`, `place`, `title`,
+`description` (same rules as the report; `urgent` and the apartment cannot change). Only the
+fields given change; `null` clears `entrance` and `description`, and is refused for `category`,
+`place` and `title` (`422 VALIDATION_ERROR`). An empty body changes nothing. Returns the
+`IssueView`. `409 ISSUE_NOT_EDITABLE` once the board moved it on; anyone but the reporter:
+`403 FORBIDDEN`.
+
+### `POST /api/v1/issues/{issue_id}/withdraw` (the reporter)
+Takes the issue back while it is `REPORTED`: status `WITHDRAWN`, seen from then on by the reporter
+and the board only. Returns the `IssueView`. `409 ISSUE_NOT_EDITABLE` otherwise; anyone but the
+reporter: `403 FORBIDDEN`.
+
+### `PUT /api/v1/issues/{issue_id}/follow` and `DELETE .../follow`
+"+1 / I see it too", and taking it back. Both return the `IssueView` and are idempotent. `PUT`
+on an ended issue: `409 ISSUE_ENDED`; `DELETE` always works (the reporter may stop following
+too, and follow again later).
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 404 | `ISSUE_NOT_FOUND` |
+| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED` |
+| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION` |
+| 429 | `RATE_LIMITED` |

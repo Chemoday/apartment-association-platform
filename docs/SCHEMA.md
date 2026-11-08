@@ -581,3 +581,57 @@ needs no migration and core never knows a module's rules. Migration 017.*
   advisory lock on the building (`core:settings:<building_id>`), so two changes of the same
   setting, also its first ones, are logged in order with their real old values.
 - Seeding (`src/core/seed.py`) writes no settings: the demo uses the defaults.
+
+---
+
+## 10. Module: `issues` (epic E9: the building issue tracker)
+
+*Design: docs/epics/E9_ISSUE_TRACKER.md. API: docs/API.md section 10. Migration 018 (task I1).
+Users and apartments are referenced by id only; names and badges come from `PropertyService`.*
+
+### Table: `iss_issues`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `reporter_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | Never returned except as the board's badge |
+| `reporter_apartment_id` | `UUID` | `FK(property_apartments.id), NULLABLE` | The apartment the report came from (the limits); `NULL` for the board without one |
+| `category` | `VARCHAR(32)` | `NOT NULL, CHECK` | `LIGHTING`, `DOORS_AND_LOCKS`, `LIFT`, `HEATING`, `WATER_AND_SEWAGE`, `ELECTRICITY`, `CLEANING`, `WASTE`, `YARD`, `ROOF_AND_FACADE`, `OTHER` |
+| `entrance` | `INTEGER` | `NULLABLE, CHECK > 0` | `NULL`: yard, roof or the whole building |
+| `place` | `VARCHAR(200)` | `NOT NULL, CHECK not blank` | |
+| `title` | `VARCHAR(120)` | `NOT NULL, CHECK not blank` | |
+| `description` | `TEXT` | `NOT NULL, DEFAULT ''` | Up to 2000 characters (checked by the API) |
+| `urgent` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | |
+| `status` | `VARCHAR(32)` | `NOT NULL, CHECK` | `REPORTED`, `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR`, `RESOLVED`, `DUPLICATE`, `DECLINED`, `WITHDRAWN` |
+| `duplicate_of_id` | `UUID` | `FK(iss_issues.id), NULLABLE` | Set exactly for `DUPLICATE` (task I2) |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `ended_at` | `TIMESTAMPTZ` | `NULLABLE` | Set exactly for the ended statuses `RESOLVED`, `DUPLICATE`, `DECLINED`, `WITHDRAWN` |
+
+- `ck_iss_issues_ended`: `ended_at` is set if and only if the status is an ended one;
+  `ck_iss_issues_duplicate`: `duplicate_of_id` is set if and only if the status is `DUPLICATE`.
+- `ix_iss_issues_building_status`: `(building_id, status)`, for the list;
+  `ix_iss_issues_apartment_created`: `(reporter_apartment_id, created_at)`, for the limits.
+- The limits are checked under a transaction-scoped advisory lock on the apartment, so two
+  reports at the same moment cannot both pass the last free slot.
+
+### Table: `iss_followers`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `issue_id` | `UUID` | `PK`, `FK(iss_issues.id) ON DELETE CASCADE` | |
+| `user_id` | `UUID` | `PK`, `FK(core_users.id)` | The reporter (from the start) or someone who pressed "+1"; never returned |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+### Table: `iss_status_changes`
+*(The timeline and the board's action log; one row per status, the first is `REPORTED`.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `issue_id` | `UUID` | `FK(iss_issues.id) ON DELETE CASCADE, NOT NULL, INDEX` | |
+| `from_status` | `VARCHAR(32)` | `NULLABLE` | `NULL` for the first row |
+| `to_status` | `VARCHAR(32)` | `NOT NULL` | |
+| `changed_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | Shown to the board only (task I2) |
+| `changed_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- Seeding (`src/core/seed.py`) adds two demo issues (task I1): an open one with a "+1" and a
+  withdrawn one.
