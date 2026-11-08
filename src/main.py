@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from src.core.building_settings import get_settings_registry
+from src.core.building_settings import router as settings_router
 from src.core.config import Settings, get_settings
 from src.core.database import async_session_factory, engine
 from src.core.demo import router as demo_router
@@ -100,11 +102,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(meters_router)
     app.include_router(communication_router)
     app.include_router(governance_router)
+    app.include_router(settings_router)
     # One registry per app instance, so enabling a plugin never leaks between apps or tests.
     # Plugins with incomplete settings raise here, so the app does not start half-configured.
     plugins = build_plugin_registry(settings)
     app.state.plugin_registry = plugins
     validate_auth_settings(settings, plugins)  # no app without the secrets of every sign-in
+    get_settings_registry()  # a wrong setting declaration fails here, not on first use
     auth_catalog()  # a broken messages.csv fails now, not after a 202
     app.state.auth_background = BackgroundWork()
     app.state.auth_passwords = PasswordHashing()  # at most 2 Argon2id hashes at once
