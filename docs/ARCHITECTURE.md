@@ -348,3 +348,14 @@ docs/API.md section 11.
   shown state; the period and lead-time bounds.
 - **Time:** due dates are calendar dates in `INSTANCE_TIMEZONE`; "today" is the local date of
   now, so a change of daylight saving time never moves them.
+- **The publisher** (`maintenance/publisher.py`, task M2) is a background loop like the
+  notifications scheduler: `Publisher.tick(now=None)` every 10 minutes, only 09:00-21:00 local
+  time, switched by `MAINTENANCE_PUBLISHER_ENABLED`. It reads the candidates once, then handles
+  **one task per transaction** (`transaction(session)` with `session_outbox`): the task row is
+  locked `FOR UPDATE SKIP LOCKED`, the occurrence checked again, the posts written through
+  `CommunicationService.create_post` / `add_comment` as a current board member
+  (`PropertyService.get_current_user`, `users_with_roles`), and the events stored with the
+  change. It never uses a savepoint around a write that adds an event: a rolled-back savepoint
+  would drop the stored event row while the in-memory event would still be published.
+- **Events:** `MaintenanceTaskDue` (`task_id`, `occurrence_id`, `building_id`, `due_date`,
+  `overdue`, `reminder_number`) after each publication and reminder, for task M3.

@@ -693,12 +693,15 @@ Users are referenced by id only; names come from `PropertyService`.*
 | `board_post_id` | `UUID` | `NULLABLE` | Task M2: the board topic (`comm_posts.id`, no FK across modules) |
 | `notice_post_id` | `UUID` | `NULLABLE` | Task M2: the residents' notice |
 | `notice_failed` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Task M2: the notice target was no longer valid |
-| `last_reminded_on` | `DATE` | `NULLABLE` | Task M2: the local date of the last reminder |
+| `last_reminded_on` | `DATE` | `NULLABLE` | Task M2: the local date of the last publication or reminder |
+| `next_remind_on` | `DATE` | `NULLABLE` | Task M2: the local date of the next overdue reminder (the day after the due date, then every N days); the publisher selects only rows due today |
 | `reminder_count` | `INTEGER` | `NOT NULL, DEFAULT 0` | Task M2: overdue reminders sent |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 
 - `uq_maint_occurrences_one_open`: unique `(task_id) WHERE status = 'OPEN'`.
-- `ix_maint_occurrences_open_due`: `(due_date) WHERE status = 'OPEN'`, for the publisher (M2).
+- `ix_maint_occurrences_open_due`: `(due_date) WHERE status = 'OPEN'` and
+  `ix_maint_occurrences_open_remind`: `(next_remind_on) WHERE status = 'OPEN'`, for the publisher
+  (M2), which reads its candidates in pages so a long list never hides the last ones.
 
 ### Table: `maint_log_entries`
 | Column | Type | Constraints | Description |
@@ -720,3 +723,9 @@ Users are referenced by id only; names come from `PropertyService`.*
 - Every write to a task or its occurrences locks the task row (`FOR UPDATE`), so two board
   members closing the same occurrence get one entry and one `409 OCCURRENCE_CLOSED`; an edit of a
   log entry locks that entry.
+- **Publishing (task M2):** the publisher locks a task with `FOR UPDATE SKIP LOCKED` (a task
+  being changed is taken on the next run), checks the occurrence again and writes its posts and
+  the `published_at` / `board_post_id` / `notice_post_id` / `last_reminded_on` marks in one
+  transaction per task, so two workers never publish twice.
+- **`comm_posts.origin`** (task M2, migration 020): `VARCHAR(32) NULLABLE, CHECK IN
+  ('MAINTENANCE')`; set only by the service for posts the maintenance calendar publishes.

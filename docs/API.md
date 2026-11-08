@@ -432,10 +432,15 @@ Anyone else gets `403 FORBIDDEN`. Comments use the commenter's first apartment u
   "comments_enabled": true,
   "comments_count": 3,
   "created_at": "2026-10-25T10:00:00Z",
-  "last_activity_at": "2026-10-26T18:30:00Z"
+  "last_activity_at": "2026-10-26T18:30:00Z",
+  "origin": null
 }
 ```
-- `post_type`: `EMERGENCY` | `OFFICIAL_NOTICE` | `FORUM_TOPIC` | `APARTMENT_THREAD`. `category`: `GENERAL` | `WATER_SHUTOFF` | `MAINTENANCE` | `MARKETPLACE`.
+- `post_type`: `EMERGENCY` | `OFFICIAL_NOTICE` | `FORUM_TOPIC` | `APARTMENT_THREAD` | `BOARD_TOPIC`.
+- `origin`: `null` for a post a person wrote; `MAINTENANCE` for one the maintenance calendar
+  published (section 11, task M2): a board topic reminding of a task, or an official notice of
+  a task. Its author is the board member it was published for (the badge as usual); show it as
+  "automatic reminder from the maintenance calendar". `category`: `GENERAL` | `WATER_SHUTOFF` | `MAINTENANCE` | `MARKETPLACE`.
 - `is_active` is `false` only for a resolved emergency; every other post is always active.
 - `last_activity_at`: the time of the newest comment, or `created_at` while there is none.
 
@@ -525,6 +530,9 @@ Published on the event bus **after** the request's transaction commits (never fo
 - `EmergencyAlertPublished`: `post_id`, `building_id`, `category`, `target_scope`, `target_entrance`, `target_apartment_ids`, `published_by_user_id`.
 - `EmergencyAlertResolved`: `post_id`, `building_id`, `resolved_by_user_id`.
 - `PostDeleted` (E8/P4): a forum topic or a board topic was deleted. `post_id`, `building_id`, `post_type`, `deleted_by_user_id`. Nobody subscribes to it; it is the record of the deletion.
+- `OfficialNoticePublished` (E10/M2): every new `OFFICIAL_NOTICE`, written by hand or published
+  by the maintenance calendar. `post_id`, `building_id`, `target_scope`, `target_entrance`,
+  `target_apartment_ids`, `published_by_user_id`; drives `NOTICE_PUBLISHED` (section 6, task M3).
 - `ApartmentMessagePosted` (E8/P3): a new `APARTMENT_THREAD` or a comment on one. `post_id`, `comment_id` (`null` for the thread itself), `building_id`, `apartment_id`, `author_user_id`, `from_board` (the author wrote as the board, without an apartment).
 
 Further moderation (authors deleting their own posts, hiding single comments, reports, a moderation log) is in the Phase 2 backlog, docs/ROADMAP_MVP.md.
@@ -1625,6 +1633,7 @@ Every endpoint needs a signed-in user of the building.
 | `issues.reports_per_apartment_per_day` | `INTEGER` | 3 | 1..20 | Issue reports one apartment may file in 24 hours (epic E9) |
 | `issues.urgent_enabled` | `BOOLEAN` | `false` | | Residents may mark an issue report urgent |
 | `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
+| `maintenance.overdue_reminder_days` | `INTEGER` | 7 | 1..30 | Days between the reminders of an overdue maintenance task (epic E10) |
 
 ### `GET /api/v1/settings` (chairman and board)
 `{"settings": [SettingView, ...]}`, every declared setting, ordered by `key`. Anyone else:
@@ -1864,7 +1873,12 @@ time zone (`INSTANCE_TIMEZONE`).
     "occurrence_id": "uuid",
     "due_date": "2027-04-15",
     "publish_on": "2027-04-01",
-    "state": "UPCOMING"
+    "state": "UPCOMING",
+    "published_at": null,
+    "board_post_id": null,
+    "notice_post_id": null,
+    "notice_failed": false,
+    "reminder_count": 0
   },
   "last_closed_on": null,
   "created_at": "2026-11-08T10:00:00Z",
@@ -1887,6 +1901,41 @@ time zone (`INSTANCE_TIMEZONE`).
   `state`: `UPCOMING` (before `publish_on`), `DUE` (from `publish_on` up to the due date),
   `OVERDUE` (after the due date), `PAUSED` (the task is paused).
 - `last_closed_on`: the date the last occurrence was done or skipped, or `null`.
+- Publishing (task M2): `published_at` when the board topic went out, `board_post_id` (open it in
+  the board's micro-forum), `notice_post_id` (the residents' notice, or `null`), `notice_failed`
+  (`true` when the notice could not be published because its target is no longer valid),
+  `reminder_count` (overdue reminders so far).
+
+### Publishing (task M2)
+A background job, every 10 minutes between 09:00 and 21:00 local time:
+- From `publish_on` on (also later, after a downtime: "due and not published yet", never "due
+  today"), for an active task it publishes once per occurrence:
+  - a **board topic** (`BOARD_TOPIC`, `origin` `MAINTENANCE`): "Maintenance: {title}, due
+    {date}" (or "overdue since {date}" when published late), with the task's instructions, in the
+    instance language (`DEFAULT_LOCALE`), comments on;
+  - an **official notice** for a task with a `notice`: the board's title and text as written,
+    plus a line with the planned date, to its target, `origin` `MAINTENANCE`. A target that is no
+    longer valid: the notice is not published, `notice_failed` becomes `true`, and the board
+    topic says so; it is never retried.
+- While the occurrence is overdue: the day after the due date (or at once when it was published
+  late), then every `maintenance.overdue_reminder_days` days (section 9), a comment on the same
+  board topic, "Still not done: overdue since {date} (reminder {n})". A board topic deleted
+  meanwhile is published again. Residents never get reminders.
+- Done or skipped: the board topic gets a closing comment ("Done on {date}" / "Skipped this time:
+  {note}").
+- **The author** is a current board member: the task's creator if still the chairman or on the
+  board, else the chairman, else a board member; without one the job waits.
+- A paused or archived task publishes nothing. Moving the due date of a published occurrence
+  (`PATCH ... next_due_date`) keeps its posts and adds a comment "Moved to {date}" to the board
+  topic. When the new date is beyond the lead time again, the occurrence is published once more
+  at its new `publish_on`: a comment "Due on {date}" on the same topic, a new notice for
+  residents with the new date, and the board's notification; otherwise the reminders start the
+  day after the new date.
+- `notice_failed` is never retried for that occurrence; a corrected `notice` target applies from
+  the next one.
+- The board topic follows the rules of the micro-forum (section 4): it notifies nobody; the
+  board's notification is `MAINTENANCE_DUE` (section 6, task M3).
+
 
 ### `GET /api/v1/maintenance/tasks?status=ACTIVE&state=OVERDUE&limit=50&offset=0`
 The building's tasks as `TaskView`. Without `status`: active and paused tasks. Ordered by the
