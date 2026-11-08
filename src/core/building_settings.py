@@ -30,7 +30,7 @@ from src.modules.property.schemas import BuildingRole, CurrentUserDTO
 
 logger = structlog.get_logger(__name__)
 
-_MODULE_SETTING_MODULES = ("src.modules.issues.settings",)
+_MODULE_SETTING_MODULES = ("src.modules.issues.settings", "src.modules.maintenance.settings")
 
 KEY_MAX_LENGTH = 64
 MAX_VALUES_PER_REQUEST = 50

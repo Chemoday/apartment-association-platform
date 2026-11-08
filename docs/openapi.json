@@ -9213,6 +9213,50 @@
           },
           "state": {
             "$ref": "#/components/schemas/OccurrenceState"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "board_post_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Board Post Id"
+          },
+          "notice_post_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice Post Id"
+          },
+          "notice_failed": {
+            "type": "boolean",
+            "title": "Notice Failed"
+          },
+          "reminder_count": {
+            "type": "integer",
+            "title": "Reminder Count"
           }
         },
         "type": "object",
@@ -9220,7 +9264,12 @@
           "occurrence_id",
           "due_date",
           "publish_on",
-          "state"
+          "state",
+          "published_at",
+          "board_post_id",
+          "notice_post_id",
+          "notice_failed",
+          "reminder_count"
         ],
         "title": "CurrentOccurrence"
       },
@@ -9577,6 +9626,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Last Activity At"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "acknowledged_at": {
             "anyOf": [
@@ -10903,7 +10962,7 @@
           },
           "body": {
             "type": "string",
-            "maxLength": 10000,
+            "maxLength": 9500,
             "title": "Body"
           },
           "category": {
@@ -12114,6 +12173,16 @@
             "format": "date-time",
             "title": "Last Activity At"
           },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "comments": {
             "items": {
               "$ref": "#/components/schemas/CommentView"
@@ -12142,6 +12211,14 @@
           "comments"
         ],
         "title": "PostDetail"
+      },
+      "PostOrigin": {
+        "type": "string",
+        "enum": [
+          "MAINTENANCE"
+        ],
+        "title": "PostOrigin",
+        "description": "Who published a post when it was not a person writing it (epic E10)."
       },
       "PostType": {
         "type": "string",
@@ -12232,6 +12309,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Last Activity At"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -13708,6 +13795,18 @@
               }
             ],
             "title": "Next Due Date"
+          },
+          "occurrence_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurrence Id"
           }
         },
         "additionalProperties": false,
@@ -13728,6 +13827,18 @@
               }
             ],
             "title": "Next Due Date"
+          },
+          "occurrence_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurrence Id"
           }
         },
         "additionalProperties": false,

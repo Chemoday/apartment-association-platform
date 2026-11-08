@@ -70,6 +70,7 @@ class Task(Base):
             "period_count BETWEEN 1 AND 3650", name="ck_maint_tasks_period_count_range"
         ),
         CheckConstraint("lead_days BETWEEN 0 AND 90", name="ck_maint_tasks_lead_days_range"),
+        CheckConstraint("anchor_day BETWEEN 1 AND 31", name="ck_maint_tasks_anchor_day_range"),
         CheckConstraint(
             "(status = 'ARCHIVED') = (archived_at IS NOT NULL)", name="ck_maint_tasks_archived"
         ),
@@ -90,6 +91,8 @@ class Task(Base):
     period_count: Mapped[int] = mapped_column(Integer, nullable=False)
     lead_days: Mapped[int] = mapped_column(Integer, nullable=False)
     anchor_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # The rhythm's day of the month (31 stays 31 after a re-anchor on a clamped 28 February).
+    anchor_day: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[TaskStatus] = mapped_column(
         varchar_enum(TaskStatus, "ck_maint_tasks_status", length=16), nullable=False
     )
@@ -131,6 +134,11 @@ class Occurrence(Base):
             "due_date",
             postgresql_where=text("status = 'OPEN'"),
         ),
+        Index(
+            "ix_maint_occurrences_open_remind",
+            "next_remind_on",
+            postgresql_where=text("status = 'OPEN'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -153,6 +161,8 @@ class Occurrence(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     last_reminded_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # The local date of the next overdue reminder: the day after the due date, then every N days.
+    next_remind_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     reminder_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
@@ -165,6 +175,7 @@ class LogEntry(Base):
         CheckConstraint("cost >= 0", name="ck_maint_log_entries_cost_positive"),
         CheckConstraint("kind = 'DONE' OR cost IS NULL", name="ck_maint_log_entries_cost_done"),
         Index("ix_maint_log_entries_building_closed", "building_id", "closed_on"),
+        Index("ix_maint_log_entries_task_closed", "task_id", "closed_on"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

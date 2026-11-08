@@ -14,13 +14,24 @@ from fastapi import Depends
 from sqlalchemy import ColumnElement, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.building_settings import BuildingSettings
 from src.core.config import get_settings
-from src.core.database import DbSession
+from src.core.database import DbSession, get_event_outbox
+from src.core.event_bus import EventOutbox
 from src.core.exceptions import DomainError
-from src.modules.communication.schemas import PostCategory
+from src.modules.communication.schemas import (
+    CommentCreateRequest,
+    PostCategory,
+    PostCreateRequest,
+    PostOrigin,
+    PostType,
+)
 from src.modules.communication.service import CommunicationService
+from src.modules.maintenance.events import MaintenanceTaskDue
+from src.modules.maintenance.messages import local_date, render
 from src.modules.maintenance.models import LogEntry, Occurrence, Task
 from src.modules.maintenance.policies import (
+    BOARD_ROLES,
     done_on_problem,
     due_date_problem,
     is_board,
@@ -49,7 +60,8 @@ from src.modules.maintenance.schemas import (
     TaskStatus,
     TaskView,
 )
-from src.modules.property.schemas import CurrentUserDTO, TargetScope
+from src.modules.maintenance.settings import OVERDUE_REMINDER_DAYS
+from src.modules.property.schemas import BuildingRole, CurrentUserDTO, TargetScope
 from src.modules.property.service import PropertyService, get_property_service
 
 
@@ -108,10 +120,20 @@ def _validation_error(field: str, message: str) -> DomainError:
 
 
 class MaintenanceService:
-    def __init__(self, session: AsyncSession, property_service: PropertyService):
+    def __init__(
+        self,
+        session: AsyncSession,
+        property_service: PropertyService,
+        outbox: EventOutbox | None = None,
+    ):
         self.session = session
         self.property_service = property_service
-        self.timezone = ZoneInfo(get_settings().INSTANCE_TIMEZONE)
+        # Posts and events go out only after the transaction commits. None only where nothing
+        # is published.
+        self.outbox = outbox
+        settings = get_settings()
+        self.timezone = ZoneInfo(settings.INSTANCE_TIMEZONE)
+        self.locale = settings.DEFAULT_LOCALE
 
     def _today(self) -> date:
         return local_today(_now(), self.timezone)
@@ -132,6 +154,7 @@ class MaintenanceService:
             period_count=request.period_count,
             lead_days=request.lead_days,
             anchor_date=request.first_due_date,
+            anchor_day=request.first_due_date.day,
             status=TaskStatus.ACTIVE,
             created_by_user_id=user.id,
             updated_by_user_id=user.id,
@@ -212,10 +235,21 @@ class MaintenanceService:
         if "instructions" in given:
             task.instructions = request.instructions or ""
         task.lead_days = lead
-        if "period_unit" in given or request.next_due_date is not None:
-            # The rhythm continues from the current due date, or from the new one.
+        new_period = (unit, count) != (task.period_unit, task.period_count)
+        monthly = {PeriodUnit.MONTH, PeriodUnit.YEAR}
+        keep_day = task.period_unit in monthly and unit in monthly
+        if new_period or request.next_due_date is not None:
+            # The rhythm continues from the current due date, or from the new one; the same
+            # period or the same date sent again changes nothing (a form may send every field).
             task.period_unit, task.period_count = unit, count
-            await self._reanchor(task, request.next_due_date)
+            await self._reanchor(
+                task,
+                request.next_due_date,
+                moved_by=user,
+                seen=request.occurrence_id,
+                new_period=new_period,
+                keep_day=keep_day,
+            )
         self._touch(task, user)
         await self.session.flush()
         return await self._view(task)
@@ -239,7 +273,9 @@ class MaintenanceService:
             raise _invalid_transition(task.status)
         if request.next_due_date is not None:
             self._check_due_date("next_due_date", request.next_due_date)
-            await self._reanchor(task, request.next_due_date)
+            await self._reanchor(
+                task, request.next_due_date, moved_by=user, seen=request.occurrence_id
+            )
         task.status = TaskStatus.ACTIVE
         self._touch(task, user)
         await self.session.flush()
@@ -267,6 +303,11 @@ class MaintenanceService:
         task, occurrence = await self._closable(user, task_id, request.occurrence_id)
         if problem := done_on_problem(request.done_on, occurrence.due_date, self._today()):
             raise _validation_error("done_on", problem)
+        last = await self.session.scalar(
+            select(func.max(LogEntry.closed_on)).where(LogEntry.task_id == task.id)
+        )
+        if last is not None and request.done_on < last:
+            raise _validation_error("done_on", "done_on is before the last closed occurrence")
         return await self._close(
             user,
             task,
@@ -321,6 +362,14 @@ class MaintenanceService:
             OccurrenceStatus.DONE if kind == LogKind.DONE else OccurrenceStatus.SKIPPED
         )
         await self.session.flush()  # the unique "one open" index sees the old one closed
+        if occurrence.board_post_id is not None:
+            # The reminder topic gets its outcome, so the board room is not left with open ends.
+            outcome = (
+                render("comment.done", self.locale, date=local_date(closed_on))
+                if kind == LogKind.DONE
+                else render("comment.skipped", self.locale, note=note)
+            )
+            await self._comment(user, occurrence, outcome)
         entry = LogEntry(
             building_id=task.building_id,
             task_id=task.id,
@@ -340,6 +389,7 @@ class MaintenanceService:
             occurrence.seq,
             occurrence.due_date,
             closed_on,
+            task.anchor_day,
         )
         self.session.add_all([entry, self._occurrence(task, seq, due)])
         task.updated_at = now
@@ -402,6 +452,182 @@ class MaintenanceService:
         [view] = await self._entry_views([entry])
         return view
 
+    # --- Publishing (task M2; called by the publisher, one task per transaction) ---------------
+
+    async def publish_due(self, occurrence_id: uuid.UUID, now: datetime) -> str | None:
+        """Publish the occurrence or remind of it when it is time; None when nothing to do.
+
+        The task row is locked with SKIP LOCKED (a task being changed waits for the next run)
+        and everything is checked again under the lock, so two workers never publish twice.
+        """
+        task_id = await self.session.scalar(
+            select(Occurrence.task_id).where(Occurrence.id == occurrence_id)
+        )
+        if task_id is None:
+            return None
+        task = await self.session.scalar(
+            select(Task)
+            .where(Task.id == task_id)
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        if task is None or task.status != TaskStatus.ACTIVE:
+            return None
+        occurrence = await self._open_occurrence(task.id)
+        if occurrence is None or occurrence.id != occurrence_id:
+            return None
+        today = local_today(now, self.timezone)
+        if occurrence.published_at is None:
+            if today < occurrence.due_date - timedelta(days=task.lead_days):
+                return None
+            author = await self._author(task)
+            if author is None:
+                return None
+            await self._publish(task, occurrence, author, today, now)
+            return "published"
+        if occurrence.next_remind_on is None or today < occurrence.next_remind_on:
+            return None
+        author = await self._author(task)
+        if author is None:
+            return None
+        every = await BuildingSettings(self.session).get(task.building_id, OVERDUE_REMINDER_DAYS)
+        await self._remind(task, occurrence, author, today, every)
+        return "reminded"
+
+    async def _publish(
+        self, task: Task, occurrence: Occurrence, author: CurrentUserDTO, today: date, now: datetime
+    ) -> None:
+        communication = CommunicationService(self.session, self.property_service, self.outbox)
+        if task.notice_title is not None:
+            scope = TargetScope(task.notice_target_scope)
+            apartments = self._notice_apartments(task)
+            problem = await communication.notice_target_problem(
+                task.building_id, scope, task.notice_target_entrance, apartments
+            )
+            if problem is None:
+                planned = render(
+                    "notice.planned", self.locale, date=local_date(occurrence.due_date)
+                )
+                notice = await communication.create_post(
+                    author,
+                    PostCreateRequest(
+                        post_type=PostType.OFFICIAL_NOTICE,
+                        category=PostCategory(task.notice_category),
+                        title=task.notice_title,
+                        body=f"{task.notice_body}\n\n{planned}",
+                        target_scope=scope,
+                        target_entrance=task.notice_target_entrance,
+                        target_apartment_ids=apartments,
+                        comments_enabled=bool(task.notice_comments_enabled),
+                    ),
+                    origin=PostOrigin.MAINTENANCE,
+                )
+                occurrence.notice_post_id = notice.id
+            else:
+                occurrence.notice_failed = True
+        # A republication after a move keeps the topic and says the new date on it.
+        due_line = render("comment.due", self.locale, date=local_date(occurrence.due_date))
+        if not await self._comment(author, occurrence, due_line):
+            occurrence.board_post_id = await self._board_topic(task, occurrence, author, today)
+        occurrence.published_at, occurrence.last_reminded_on = now, today
+        # The first overdue reminder is the day after the due date (or at once when late).
+        occurrence.next_remind_on = max(
+            occurrence.due_date + timedelta(days=1), today + timedelta(days=1)
+        )
+        await self.session.flush()
+        self._task_due(task, occurrence, today, reminder_number=0)
+
+    async def _remind(
+        self, task: Task, occurrence: Occurrence, author: CurrentUserDTO, today: date, every: int
+    ) -> None:
+        number = occurrence.reminder_count + 1
+        text = render(
+            "comment.overdue", self.locale, date=local_date(occurrence.due_date), number=number
+        )
+        if not await self._comment(author, occurrence, text):
+            # The board topic was deleted: the task is still not done, so it is posted again.
+            occurrence.board_post_id = await self._board_topic(task, occurrence, author, today)
+        occurrence.reminder_count, occurrence.last_reminded_on = number, today
+        occurrence.next_remind_on = today + timedelta(days=every)
+        await self.session.flush()
+        self._task_due(task, occurrence, today, reminder_number=number)
+
+    async def _board_topic(
+        self, task: Task, occurrence: Occurrence, author: CurrentUserDTO, today: date
+    ) -> uuid.UUID:
+        title = render(
+            "board.title.OVERDUE" if today > occurrence.due_date else "board.title.DUE",
+            self.locale,
+            title=task.title,
+            date=local_date(occurrence.due_date),
+        )
+        lines = [task.instructions] if task.instructions else []
+        if occurrence.notice_failed:
+            lines.append(render("board.notice_failed", self.locale))
+        lines.append(render("board.footer", self.locale))
+        communication = CommunicationService(self.session, self.property_service, self.outbox)
+        topic = await communication.create_post(
+            author,
+            PostCreateRequest(
+                post_type=PostType.BOARD_TOPIC,
+                category=PostCategory.MAINTENANCE,
+                title=title,
+                body="\n\n".join(lines),
+                comments_enabled=True,
+            ),
+            origin=PostOrigin.MAINTENANCE,
+        )
+        return topic.id
+
+    async def _comment(self, author: CurrentUserDTO, occurrence: Occurrence, text: str) -> bool:
+        """A comment on the occurrence's board topic; False when the topic is gone."""
+        if occurrence.board_post_id is None:
+            return False
+        communication = CommunicationService(self.session, self.property_service, self.outbox)
+        try:
+            await communication.add_comment(
+                author, occurrence.board_post_id, CommentCreateRequest(body=text)
+            )
+        except DomainError as error:
+            if error.error_code == "POST_NOT_FOUND":
+                return False
+            raise
+        return True
+
+    async def _author(self, task: Task) -> CurrentUserDTO | None:
+        """Who the posts are published as: the creator while on the board, else the chairman,
+        else a board member (the first by id); None when the building has nobody."""
+        creator = await self.property_service.get_current_user(task.created_by_user_id)
+        if creator is not None and creator.building_role in BOARD_ROLES:
+            return creator
+        for role in (BuildingRole.CHAIRMAN, BuildingRole.BOARD):
+            for recipient in await self.property_service.users_with_roles(task.building_id, [role]):
+                if user := await self.property_service.get_current_user(recipient.user_id):
+                    return user
+        return None
+
+    def _task_due(
+        self, task: Task, occurrence: Occurrence, today: date, *, reminder_number: int
+    ) -> None:
+        if self.outbox is None:
+            raise RuntimeError("publishing needs an outbox")
+        self.outbox.add(
+            MaintenanceTaskDue(
+                task_id=task.id,
+                occurrence_id=occurrence.id,
+                building_id=task.building_id,
+                due_date=occurrence.due_date,
+                overdue=today > occurrence.due_date,
+                reminder_number=reminder_number,
+            )
+        )
+
+    @staticmethod
+    def _notice_apartments(task: Task) -> list[uuid.UUID] | None:
+        if task.notice_target_apartment_ids is None:
+            return None
+        return [uuid.UUID(value) for value in task.notice_target_apartment_ids]
+
     # --- Internals ------------------------------------------------------------------------------
 
     @staticmethod
@@ -412,7 +638,8 @@ class MaintenanceService:
     @staticmethod
     def _check_period(unit: PeriodUnit, count: int, lead: int) -> None:
         if problem := period_problem(unit, count, lead):
-            raise _validation_error("period_count", problem)
+            field = "lead_days" if "lead_days" in problem else "period_count"
+            raise _validation_error(field, problem)
 
     def _check_due_date(self, field: str, due: date) -> None:
         if problem := due_date_problem(due, self._today()):
@@ -428,7 +655,10 @@ class MaintenanceService:
             notice.target_entrance,
             notice.target_apartment_ids,
         ):
-            raise DomainError(status_code=422, error_code="INVALID_TARGET", message=problem)
+            message, extra = problem
+            raise DomainError(
+                status_code=422, error_code="INVALID_TARGET", message=message, extra=extra
+            )
 
     @staticmethod
     def _set_notice(task: Task, notice: NoticeDraft | None) -> None:
@@ -458,13 +688,48 @@ class MaintenanceService:
             status=OccurrenceStatus.OPEN,
         )
 
-    async def _reanchor(self, task: Task, new_due: date | None) -> None:
-        """The open occurrence becomes occurrence 0 of a new anchor (its own or a new date)."""
+    async def _reanchor(
+        self,
+        task: Task,
+        new_due: date | None,
+        *,
+        moved_by: CurrentUserDTO,
+        seen: uuid.UUID | None,
+        new_period: bool = False,
+        keep_day: bool = True,
+    ) -> None:
+        """The open occurrence becomes occurrence 0 of a new anchor (its own or a new date).
+
+        A new period between months and years keeps the rhythm's day of the month (31 stays 31
+        even from a clamped 28 February); a new date, or a switch from or to days, takes the
+        day of that date. A published occurrence keeps its posts and its board topic says
+        where the date moved; when the new date is beyond the lead time again, it is published
+        once more at its new publish date (a comment on the topic, a new notice for residents).
+        """
         occurrence = await self._open_occurrence(task.id)
         if occurrence is None:  # pragma: no cover - only archived tasks have none
             return
-        if new_due is not None:
-            occurrence.due_date = new_due
+        if seen is not None and seen != occurrence.id:
+            raise _occurrence_closed(occurrence.id)
+        moved = new_due is not None and new_due != occurrence.due_date
+        if not (moved or new_period):
+            return
+        if moved:
+            assert new_due is not None
+            occurrence.due_date, task.anchor_day = new_due, new_due.day
+            if occurrence.board_post_id is not None:
+                text = render("comment.moved", self.locale, date=local_date(new_due))
+                await self._comment(moved_by, occurrence, text)
+            if occurrence.published_at is not None:
+                today = self._today()
+                if new_due - timedelta(days=task.lead_days) > today:
+                    occurrence.published_at, occurrence.next_remind_on = None, None
+                else:
+                    occurrence.next_remind_on = max(
+                        new_due + timedelta(days=1), today + timedelta(days=1)
+                    )
+        elif keep_day is False:
+            task.anchor_day = occurrence.due_date.day
         occurrence.seq, task.anchor_date = 0, occurrence.due_date
 
     async def _task(self, user: CurrentUserDTO, task_id: uuid.UUID, *, lock: bool = False) -> Task:
@@ -532,6 +797,11 @@ class MaintenanceService:
                     due_date=occurrence.due_date,
                     publish_on=occurrence.due_date - timedelta(days=task.lead_days),
                     state=occurrence_state(occurrence.due_date, task.lead_days, today, task.status),
+                    published_at=occurrence.published_at,
+                    board_post_id=occurrence.board_post_id,
+                    notice_post_id=occurrence.notice_post_id,
+                    notice_failed=occurrence.notice_failed,
+                    reminder_count=occurrence.reminder_count,
                 )
             views.append(
                 TaskView(
@@ -616,6 +886,8 @@ def _notice_view(task: Task) -> NoticeView | None:
 
 
 def get_maintenance_service(
-    session: DbSession, property_service: PropertyService = Depends(get_property_service)
+    session: DbSession,
+    property_service: PropertyService = Depends(get_property_service),
+    outbox: EventOutbox = Depends(get_event_outbox),
 ) -> MaintenanceService:
-    return MaintenanceService(session, property_service)
+    return MaintenanceService(session, property_service, outbox)

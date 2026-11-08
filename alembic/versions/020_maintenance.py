@@ -1,6 +1,7 @@
-"""The maintenance calendar and log (epic E10, task M1).
+"""The maintenance calendar and log (epic E10, tasks M1 and M2).
 
-docs/SCHEMA.md section 11: maint_tasks, maint_occurrences and maint_log_entries.
+docs/SCHEMA.md section 11: maint_tasks, maint_occurrences and maint_log_entries, and the
+origin of the posts the calendar publishes (comm_posts.origin).
 
 Revision ID: 020
 Revises: 019
@@ -45,6 +46,9 @@ def _timestamp(name: str) -> sa.Column:
 
 
 def upgrade() -> None:
+    op.add_column("comm_posts", sa.Column("origin", sa.String(32), nullable=True))
+    op.create_check_constraint("ck_comm_posts_origin", "comm_posts", "origin IN ('MAINTENANCE')")
+
     op.create_table(
         "maint_tasks",
         sa.Column("id", UUID, primary_key=True),
@@ -55,6 +59,7 @@ def upgrade() -> None:
         sa.Column("period_count", sa.Integer(), nullable=False),
         sa.Column("lead_days", sa.Integer(), nullable=False),
         sa.Column("anchor_date", sa.Date(), nullable=False),
+        sa.Column("anchor_day", sa.Integer(), nullable=False),
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("notice_title", sa.String(255), nullable=True),
         sa.Column("notice_body", sa.Text(), nullable=True),
@@ -73,6 +78,7 @@ def upgrade() -> None:
             "period_count BETWEEN 1 AND 3650", name="ck_maint_tasks_period_count_range"
         ),
         sa.CheckConstraint("lead_days BETWEEN 0 AND 90", name="ck_maint_tasks_lead_days_range"),
+        sa.CheckConstraint("anchor_day BETWEEN 1 AND 31", name="ck_maint_tasks_anchor_day_range"),
         sa.CheckConstraint(
             "(status = 'ARCHIVED') = (archived_at IS NOT NULL)", name="ck_maint_tasks_archived"
         ),
@@ -101,6 +107,7 @@ def upgrade() -> None:
         sa.Column("notice_post_id", UUID, nullable=True),
         sa.Column("notice_failed", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("last_reminded_on", sa.Date(), nullable=True),
+        sa.Column("next_remind_on", sa.Date(), nullable=True),
         sa.Column("reminder_count", sa.Integer(), nullable=False, server_default=sa.text("0")),
         _timestamp("created_at"),
         sa.CheckConstraint("seq >= 0", name="ck_maint_occurrences_seq_positive"),
@@ -123,6 +130,12 @@ def upgrade() -> None:
         "ix_maint_occurrences_open_due",
         "maint_occurrences",
         ["due_date"],
+        postgresql_where=sa.text("status = 'OPEN'"),
+    )
+    op.create_index(
+        "ix_maint_occurrences_open_remind",
+        "maint_occurrences",
+        ["next_remind_on"],
         postgresql_where=sa.text("status = 'OPEN'"),
     )
 
@@ -155,13 +168,20 @@ def upgrade() -> None:
         "maint_log_entries",
         ["building_id", "closed_on"],
     )
+    op.create_index(
+        "ix_maint_log_entries_task_closed", "maint_log_entries", ["task_id", "closed_on"]
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_maint_log_entries_task_closed", table_name="maint_log_entries")
     op.drop_index("ix_maint_log_entries_building_closed", table_name="maint_log_entries")
     op.drop_table("maint_log_entries")
+    op.drop_index("ix_maint_occurrences_open_remind", table_name="maint_occurrences")
     op.drop_index("ix_maint_occurrences_open_due", table_name="maint_occurrences")
     op.drop_index("uq_maint_occurrences_one_open", table_name="maint_occurrences")
     op.drop_table("maint_occurrences")
     op.drop_index("ix_maint_tasks_building_status", table_name="maint_tasks")
     op.drop_table("maint_tasks")
+    op.drop_constraint("ck_comm_posts_origin", "comm_posts", type_="check")
+    op.drop_column("comm_posts", "origin")

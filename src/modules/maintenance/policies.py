@@ -37,23 +37,34 @@ def local_today(now: datetime, timezone: tzinfo) -> date:
 # --- The schedule --------------------------------------------------------------------------------
 
 
-def add_months(day: date, months: int) -> date:
-    """The same day `months` later, clamped to the last day of a shorter month."""
+def add_months(day: date, months: int, day_of_month: int | None = None) -> date:
+    """The same day (or `day_of_month`) `months` later, clamped to the last day of a shorter
+    month."""
     year, month = divmod(day.month - 1 + months, 12)
     year, month = day.year + year, month + 1
-    return date(year, month, min(day.day, monthrange(year, month)[1]))
+    wanted = day.day if day_of_month is None else day_of_month
+    return date(year, month, min(wanted, monthrange(year, month)[1]))
 
 
-def schedule_date(anchor: date, unit: PeriodUnit, count: int, k: int) -> date:
-    """Occurrence k of the schedule (k = 0 is the anchor itself)."""
+def schedule_date(
+    anchor: date, unit: PeriodUnit, count: int, k: int, day: int | None = None
+) -> date:
+    """Occurrence k of the schedule (k = 0 is the anchor itself). `day` is the rhythm's day of
+    the month, kept when the anchor itself is a clamped date (31 -> 28 February)."""
     if unit == PeriodUnit.DAY:
         return anchor + timedelta(days=k * count)
     months = k * count * (12 if unit == PeriodUnit.YEAR else 1)
-    return add_months(anchor, months)
+    return add_months(anchor, months, day)
 
 
 def next_after(
-    anchor: date, unit: PeriodUnit, count: int, seq: int, planned: date, closed_on: date
+    anchor: date,
+    unit: PeriodUnit,
+    count: int,
+    seq: int,
+    planned: date,
+    closed_on: date,
+    day: int | None = None,
 ) -> tuple[int, date]:
     """The next occurrence after one closed on `closed_on`: the first k > seq whose date is later
     than both the planned date and the closing date (a fixed rhythm, no missed dates behind).
@@ -67,11 +78,11 @@ def next_after(
         step = count * (12 if unit == PeriodUnit.YEAR else 1)
         k = ((after.year - anchor.year) * 12 + after.month - anchor.month) // step
     k = max(k, seq + 1)
-    while k > seq + 1 and schedule_date(anchor, unit, count, k - 1) > after:
+    while k > seq + 1 and schedule_date(anchor, unit, count, k - 1, day) > after:
         k -= 1
     for _ in range(4):
-        if schedule_date(anchor, unit, count, k) > after:
-            return k, schedule_date(anchor, unit, count, k)
+        if schedule_date(anchor, unit, count, k, day) > after:
+            return k, schedule_date(anchor, unit, count, k, day)
         k += 1
     raise AssertionError("the closed form is off by more than a few periods")  # pragma: no cover
 

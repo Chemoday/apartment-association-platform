@@ -24,6 +24,9 @@ from src.core.seed import (
     run_seed,
     seed_demo_data,
 )
+from src.modules.maintenance.models import Occurrence, Task
+from src.modules.maintenance.policies import schedule_date
+from src.modules.maintenance.schemas import OccurrenceStatus
 from src.modules.meters.models import MeterDevice, MeterReading, MeterReadingLog, ReadingPeriod
 from src.modules.meters.schemas import PeriodStatus
 from src.modules.property.models import Apartment, Building, User
@@ -353,7 +356,8 @@ async def test_the_board_shares_a_topic_by_name(
     board = await api_client.get(url, params=params, headers=as_demo(DemoUserKey.BOARD))
     owner = await api_client.get(url, params=params, headers=as_demo(DemoUserKey.OWNER_14))
 
-    (topic,) = board.json()
+    # The hand-written one (the maintenance calendar adds its own reminder topic, origin set).
+    (topic,) = [post for post in board.json() if post["origin"] is None]
     assert topic["comments_count"] == 1
     assert topic["author_badge"] == {"display_label": "Oleg Sidorov", "role_badge": "BOARD"}
     detail = await api_client.get(f"{url}/{topic['id']}", headers=as_demo(DemoUserKey.CHAIRMAN))
@@ -398,3 +402,46 @@ async def test_the_building_has_an_open_issue_and_a_withdrawn_one(
         True,
     )
     assert len(board) == 2 and board[0]["reporter"]["badge"]["display_label"] == "Apt. 14"
+
+
+async def test_the_building_has_a_maintenance_calendar(
+    seeded: AsyncSession, api_client: AsyncClient
+) -> None:
+    tasks = (
+        await api_client.get("/api/v1/maintenance/tasks", headers=as_demo(DemoUserKey.CHAIRMAN))
+    ).json()
+    log = (
+        await api_client.get("/api/v1/maintenance/log", headers=as_demo(DemoUserKey.ACCOUNTANT))
+    ).json()
+    topics = (
+        await api_client.get(
+            "/api/v1/communication/posts",
+            params={"post_type": "BOARD_TOPIC"},
+            headers=as_demo(DemoUserKey.BOARD),
+        )
+    ).json()
+
+    states = {task["title"]: task["current"]["state"] for task in tasks}
+    assert states["Check the heating substation"] == "OVERDUE"
+    assert states["Clean the gutters"] == "UPCOMING"
+    heating = next(t for t in tasks if t["title"] == "Check the heating substation")
+    assert heating["current"]["reminder_count"] == 1
+    assert sorted(entry["cost"] for entry in log) == ["145.00", "80.50"]
+    assert any(topic["origin"] == "MAINTENANCE" for topic in topics)
+
+
+async def test_every_seeded_occurrence_is_on_its_rhythm(seeded: AsyncSession) -> None:
+    rows = (
+        await seeded.execute(
+            select(Task, Occurrence)
+            .join(Occurrence, Occurrence.task_id == Task.id)
+            .where(Occurrence.status == OccurrenceStatus.OPEN)
+        )
+    ).all()
+
+    assert rows
+    for task, occurrence in rows:
+        expected = schedule_date(
+            task.anchor_date, task.period_unit, task.period_count, occurrence.seq, task.anchor_day
+        )
+        assert occurrence.due_date == expected, task.title

@@ -1,7 +1,7 @@
 """The maintenance calendar through the API (epic E10, task M1; fixture: conftest.py)."""
 
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -496,3 +496,176 @@ async def test_a_skipped_entry_keeps_a_note_and_never_gets_a_cost(
     empty = await api_client.patch(url, json={"note": ""}, headers=as_user(world.chairman))
 
     assert cost.status_code == 422 and empty.status_code == 422
+
+
+# --- Review findings (E10/M1) --------------------------------------------------------------------
+
+
+async def test_a_form_that_sends_every_field_keeps_the_month_end_rhythm(
+    api_client: AsyncClient, world: MaintWorld
+) -> None:
+    today = local_today()
+    first = date(today.year + 1, 1, 31)
+    task = await created(
+        api_client, world.chairman, first_due_date=first.isoformat(), period_count=1, lead_days=0
+    )
+    feb = (await done(api_client, world.chairman, task, done_on=today.isoformat()))["task"]
+    assert feb["current"]["due_date"] == add_months(first, 1).isoformat()  # 28 or 29 February
+
+    same = await api_client.patch(
+        f"{API}/tasks/{task['id']}",
+        json={"title": "Same", "period_unit": "MONTH", "period_count": 1},
+        headers=as_user(world.chairman),
+    )
+    longer = await api_client.patch(
+        f"{API}/tasks/{task['id']}",
+        json={"period_unit": "MONTH", "period_count": 2},
+        headers=as_user(world.chairman),
+    )
+    after = (await done(api_client, world.chairman, longer.json(), done_on=today.isoformat()))[
+        "task"
+    ]
+
+    assert same.json()["anchor_date"] == first.isoformat(), "nothing changed, no re-anchor"
+    assert after["current"]["due_date"] == date(first.year, 4, 30).isoformat(), "the 31st kept"
+
+
+async def test_moving_the_date_of_an_occurrence_someone_closed_is_refused(
+    api_client: AsyncClient, world: MaintWorld
+) -> None:
+    task = await created(api_client, world.chairman)
+    seen = task["current"]["occurrence_id"]
+    after = (await done(api_client, world.board_15, task))["task"]
+
+    moved = await api_client.patch(
+        f"{API}/tasks/{task['id']}",
+        json={
+            "next_due_date": (local_today() + timedelta(days=200)).isoformat(),
+            "occurrence_id": seen,
+        },
+        headers=as_user(world.chairman),
+    )
+
+    assert (moved.status_code, moved.json()["error_code"]) == (409, "OCCURRENCE_CLOSED")
+    assert moved.json()["current_occurrence_id"] == after["current"]["occurrence_id"]
+
+
+async def test_a_lead_time_too_long_is_reported_on_lead_days(
+    api_client: AsyncClient, world: MaintWorld
+) -> None:
+    task = await created(
+        api_client, world.chairman, period_unit="MONTH", period_count=1, lead_days=0
+    )
+
+    response = await api_client.patch(
+        f"{API}/tasks/{task['id']}", json={"lead_days": 30}, headers=as_user(world.chairman)
+    )
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["loc"] == ["body", "lead_days"]
+
+
+async def test_done_cannot_be_before_the_last_closed_occurrence(
+    api_client: AsyncClient, world: MaintWorld
+) -> None:
+    today = local_today()
+    task = await created(
+        api_client,
+        world.chairman,
+        period_unit="DAY",
+        period_count=7,
+        lead_days=0,
+        first_due_date=(today - timedelta(days=30)).isoformat(),
+    )
+    after = (await done(api_client, world.chairman, task, done_on=today.isoformat()))["task"]
+
+    earlier = await act(
+        api_client,
+        world.chairman,
+        after,
+        "done",
+        occurrence_id=after["current"]["occurrence_id"],
+        done_on=(today - timedelta(days=1)).isoformat(),
+    )
+
+    assert earlier.status_code == 422
+
+
+async def test_another_building_and_the_accountant_cannot_write(
+    api_client: AsyncClient, world: MaintWorld
+) -> None:
+    task = await created(api_client, world.chairman)
+    closed = await done(api_client, world.chairman, task)
+    entry_id = closed["entry"]["id"]
+    occurrence = closed["task"]["current"]["occurrence_id"]
+
+    for user, status in ((world.other_chairman, 404), (world.accountant, 403)):
+        for response in (
+            await act(api_client, user, task, "pause"),
+            await act(api_client, user, task, "skip", occurrence_id=occurrence, note="x"),
+            await api_client.patch(
+                f"{API}/tasks/{task['id']}", json={"title": "x"}, headers=as_user(user)
+            ),
+        ):
+            assert response.status_code == status, (user.full_name, response.text)
+    foreign_log = await api_client.patch(
+        f"{API}/log/{entry_id}", json={"note": "x"}, headers=as_user(world.other_chairman)
+    )
+    foreign_list = await api_client.get(f"{API}/log", headers=as_user(world.other_chairman))
+    assert foreign_log.status_code == 404 and foreign_list.json() == []
+
+
+async def test_cost_bounds_and_a_stale_skip(api_client: AsyncClient, world: MaintWorld) -> None:
+    task = await created(api_client, world.chairman, period_count=1, lead_days=0)
+    stale = task["current"]["occurrence_id"]
+
+    zero = await done(api_client, world.chairman, task, cost="0")
+    biggest = await done(api_client, world.chairman, zero["task"], cost="9999999999.99")
+    skip = await act(api_client, world.chairman, task, "skip", occurrence_id=stale, note="x")
+
+    assert (zero["entry"]["cost"], biggest["entry"]["cost"]) == ("0.00", "9999999999.99")
+    assert (skip.status_code, skip.json()["error_code"]) == (409, "OCCURRENCE_CLOSED")
+
+
+async def test_an_unknown_notice_apartment_is_named(
+    api_client: AsyncClient, world: MaintWorld
+) -> None:
+    response = await create(
+        api_client,
+        world.chairman,
+        notice={
+            "title": "Works",
+            "body": "Stairs.",
+            "target_scope": "APARTMENT_LIST",
+            "target_apartment_ids": [str(world.other_apartment.id)],
+        },
+    )
+
+    assert (response.status_code, response.json()["error_code"]) == (422, "INVALID_TARGET")
+    assert response.json()["unknown_apartment_ids"] == [str(world.other_apartment.id)]
+
+
+async def test_a_switch_between_days_and_months_takes_the_day_of_the_date(
+    api_client: AsyncClient, world: MaintWorld
+) -> None:
+    today = local_today()
+    first = date(today.year + 1, 1, 31)
+    task = await created(
+        api_client, world.chairman, first_due_date=first.isoformat(), period_count=1, lead_days=0
+    )
+    url = f"{API}/tasks/{task['id']}"
+    feb = (await done(api_client, world.chairman, task, done_on=today.isoformat()))["task"]
+    await api_client.patch(
+        url, json={"period_unit": "DAY", "period_count": 10}, headers=as_user(world.chairman)
+    )
+    after_days = (await done(api_client, world.chairman, feb, done_on=today.isoformat()))["task"]
+    back = await api_client.patch(
+        url, json={"period_unit": "MONTH", "period_count": 1}, headers=as_user(world.chairman)
+    )
+    after_months = (await done(api_client, world.chairman, back.json(), done_on=today.isoformat()))[
+        "task"
+    ]
+
+    in_days = date.fromisoformat(after_days["current"]["due_date"])
+    assert in_days == date.fromisoformat(feb["current"]["due_date"]) + timedelta(days=10)
+    assert after_months["current"]["due_date"] == add_months(in_days, 1).isoformat()

@@ -1894,7 +1894,8 @@ time zone (`INSTANCE_TIMEZONE`).
   365 x the count). Reminders and the notice go out `lead_days` before the due date (task M2).
 - `instructions`: the board's internal notes (0..4000 characters); never shown to residents.
 - `notice`: an official notice for residents published with each occurrence (task M2), or
-  `null`. `title` 1..255, `body` 1..10000, `category` a post category (default `MAINTENANCE`),
+  `null`. `title` 1..255, `body` 1..9500 (the calendar adds the planned date), `category` a post
+  category (default `MAINTENANCE`),
   the target fields as for posts (section 4), `comments_enabled` (default `false`).
 - `status`: `ACTIVE`, `PAUSED` or `ARCHIVED`.
 - `current`: the open occurrence (`null` once archived). `publish_on` is `due_date - lead_days`.

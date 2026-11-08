@@ -124,3 +124,15 @@ def test_due_and_done_date_bounds() -> None:
     assert done_on_problem(today, date(2027, 7, 1), today) is None
     assert done_on_problem(date(2027, 6, 2), date(2027, 6, 1), today) is not None
     assert done_on_problem(date(2026, 1, 1), date(2027, 6, 1), today) is not None
+
+
+def test_a_reanchored_rhythm_keeps_its_day_of_the_month() -> None:
+    # The anchor moved to a clamped 28 February; the rhythm's day stays the 31st.
+    anchor = date(2027, 2, 28)
+
+    assert [schedule_date(anchor, M, 1, k, day=31) for k in range(3)] == [
+        date(2027, 2, 28),
+        date(2027, 3, 31),
+        date(2027, 4, 30),
+    ]
+    assert next_after(anchor, M, 2, 0, anchor, anchor, day=31) == (1, date(2027, 4, 30))

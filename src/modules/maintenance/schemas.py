@@ -18,11 +18,7 @@ from pydantic import (
 )
 
 from src.core.validation import optional_safe_text, safe_text
-from src.modules.communication.schemas import (
-    PostBodyText,
-    PostCategory,
-    TargetApartmentIds,
-)
+from src.modules.communication.schemas import PostCategory, TargetApartmentIds
 from src.modules.communication.schemas import TitleText as NoticeTitleText
 from src.modules.property.schemas import AuthorBadgeDTO, TargetScope
 
@@ -34,6 +30,9 @@ TASKS_PAGE_MAX = 100
 TitleText = safe_text(TITLE_MAX_LENGTH)
 InstructionsText = optional_safe_text(INSTRUCTIONS_MAX_LENGTH)
 NoteText = optional_safe_text(NOTE_MAX_LENGTH)
+# Shorter than a post body (10000): the calendar appends the planned date to the notice.
+NOTICE_BODY_MAX_LENGTH = 9500
+NoticeBodyText = safe_text(NOTICE_BODY_MAX_LENGTH)
 RequiredNoteText = safe_text(NOTE_MAX_LENGTH)
 
 _COST = re.compile(r"[0-9]{1,10}(\.[0-9]{1,2})?")
@@ -93,7 +92,7 @@ class NoticeDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: NoticeTitleText
-    body: PostBodyText
+    body: NoticeBodyText
     category: PostCategory = PostCategory.MAINTENANCE
     target_scope: TargetScope = TargetScope.ALL_BUILDING
     target_entrance: StrictInt | None = Field(default=None, ge=1, le=1000)
@@ -125,12 +124,15 @@ class TaskEdit(BaseModel):
     lead_days: StrictInt | None = Field(default=None, ge=0, le=90)
     notice: NoticeDraft | None = None
     next_due_date: date | None = None
+    # The open occurrence the caller saw: moving the date of another one is refused (409).
+    occurrence_id: uuid.UUID | None = None
 
 
 class TaskResume(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     next_due_date: date | None = None
+    occurrence_id: uuid.UUID | None = None
 
 
 class DoneRequest(BaseModel):
@@ -174,6 +176,12 @@ class CurrentOccurrence(BaseModel):
     due_date: date
     publish_on: date
     state: OccurrenceState
+    # Publishing (task M2).
+    published_at: datetime | None
+    board_post_id: uuid.UUID | None
+    notice_post_id: uuid.UUID | None
+    notice_failed: bool
+    reminder_count: int
 
 
 class TaskView(BaseModel):
