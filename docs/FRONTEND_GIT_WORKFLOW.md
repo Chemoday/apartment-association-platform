@@ -109,7 +109,10 @@ frontend has a version that `main` does not:
    and then the deploy of that pull request to dev.
 
 So a version is on dev about 5 minutes after the run, before anyone merges. Running the workflow
-again with the same frontend version changes nothing.
+again with the same frontend version changes nothing while its pull request is open and is one
+commit on top of the current `main`. Otherwise the run rebuilds `frontend/sync` on the current
+`main`: so after a fix lands on `main` (for example one that a failed CI of the sync pull request
+needed), or after the pull request was closed, running the workflow again is enough.
 
 Configuration (once): repository variable `FRONTEND_REPOSITORY` (`owner/name`) and secret
 `FRONTEND_SYNC_TOKEN`, a token that reads the frontend repository and writes this one. A personal
