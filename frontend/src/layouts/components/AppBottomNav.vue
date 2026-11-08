@@ -3,17 +3,20 @@ import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
-import { useTranslations } from '@/locales/index.js'
 import { APP_ROUTES } from '@/router/routes.js'
 
 const route = useRoute()
 const session = useSessionStore()
 const { buildingRole } = useRole()
-const t = computed(() => useTranslations(session.lang))
 
 const visibleNavRoutes = computed(() =>
   APP_ROUTES.filter((r) => {
     if (!r.meta?.navKey) return false
+    if (r.meta?.requiresApartmentOrBoard) {
+      const isBoardOrChairman = ['CHAIRMAN', 'BOARD'].includes(buildingRole.value)
+      const hasApartments = (session.memberships?.length || 0) > 0
+      if (!isBoardOrChairman && !hasApartments) return false
+    }
     const allowed = r.meta?.roles
     if (!allowed || allowed.length === 0) return true
     return allowed.includes(buildingRole.value)
@@ -43,7 +46,7 @@ function isRouteActive(item) {
       "
     >
       <span class="material-symbols-outlined text-[20px]">{{ item.meta.icon }}</span>
-      <span class="truncate max-w-[68px]">{{ t.nav[item.meta.navKey] }}</span>
+      <span class="truncate max-w-[68px]">{{ session.t(`nav.${item.meta.navKey}`) }}</span>
     </RouterLink>
   </nav>
 </template>

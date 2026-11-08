@@ -29,3 +29,33 @@ export function updatePrivacy(membershipId, privacyDisplayMode) {
     body: { privacy_display_mode: privacyDisplayMode },
   })
 }
+
+/**
+ * Update language of the caller's external notifications (e-mail, Telegram, WebPush); null = building default.
+ * @param {import('../schema').Locale | null} locale
+ * @returns {Promise<import('../schema').LocaleUpdate>}
+ */
+export function updateLocale(locale) {
+  return apiRequest('/property/me/locale', {
+    method: 'PATCH',
+    body: { locale },
+  })
+}
+
+/**
+ * List all apartments of the caller's building (requires CHAIRMAN or BOARD).
+ * @returns {Promise<import('../schema').ApartmentListResponse>}
+ */
+export function listApartments() {
+  return apiRequest('/property/apartments')
+}
+
+/**
+ * Get a single apartment card with resident relations and start dates (requires CHAIRMAN or BOARD).
+ * @param {string} apartmentId
+ * @returns {Promise<import('../schema').ApartmentCard>}
+ */
+export function getApartmentCard(apartmentId) {
+  return apiRequest(`/property/apartments/${encodeURIComponent(apartmentId)}`)
+}
+

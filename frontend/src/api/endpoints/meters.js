@@ -5,8 +5,11 @@ import { apiRequest } from '../client.js'
  * Added in PR #31 (GET /api/v1/meters/periods).
  * @returns {Promise<import('../schema').PeriodDTO[]>}
  */
-export function listPeriods() {
-  return apiRequest('/meters/periods')
+export async function listPeriods() {
+  const res = await apiRequest('/meters/periods')
+  if (Array.isArray(res)) return res
+  if (res && Array.isArray(res.periods)) return res.periods
+  return []
 }
 
 /**
@@ -83,3 +86,13 @@ export function exportPeriodCsv(periodCode) {
     raw: true,
   })
 }
+
+/**
+ * Get the reading history of one apartment across the latest 24 periods.
+ * @param {string} apartmentId
+ * @returns {Promise<import('../schema').ApartmentReadingsResponse>}
+ */
+export function getApartmentReadings(apartmentId) {
+  return apiRequest(`/meters/apartments/${encodeURIComponent(apartmentId)}/readings`)
+}
+

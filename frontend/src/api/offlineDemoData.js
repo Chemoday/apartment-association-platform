@@ -1,0 +1,3184 @@
+import { ref } from 'vue'
+import {
+  compareCanonicalNumbers,
+  computeNumberStats,
+  isValidCanonicalDate,
+  isValidCanonicalNumber,
+  normalizeCanonicalNumber,
+} from '../utils/pollValidation.js'
+
+export const isOfflineDemoMode = ref(false)
+
+let offlineNotificationsByUser = {}
+let offlinePreferencesByUser = {}
+
+export function enableOfflineDemo() {
+  isOfflineDemoMode.value = true
+  offlineNotificationsByUser = {}
+  offlinePreferencesByUser = {}
+}
+
+export function disableOfflineDemo() {
+  isOfflineDemoMode.value = false
+}
+
+const BUILDING_ID = '018f0000-0000-7000-8000-000000000001'
+
+let offlineMagicLinkUsed = false
+let offlineSessions = []
+let offlineSignedInUserId = ''
+let offlineHasPassword = true
+
+const OFFLINE_DEMO_USERS = [
+  {
+    user_id: '018f0000-0000-7000-8000-000000000102',
+    label: 'Owner Apt 14 (Kati Kask)',
+    full_name: 'Kati Kask',
+    initials: 'K. K.',
+    building_role: 'USER',
+    apartment_number: '14',
+    relation_type: 'OWNER',
+  },
+  {
+    user_id: '018f0000-0000-7000-8000-000000000104',
+    label: 'Tenant Apt 02 (Martin Saar)',
+    full_name: 'Martin Saar',
+    initials: 'M. S.',
+    building_role: 'USER',
+    apartment_number: '02',
+    relation_type: 'TENANT',
+  },
+  {
+    user_id: '018f0000-0000-7000-8000-000000000105',
+    label: 'Board Member Apt 09 (Liina Vaher)',
+    full_name: 'Liina Vaher',
+    initials: 'L. V.',
+    building_role: 'BOARD',
+    apartment_number: '09',
+    relation_type: 'OWNER',
+  },
+  {
+    user_id: '018f0000-0000-7000-8000-000000000101',
+    label: 'Board Chairman (Peeter Tamm)',
+    full_name: 'Peeter Tamm',
+    initials: 'P. T.',
+    building_role: 'CHAIRMAN',
+    apartment_number: '01',
+    relation_type: 'OWNER',
+  },
+  {
+    user_id: '018f0000-0000-7000-8000-000000000103',
+    label: 'Accountant (Marika Rebane)',
+    full_name: 'Marika Rebane',
+    initials: 'M. R.',
+    building_role: 'ACCOUNTANT',
+    apartment_number: null,
+    relation_type: null,
+  },
+]
+
+const OFFLINE_MEMBERSHIPS_BY_USER = {
+  '018f0000-0000-7000-8000-000000000102': [
+    {
+      membership_id: '018f0000-0000-7000-8000-000000000214',
+      apartment_id: '018f0000-0000-7000-8000-000000000314',
+      apartment_number: '14',
+      entrance: 2,
+      floor: 4,
+      relation_type: 'OWNER',
+      can_submit_readings: true,
+      can_view_bills: true,
+      can_vote: true,
+      privacy_display_mode: 'FULL_NAME',
+      preview_badge: {
+        display_label: 'Kati Kask (Apt 14)',
+        role_badge: 'OWNER',
+      },
+    },
+  ],
+  '018f0000-0000-7000-8000-000000000104': [
+    {
+      membership_id: '018f0000-0000-7000-8000-000000000202',
+      apartment_id: '018f0000-0000-7000-8000-000000000302',
+      apartment_number: '02',
+      entrance: 1,
+      floor: 1,
+      relation_type: 'TENANT',
+      can_submit_readings: true,
+      can_view_bills: true,
+      can_vote: false,
+      privacy_display_mode: 'INITIALS',
+      preview_badge: {
+        display_label: 'M. S. (Apt 02)',
+        role_badge: 'RESIDENT',
+      },
+    },
+  ],
+  '018f0000-0000-7000-8000-000000000105': [
+    {
+      membership_id: '018f0000-0000-7000-8000-000000000209',
+      apartment_id: '018f0000-0000-7000-8000-000000000309',
+      apartment_number: '09',
+      entrance: 2,
+      floor: 3,
+      relation_type: 'OWNER',
+      can_submit_readings: true,
+      can_view_bills: true,
+      can_vote: true,
+      privacy_display_mode: 'FULL_NAME',
+      preview_badge: {
+        display_label: 'Liina Vaher (Apt 09)',
+        role_badge: 'BOARD',
+      },
+    },
+  ],
+  '018f0000-0000-7000-8000-000000000101': [
+    {
+      membership_id: '018f0000-0000-7000-8000-000000000201',
+      apartment_id: '018f0000-0000-7000-8000-000000000301',
+      apartment_number: '01',
+      entrance: 1,
+      floor: 1,
+      relation_type: 'OWNER',
+      can_submit_readings: true,
+      can_view_bills: true,
+      can_vote: true,
+      privacy_display_mode: 'FULL_NAME',
+      preview_badge: {
+        display_label: 'Peeter Tamm (Apt 01)',
+        role_badge: 'BOARD',
+      },
+    },
+  ],
+  '018f0000-0000-7000-8000-000000000103': [],
+}
+
+const OFFLINE_BUILDING = {
+  building_id: BUILDING_ID,
+  name: 'KÜ Sõpruse 12',
+  registry_code: '80123456',
+  address: 'Sõpruse pst 12, Kristiine, Tallinn',
+  district: 'Kristiine',
+  apartments_count: 5,
+  total_apartments: 5,
+  entrances_count: 2,
+  total_entrances: 2,
+  heated_area_m2: '329.20',
+}
+
+const OFFLINE_PERIODS = [
+  {
+    period_code: '2026-10',
+    status: 'OPEN_FOR_RESIDENTS',
+    due_date: '2026-11-04',
+  },
+  {
+    period_code: '2026-09',
+    status: 'LOCKED',
+    due_date: '2026-10-04',
+  },
+  {
+    period_code: '2026-08',
+    status: 'LOCKED',
+    due_date: '2026-09-04',
+  },
+  {
+    period_code: '2026-07',
+    status: 'LOCKED',
+    due_date: '2026-08-04',
+  },
+]
+
+function toBigInt3(val) {
+  const [intPart, fracPart = ''] = String(val || '0').split('.')
+  const padded = (fracPart + '000').slice(0, 3)
+  return BigInt(intPart) * 1000n + BigInt(padded)
+}
+
+function fromBigInt3(scaled) {
+  const negative = scaled < 0n
+  const abs = negative ? -scaled : scaled
+  const intPart = abs / 1000n
+  const fracPart = (abs % 1000n).toString().padStart(3, '0')
+  return `${negative ? '-' : ''}${intPart.toString()}.${fracPart}`
+}
+
+function subDecimal(a, b) {
+  return fromBigInt3(toBigInt3(a) - toBigInt3(b))
+}
+
+const BASE_APARTMENTS_2026_10 = [
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000301',
+    apartment_number: '01',
+    entrance: 1,
+    floor: 1,
+    can_submit_readings: true,
+    meters: [
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000501',
+        resource_type: 'COLD_WATER',
+        serial_number: 'CW-0101-K',
+        location_label: 'Kitchen Cold Water',
+        unit: 'm3',
+        previous_value: '110.200',
+        historical_avg: '2.100',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000801',
+          value: '112.400',
+          consumption_delta: '2.200',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000502',
+        resource_type: 'HOT_WATER',
+        serial_number: 'HW-0101-B',
+        location_label: 'Bathroom Hot Water',
+        unit: 'm3',
+        previous_value: '78.400',
+        historical_avg: '1.800',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000802',
+          value: '80.250',
+          consumption_delta: '1.850',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+    ],
+  },
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000302',
+    apartment_number: '02',
+    entrance: 1,
+    floor: 1,
+    can_submit_readings: true,
+    meters: [
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000503',
+        resource_type: 'COLD_WATER',
+        serial_number: 'CW-0201-B',
+        location_label: 'Bathroom Cold Water',
+        unit: 'm3',
+        previous_value: '184.000',
+        historical_avg: '3.900',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000803',
+          value: '187.850',
+          consumption_delta: '3.850',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000504',
+        resource_type: 'HOT_WATER',
+        serial_number: 'HW-0201-B',
+        location_label: 'Bathroom Hot Water',
+        unit: 'm3',
+        previous_value: '95.500',
+        historical_avg: '2.400',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000804',
+          value: '97.950',
+          consumption_delta: '2.450',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+    ],
+  },
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000305',
+    apartment_number: '05',
+    entrance: 1,
+    floor: 2,
+    can_submit_readings: true,
+    meters: [
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000505',
+        resource_type: 'COLD_WATER',
+        serial_number: 'CW-0501-B',
+        location_label: 'Bathroom Cold Water',
+        unit: 'm3',
+        previous_value: '302.150',
+        historical_avg: '4.500',
+        reading: null,
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000506',
+        resource_type: 'HOT_WATER',
+        serial_number: 'HW-0501-B',
+        location_label: 'Bathroom Hot Water',
+        unit: 'm3',
+        previous_value: '140.200',
+        historical_avg: '3.100',
+        reading: null,
+      },
+    ],
+  },
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000309',
+    apartment_number: '09',
+    entrance: 2,
+    floor: 3,
+    can_submit_readings: true,
+    meters: [
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000509',
+        resource_type: 'COLD_WATER',
+        serial_number: 'CW-0901-B',
+        location_label: 'Bathroom Cold Water',
+        unit: 'm3',
+        previous_value: '165.000',
+        historical_avg: '3.600',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000809',
+          value: '179.400',
+          consumption_delta: '14.400',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: true,
+        },
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000510',
+        resource_type: 'HOT_WATER',
+        serial_number: 'HW-0901-B',
+        location_label: 'Bathroom Hot Water',
+        unit: 'm3',
+        previous_value: '88.300',
+        historical_avg: '2.200',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000810',
+          value: '90.500',
+          consumption_delta: '2.200',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+    ],
+  },
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000314',
+    apartment_number: '14',
+    entrance: 2,
+    floor: 4,
+    can_submit_readings: true,
+    meters: [
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000514',
+        resource_type: 'COLD_WATER',
+        serial_number: 'CW-1429-K',
+        location_label: 'Kitchen Cold Water',
+        unit: 'm3',
+        previous_value: '84.100',
+        historical_avg: '2.100',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000901',
+          value: '86.200',
+          consumption_delta: '2.100',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000515',
+        resource_type: 'HOT_WATER',
+        serial_number: 'HW-1429-K',
+        location_label: 'Kitchen Hot Water',
+        unit: 'm3',
+        previous_value: '52.400',
+        historical_avg: '1.300',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000902',
+          value: '53.750',
+          consumption_delta: '1.350',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000516',
+        resource_type: 'COLD_WATER',
+        serial_number: 'CW-1429-B',
+        location_label: 'Bathroom Cold Water',
+        unit: 'm3',
+        previous_value: '142.350',
+        historical_avg: '3.200',
+        reading: null,
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000517',
+        resource_type: 'HOT_WATER',
+        serial_number: 'HW-1429-B',
+        location_label: 'Bathroom Hot Water',
+        unit: 'm3',
+        previous_value: '88.120',
+        historical_avg: '2.100',
+        reading: null,
+      },
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000518',
+        resource_type: 'ELECTRICITY',
+        serial_number: 'EL-1429-EV',
+        location_label: 'Basement Storage & EV Charger',
+        unit: 'kWh',
+        previous_value: '1240.000',
+        historical_avg: '65.000',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000905',
+          value: '1304.500',
+          consumption_delta: '64.500',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      },
+    ],
+  },
+]
+
+const MASTER_METERS_2026_10 = [
+  {
+    meter_id: '018f0000-0000-7000-8000-000000000991',
+    resource_type: 'COLD_WATER',
+    location_label: 'Basement Main Cold Water Inlet',
+    unit: 'm3',
+    previous_value: '4120.000',
+    status: 'SUBMITTED',
+    reading: {
+      reading_id: '018f0000-0000-7000-8000-000000000981',
+      value: '4148.500',
+      consumption_delta: '28.500',
+      source: 'ADMIN_OVERRIDE',
+      is_anomaly_confirmed: false,
+    },
+  },
+  {
+    meter_id: '018f0000-0000-7000-8000-000000000992',
+    resource_type: 'HOT_WATER',
+    location_label: 'Basement Heat Exchanger Hot Water',
+    unit: 'm3',
+    previous_value: '2050.000',
+    status: 'SUBMITTED',
+    reading: {
+      reading_id: '018f0000-0000-7000-8000-000000000982',
+      value: '2065.400',
+      consumption_delta: '15.400',
+      source: 'ADMIN_OVERRIDE',
+      is_anomaly_confirmed: false,
+    },
+  },
+]
+
+function getPeriodApartments(periodCode) {
+  if (!periodCode || periodCode === '2026-10') {
+    return BASE_APARTMENTS_2026_10
+  }
+  return BASE_APARTMENTS_2026_10.map((apt) => ({
+    ...apt,
+    can_submit_readings: false,
+    meters: apt.meters.map((m) => ({
+      ...m,
+      previous_value: subDecimal(m.previous_value, m.historical_avg),
+      reading: {
+        reading_id: `${m.meter_id}-${periodCode}`,
+        value: m.previous_value,
+        consumption_delta: m.historical_avg,
+        source: 'RESIDENT',
+        is_anomaly_confirmed: false,
+      },
+    })),
+  }))
+}
+
+const OFFLINE_POSTS = [
+  {
+    id: '018f0000-0000-7000-8000-000000000701',
+    post_type: 'EMERGENCY',
+    category: 'WATER_SHUTOFF',
+    title: 'Basement Heating Valve Pressure Drop (Stairwell B)',
+    body: 'Pressure sensor in Stairwell B heat exchanger dropped from 2.4 bar to 1.6 bar. Technician is on site inspecting the expansion vessel.',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_badge: {
+      display_label: 'Peeter Tamm (Apt 01)',
+      role_badge: 'BOARD',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-25T08:15:00Z',
+    acknowledged_at: null,
+    comments: [],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000601',
+    post_type: 'OFFICIAL_NOTICE',
+    category: 'GENERAL',
+    title: 'October 2026 Utility Meter Submission & Courtyard Maintenance',
+    body: 'Dear residents of Sõpruse pst 12,\n\nPlease submit all October 2026 cold and hot water readings by November 4 at 23:59. Unsubmitted meters will be automatically estimated from your 3-month rolling average.\n\nAdditionally, autumn courtyard leaf clearing and underground garage drain flushing will take place on Saturday, November 7 from 09:00 to 14:00.',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_badge: {
+      display_label: 'Peeter Tamm (Apt 01)',
+      role_badge: 'BOARD',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-23T11:00:00Z',
+    comments: [
+      {
+        id: '018f0000-0000-7000-8000-000000000651',
+        post_id: '018f0000-0000-7000-8000-000000000601',
+        body: 'Thank you Peeter! Should cars be moved out of the courtyard parking spots before 08:45 on Saturday?',
+        author_user_id: '018f0000-0000-7000-8000-000000000102',
+        author_badge: {
+          display_label: 'Kati Kask (Apt 14)',
+          role_badge: 'OWNER',
+        },
+        created_at: '2026-10-23T13:20:00Z',
+      },
+      {
+        id: '018f0000-0000-7000-8000-000000000652',
+        post_id: '018f0000-0000-7000-8000-000000000601',
+        body: 'Yes, please clear the courtyard bays by 08:45 so the maintenance vehicle can access all corners.',
+        author_user_id: '018f0000-0000-7000-8000-000000000101',
+        author_badge: {
+          display_label: 'Peeter Tamm (Apt 01)',
+          role_badge: 'BOARD',
+        },
+        created_at: '2026-10-23T14:05:00Z',
+      },
+    ],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000602',
+    post_type: 'FORUM_TOPIC',
+    category: 'MAINTENANCE',
+    title: 'Bicycle Storage Rack Expansion in Ground Floor Room #2',
+    body: 'Several families on the 3rd and 4th floors proposed installing vertical wall-mounted bike hooks in the secondary storage room. Total quote for 12 heavy-duty hooks is 480 EUR from the maintenance fund.',
+    author_user_id: '018f0000-0000-7000-8000-000000000102',
+    author_badge: {
+      display_label: 'Kati Kask (Apt 14)',
+      role_badge: 'OWNER',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-20T17:30:00Z',
+    comments: [
+      {
+        id: '018f0000-0000-7000-8000-000000000653',
+        post_id: '018f0000-0000-7000-8000-000000000602',
+        body: 'We have sufficient allocation in the Q4 minor improvements budget line to cover 480 EUR without affecting the reserve fund.',
+        author_user_id: '018f0000-0000-7000-8000-000000000103',
+        author_badge: {
+          display_label: 'Marika Rebane',
+          role_badge: 'ACCOUNTANT',
+        },
+        created_at: '2026-10-21T09:15:00Z',
+      },
+    ],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000603',
+    post_type: 'OFFICIAL_NOTICE',
+    category: 'MAINTENANCE',
+    title: 'District Heating Substation Winter Calibration Completed',
+    body: 'Utilitas Tallinn completed the scheduled diagnostic check of our primary heating substation. Efficiency is within 99.1% of nominal specification and night-time setback curve has been calibrated.',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_badge: {
+      display_label: 'Peeter Tamm (Apt 01)',
+      role_badge: 'BOARD',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-15T10:00:00Z',
+    comments: [],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000751',
+    post_type: 'APARTMENT_THREAD',
+    category: 'MAINTENANCE',
+    title: 'Access to the cold water meter in apartment 14',
+    body: 'Hello! Could we arrange a 10-minute inspection of the bathroom cold water meter seal this Thursday between 17:00 and 19:00?',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_badge: {
+      display_label: 'Chairman',
+      role_badge: 'BOARD',
+    },
+    target_scope: 'APARTMENT_LIST',
+    target_entrance: null,
+    target_apartment_ids: ['018f0000-0000-7000-8000-000000000314'],
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-24T10:15:00Z',
+    comments: [
+      {
+        id: '018f0000-0000-7000-8000-000000000752',
+        post_id: '018f0000-0000-7000-8000-000000000751',
+        body: 'Thursday at 18:00 works well for us. See you then!',
+        author_user_id: '018f0000-0000-7000-8000-000000000102',
+        author_badge: {
+          display_label: 'Kati Kask (Apt 14)',
+          role_badge: 'OWNER',
+        },
+        created_at: '2026-10-24T12:40:00Z',
+      },
+    ],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000761',
+    post_type: 'BOARD_TOPIC',
+    category: 'GENERAL',
+    title: 'Where the keys to the basement and the roof are',
+    body: 'The spare set of keys to the basement technical room, district heating node, and roof hatch is stored in the locked fire-rated cabinet in Entrance 1 utility room. The combination was shared at the October board meeting.',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_badge: {
+      display_label: 'Oleg Sidorov',
+      role_badge: 'BOARD',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-25T11:30:00Z',
+    comments: [
+      {
+        id: '018f0000-0000-7000-8000-000000000762',
+        post_id: '018f0000-0000-7000-8000-000000000761',
+        body: 'Confirmed — I also labelled the roof hatch key and the main water shut-off valve key on the yellow tag.',
+        author_user_id: '018f0000-0000-7000-8000-000000000105',
+        author_badge: {
+          display_label: 'Peeter Saar',
+          role_badge: 'BOARD',
+        },
+        created_at: '2026-10-25T14:20:00Z',
+      },
+    ],
+  },
+]
+
+function getActingUser(actingUserId) {
+  const effectiveId = actingUserId || offlineSignedInUserId
+  return (
+    OFFLINE_DEMO_USERS.find((u) => u.user_id === effectiveId) || OFFLINE_DEMO_USERS[0]
+  )
+}
+
+function makeOfflineError(status, errorCode, message, extra = {}) {
+  const err = new Error(message)
+  err.status = status
+  err.errorCode = errorCode
+  err.payload = { error_code: errorCode, message, ...extra }
+  return err
+}
+
+/**
+ * Resolves API requests locally from seeded read-only demo fixtures when offlineDemoMode is enabled.
+ * @param {string} path
+ * @param {{ method?: string, body?: any, raw?: boolean, actingUserId?: string }} [options]
+ */
+export async function resolveOfflineDemoRequest(
+  path,
+  { method = 'GET', body = null, raw = false, actingUserId = '' } = {},
+) {
+  const urlObj = new URL(path, 'http://localhost')
+  const pathname = urlObj.pathname
+  const user = getActingUser(actingUserId)
+
+  // 1. GET /demo/users
+  if (pathname === '/demo/users' && method === 'GET') {
+    return OFFLINE_DEMO_USERS.map((u) => ({
+      user_id: u.user_id,
+      label: u.label,
+      building_role: u.building_role,
+      apartment_number: u.apartment_number,
+      relation_type: u.relation_type,
+    }))
+  }
+
+  // 2. GET /property/me
+  if (pathname === '/property/me' && method === 'GET') {
+    const memberships = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    return {
+      user_id: user.user_id,
+      building_id: BUILDING_ID,
+      building_role: user.building_role,
+      privacy_display_mode: memberships[0]?.privacy_display_mode || 'FULL_NAME',
+      locale: user.locale ?? null,
+      memberships: JSON.parse(JSON.stringify(memberships)),
+    }
+  }
+
+  // 2a. PATCH /property/me/locale
+  if (pathname === '/property/me/locale' && method === 'PATCH') {
+    const nextLocale =
+      body && typeof body.locale === 'string' && ['en', 'et', 'ru'].includes(body.locale)
+        ? body.locale
+        : null
+    user.locale = nextLocale
+    return { locale: nextLocale }
+  }
+
+  // 3. GET /property/building
+  if (pathname === '/property/building' && method === 'GET') {
+    return { ...OFFLINE_BUILDING }
+  }
+
+  // 3b. GET /property/apartments & GET /property/apartments/:id (E8/P1)
+  const OFFLINE_APARTMENT_CARDS = [
+    {
+      apartment_id: '018f0000-0000-7000-8000-000000000301',
+      apartment_number: '01',
+      entrance: 1,
+      floor: 1,
+      area_m2: '48.50',
+      owner_count: 1,
+      tenant_count: 0,
+      resident_count: 0,
+      residents: [{ relation_type: 'OWNER', since: '2021-03-10T10:00:00Z' }],
+    },
+    {
+      apartment_id: '018f0000-0000-7000-8000-000000000302',
+      apartment_number: '02',
+      entrance: 1,
+      floor: 1,
+      area_m2: '54.30',
+      owner_count: 0,
+      tenant_count: 1,
+      resident_count: 0,
+      residents: [{ relation_type: 'TENANT', since: '2026-06-15T10:00:00Z' }],
+    },
+    {
+      apartment_id: '018f0000-0000-7000-8000-000000000305',
+      apartment_number: '05',
+      entrance: 1,
+      floor: 2,
+      area_m2: '62.10',
+      owner_count: 0,
+      tenant_count: 0,
+      resident_count: 0,
+      residents: [],
+    },
+    {
+      apartment_id: '018f0000-0000-7000-8000-000000000309',
+      apartment_number: '09',
+      entrance: 2,
+      floor: 3,
+      area_m2: '51.00',
+      owner_count: 1,
+      tenant_count: 0,
+      resident_count: 1,
+      residents: [
+        { relation_type: 'OWNER', since: '2023-04-01T09:00:00Z' },
+        { relation_type: 'RESIDENT', since: '2024-09-01T12:00:00Z' },
+      ],
+    },
+    {
+      apartment_id: '018f0000-0000-7000-8000-000000000314',
+      apartment_number: '14',
+      entrance: 2,
+      floor: 4,
+      area_m2: '54.30',
+      owner_count: 1,
+      tenant_count: 1,
+      resident_count: 0,
+      residents: [
+        { relation_type: 'OWNER', since: '2022-01-12T10:00:00Z' },
+        { relation_type: 'TENANT', since: '2025-09-03T10:00:00Z' },
+      ],
+    },
+    {
+      apartment_id: '018f0000-0000-7000-8000-000000000315',
+      apartment_number: '15',
+      entrance: 2,
+      floor: 4,
+      area_m2: '59.00',
+      owner_count: 1,
+      tenant_count: 1,
+      resident_count: 0,
+      residents: [
+        { relation_type: 'OWNER', since: '2022-05-18T10:00:00Z' },
+        { relation_type: 'TENANT', since: '2025-05-01T10:00:00Z' },
+      ],
+    },
+  ]
+
+  if (pathname === '/property/apartments' && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      const err = new Error('Forbidden')
+      err.status = 403
+      err.errorCode = 'FORBIDDEN'
+      err.payload = { error_code: 'FORBIDDEN' }
+      throw err
+    }
+    return {
+      apartments: OFFLINE_APARTMENT_CARDS.map(({ residents, ...rest }) => rest),
+    }
+  }
+
+  const offlineAptCardMatch = pathname.match(/^\/property\/apartments\/([^/]+)$/)
+  if (offlineAptCardMatch && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      const err = new Error('Forbidden')
+      err.status = 403
+      err.errorCode = 'FORBIDDEN'
+      err.payload = { error_code: 'FORBIDDEN' }
+      throw err
+    }
+    const found = OFFLINE_APARTMENT_CARDS.find((a) => a.apartment_id === offlineAptCardMatch[1])
+    if (!found) {
+      const err = new Error('Apartment not found')
+      err.status = 404
+      err.errorCode = 'APARTMENT_NOT_FOUND'
+      err.payload = { error_code: 'APARTMENT_NOT_FOUND' }
+      throw err
+    }
+    return JSON.parse(JSON.stringify(found))
+  }
+
+  // 4. GET /meters/periods
+  if (pathname === '/meters/periods' && method === 'GET') {
+    return { periods: JSON.parse(JSON.stringify(OFFLINE_PERIODS)) }
+  }
+
+  // 4b. GET /meters/apartments/:id/readings (E8/P1)
+  const offlineAptReadingsMatch = pathname.match(/^\/meters\/apartments\/([^/]+)\/readings$/)
+  if (offlineAptReadingsMatch && method === 'GET') {
+    const aptId = offlineAptReadingsMatch[1]
+    const cardMeta = OFFLINE_APARTMENT_CARDS.find((a) => a.apartment_id === aptId)
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const isStaff = ['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)
+    const isOwn = userMems.some((m) => m.apartment_id === aptId)
+    if (!cardMeta || (!isStaff && !isOwn)) {
+      const err = new Error('Apartment not found')
+      err.status = 404
+      err.errorCode = 'APARTMENT_NOT_FOUND'
+      err.payload = { error_code: 'APARTMENT_NOT_FOUND' }
+      throw err
+    }
+    const baseApt =
+      BASE_APARTMENTS_2026_10.find((a) => a.apartment_id === aptId) || BASE_APARTMENTS_2026_10[0]
+    const meters = baseApt.meters.map((baseMeter, mIdx) => {
+      const readings = []
+      for (const p of OFFLINE_PERIODS) {
+        const periodApt = getPeriodApartments(p.period_code).find(
+          (a) => a.apartment_id === baseApt.apartment_id,
+        )
+        const periodMeter = periodApt?.meters.find((m) => m.meter_id === baseMeter.meter_id)
+        if (periodMeter?.reading) {
+          readings.push({
+            period_code: p.period_code,
+            reading_id: periodMeter.reading.reading_id,
+            value: periodMeter.reading.value,
+            consumption_delta: periodMeter.reading.consumption_delta,
+            source: p.period_code === '2026-08' && mIdx === 0 ? 'AUTO_ESTIMATED' : periodMeter.reading.source,
+            is_anomaly_confirmed: Boolean(periodMeter.reading.is_anomaly_confirmed),
+          })
+        }
+      }
+      return {
+        meter_id: baseMeter.meter_id,
+        resource_type: baseMeter.resource_type,
+        serial_number: baseMeter.serial_number,
+        location_label: baseMeter.location_label,
+        unit: baseMeter.unit,
+        is_active: true,
+        readings,
+      }
+    })
+    return {
+      apartment_id: cardMeta.apartment_id,
+      apartment_number: cardMeta.apartment_number,
+      periods: JSON.parse(JSON.stringify(OFFLINE_PERIODS)),
+      meters,
+    }
+  }
+
+  // 5. GET /meters/my-dashboard
+  if (pathname === '/meters/my-dashboard' && method === 'GET') {
+    const periodCode = urlObj.searchParams.get('period_code') || '2026-10'
+    const period =
+      OFFLINE_PERIODS.find((p) => p.period_code === periodCode) || OFFLINE_PERIODS[0]
+    const periodApts = getPeriodApartments(period.period_code)
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const userAptIds = new Set(userMems.map((m) => m.apartment_id))
+
+    const apartments = periodApts
+      .filter((a) => userAptIds.has(a.apartment_id))
+      .map((a) => ({
+        apartment_id: a.apartment_id,
+        apartment_number: a.apartment_number,
+        can_submit_readings: false, // Read-only in offline demo mode
+        meters: a.meters.map((m) => ({
+          meter_id: m.meter_id,
+          resource_type: m.resource_type,
+          serial_number: m.serial_number,
+          location_label: m.location_label,
+          unit: m.unit,
+          previous_value: m.previous_value,
+          previous_delta: m.historical_avg,
+          average_delta: m.historical_avg,
+          reading: m.reading ? { ...m.reading } : null,
+        })),
+      }))
+
+    return {
+      period: { ...period },
+      apartments,
+    }
+  }
+
+  // 6. GET /meters/readings/:id/history
+  const historyMatch = pathname.match(/^\/meters\/readings\/([^/]+)\/history$/)
+  if (historyMatch && method === 'GET') {
+    const readingId = historyMatch[1]
+    return {
+      reading_id: readingId,
+      meter_id: '018f0000-0000-7000-8000-000000000514',
+      period_code: '2026-10',
+      entries: [
+        {
+          changed_at: '2026-10-25T14:20:00Z',
+          old_value: null,
+          new_value: '86.200',
+          source: 'RESIDENT',
+          reason: null,
+          changed_by: {
+            display_label: 'Kati Kask (Apt 14)',
+            role_badge: 'OWNER',
+          },
+        },
+      ],
+    }
+  }
+
+  // 7. GET /meters/periods/:code/matrix
+  const matrixMatch = pathname.match(/^\/meters\/periods\/([^/]+)\/matrix$/)
+  if (matrixMatch && method === 'GET') {
+    const periodCode = matrixMatch[1]
+    const period =
+      OFFLINE_PERIODS.find((p) => p.period_code === periodCode) || OFFLINE_PERIODS[0]
+    const periodApts = getPeriodApartments(period.period_code)
+
+    let coldSum = 0n
+    let hotSum = 0n
+
+    const apartments = periodApts.map((a) => {
+      const hasMissing = a.meters.some((m) => !m.reading)
+      const hasAnomaly = a.meters.some((m) => m.reading?.is_anomaly_confirmed)
+      const hasEstimated = a.meters.some((m) => m.reading?.source === 'AUTO_ESTIMATED')
+
+      let aptStatus = 'SUBMITTED'
+      if (hasMissing) aptStatus = 'MISSING'
+      else if (hasAnomaly) aptStatus = 'ANOMALY_CONFIRMED'
+      else if (hasEstimated) aptStatus = 'AUTO_ESTIMATED'
+
+      const meters = a.meters.map((m) => {
+        if (m.reading) {
+          if (m.resource_type === 'COLD_WATER') coldSum += toBigInt3(m.reading.consumption_delta)
+          if (m.resource_type === 'HOT_WATER') hotSum += toBigInt3(m.reading.consumption_delta)
+        }
+        let mStatus = 'MISSING'
+        if (m.reading) {
+          if (m.reading.is_anomaly_confirmed) mStatus = 'ANOMALY_CONFIRMED'
+          else if (m.reading.source === 'AUTO_ESTIMATED') mStatus = 'AUTO_ESTIMATED'
+          else mStatus = 'SUBMITTED'
+        }
+        return {
+          meter_id: m.meter_id,
+          resource_type: m.resource_type,
+          location_label: m.location_label,
+          unit: m.unit,
+          previous_value: m.previous_value,
+          status: mStatus,
+          reading: m.reading ? { ...m.reading } : null,
+        }
+      })
+
+      return {
+        apartment_id: a.apartment_id,
+        apartment_number: a.apartment_number,
+        entrance: a.entrance,
+        floor: a.floor,
+        status: aptStatus,
+        meters,
+      }
+    })
+
+    const coldMaster = '28.500'
+    const hotMaster = '15.400'
+    const coldAptStr = fromBigInt3(coldSum)
+    const hotAptStr = fromBigInt3(hotSum)
+
+    return {
+      period: { ...period },
+      balances: [
+        {
+          resource_type: 'COLD_WATER',
+          unit: 'm3',
+          master_total: coldMaster,
+          apartments_sum: coldAptStr,
+          unallocated_loss: subDecimal(coldMaster, coldAptStr),
+        },
+        {
+          resource_type: 'HOT_WATER',
+          unit: 'm3',
+          master_total: hotMaster,
+          apartments_sum: hotAptStr,
+          unallocated_loss: subDecimal(hotMaster, hotAptStr),
+        },
+      ],
+      master_meters: JSON.parse(JSON.stringify(MASTER_METERS_2026_10)),
+      apartments,
+    }
+  }
+
+  // 8. GET /meters/periods/:code/export-csv
+  const csvMatch = pathname.match(/^\/meters\/periods\/([^/]+)\/export-csv$/)
+  if (csvMatch && method === 'GET' && raw) {
+    const periodCode = csvMatch[1]
+    const periodApts = getPeriodApartments(periodCode)
+    const lines = [
+      'period_code,apartment_number,serial_number,resource_type,previous_value,current_value,consumption_delta,unit,source',
+    ]
+    for (const apt of periodApts) {
+      for (const m of apt.meters) {
+        lines.push(
+          [
+            periodCode,
+            apt.apartment_number,
+            m.serial_number,
+            m.resource_type,
+            m.previous_value,
+            m.reading?.value ?? '',
+            m.reading?.consumption_delta ?? '',
+            m.unit,
+            m.reading?.source ?? 'MISSING',
+          ].join(','),
+        )
+      }
+    }
+    return new Response(lines.join('\n'), {
+      status: 200,
+      headers: { 'Content-Type': 'text/csv; charset=utf-8' },
+    })
+  }
+
+  // 9. GET /communication/emergencies/active
+  if (pathname === '/communication/emergencies/active' && method === 'GET') {
+    return OFFLINE_POSTS.filter((p) => p.post_type === 'EMERGENCY' && p.is_active).map((p) => ({
+      id: p.id,
+      post_type: p.post_type,
+      category: p.category,
+      title: p.title,
+      body: p.body,
+      author_badge: { ...p.author_badge },
+      is_mine: p.author_user_id === user.user_id,
+      target_scope: p.target_scope,
+      target_entrance: p.target_entrance,
+      target_apartment_ids: p.target_apartment_ids,
+      is_active: p.is_active,
+      comments_enabled: p.comments_enabled,
+      comments_count: p.comments.length,
+      created_at: p.created_at,
+      last_activity_at:
+        p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
+      acknowledged_at: p.acknowledged_at,
+    }))
+  }
+
+  // 10. GET & POST /communication/posts
+  if (pathname === '/communication/posts' && method === 'GET') {
+    const postType = urlObj.searchParams.get('post_type')
+    const apartmentId = urlObj.searchParams.get('apartment_id')
+    const category = urlObj.searchParams.get('category')
+    const limit = Number(urlObj.searchParams.get('limit') || '20')
+    const offset = Number(urlObj.searchParams.get('offset') || '0')
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+
+    if (apartmentId && postType !== 'APARTMENT_THREAD') {
+      throw makeOfflineError(
+        422,
+        'VALIDATION_ERROR',
+        'apartment_id filter is only valid with post_type=APARTMENT_THREAD.',
+      )
+    }
+
+    let filtered = OFFLINE_POSTS.filter(
+      (p) =>
+        p.post_type !== 'EMERGENCY' &&
+        p.post_type !== 'APARTMENT_THREAD' &&
+        p.post_type !== 'BOARD_TOPIC',
+    )
+
+    if (postType === 'APARTMENT_THREAD') {
+      const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+      filtered = OFFLINE_POSTS.filter((p) => {
+        if (p.post_type !== 'APARTMENT_THREAD') return false
+        if (apartmentId && !p.target_apartment_ids?.includes(apartmentId)) return false
+        if (isBoardUser) return true
+        return userMems.some(
+          (m) =>
+            p.target_apartment_ids?.includes(m.apartment_id) &&
+            new Date(m.since).getTime() <= new Date(p.created_at).getTime(),
+        )
+      })
+      filtered.sort((a, b) => {
+        const aLast =
+          a.comments.length > 0 ? a.comments[a.comments.length - 1].created_at : a.created_at
+        const bLast =
+          b.comments.length > 0 ? b.comments[b.comments.length - 1].created_at : b.created_at
+        return new Date(bLast).getTime() - new Date(aLast).getTime()
+      })
+    } else if (postType === 'BOARD_TOPIC') {
+      if (!isBoardUser) {
+        throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+      }
+      filtered = OFFLINE_POSTS.filter((p) => p.post_type === 'BOARD_TOPIC')
+      filtered.sort((a, b) => {
+        const aLast =
+          a.comments.length > 0 ? a.comments[a.comments.length - 1].created_at : a.created_at
+        const bLast =
+          b.comments.length > 0 ? b.comments[b.comments.length - 1].created_at : b.created_at
+        return new Date(bLast).getTime() - new Date(aLast).getTime()
+      })
+    } else if (postType) {
+      filtered = OFFLINE_POSTS.filter((p) => p.post_type === postType)
+    }
+    if (category) {
+      filtered = filtered.filter((p) => p.category === category)
+    }
+
+    return filtered.slice(offset, offset + limit).map((p) => ({
+      id: p.id,
+      post_type: p.post_type,
+      category: p.category,
+      title: p.title,
+      body: p.body,
+      author_badge: { ...p.author_badge },
+      is_mine: p.author_user_id === user.user_id,
+      target_scope: p.target_scope,
+      target_entrance: p.target_entrance,
+      target_apartment_ids: p.target_apartment_ids,
+      is_active: p.is_active,
+      comments_enabled: p.comments_enabled,
+      comments_count: p.comments.length,
+      created_at: p.created_at,
+      last_activity_at:
+        p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
+    }))
+  }
+
+  if (pathname === '/communication/posts' && method === 'POST') {
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    const postType = reqBody.post_type || 'FORUM_TOPIC'
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    if (postType === 'APARTMENT_THREAD') {
+      if (reqBody.author_apartment_id !== undefined && reqBody.author_apartment_id !== null) {
+        throw makeOfflineError(
+          422,
+          'INVALID_AUTHOR_APARTMENT',
+          'author_apartment_id is not allowed on APARTMENT_THREAD.',
+        )
+      }
+      const targetAptId = reqBody.target_apartment_ids?.[0]
+      if (targetAptId === '018f0000-0000-7000-8000-000000000305') {
+        throw makeOfflineError(
+          422,
+          'APARTMENT_HAS_NO_RESIDENTS',
+          'This apartment has no registered residents yet.',
+        )
+      }
+    }
+    if (postType === 'BOARD_TOPIC') {
+      if (!isBoardUser) {
+        throw makeOfflineError(403, 'FORBIDDEN', 'Only Board members can publish board topics.')
+      }
+      if (reqBody.author_apartment_id !== undefined && reqBody.author_apartment_id !== null) {
+        throw makeOfflineError(
+          422,
+          'INVALID_AUTHOR_APARTMENT',
+          'author_apartment_id is not allowed on BOARD_TOPIC.',
+        )
+      }
+    }
+    const nowIso = new Date().toISOString()
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const boardFullNames = {
+      '018f0000-0000-7000-8000-000000000101': 'Oleg Sidorov',
+      '018f0000-0000-7000-8000-000000000105': 'Peeter Saar',
+    }
+    const authorBadge =
+      postType === 'BOARD_TOPIC'
+        ? {
+            display_label: boardFullNames[user.user_id] || user.full_name,
+            role_badge: 'BOARD',
+          }
+        : postType === 'APARTMENT_THREAD' && isBoardUser
+          ? {
+              display_label: user.building_role === 'CHAIRMAN' ? 'Chairman' : 'Board',
+              role_badge: 'BOARD',
+            }
+          : userMems[0]?.preview_badge || {
+              display_label: user.label,
+              role_badge: isBoardUser ? 'BOARD' : 'OWNER',
+            }
+    const created = {
+      id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+      post_type: postType,
+      category: reqBody.category || 'GENERAL',
+      title: reqBody.title || 'Untitled',
+      body: reqBody.body || '',
+      author_user_id: user.user_id,
+      author_badge: authorBadge,
+      target_scope: reqBody.target_scope || 'ALL_BUILDING',
+      target_entrance: reqBody.target_entrance || null,
+      target_apartment_ids: reqBody.target_apartment_ids || null,
+      is_active: true,
+      comments_enabled: reqBody.comments_enabled !== false,
+      created_at: nowIso,
+      comments: [],
+    }
+    OFFLINE_POSTS.unshift(created)
+    return {
+      ...created,
+      is_mine: true,
+      comments_count: 0,
+      last_activity_at: nowIso,
+    }
+  }
+
+  // 11. GET /communication/posts/:id & POST /communication/posts/:id/comments
+  const postDetailMatch = pathname.match(/^\/communication\/posts\/([^/]+)$/)
+  if (postDetailMatch && method === 'GET') {
+    const post = OFFLINE_POSTS.find((p) => p.id === postDetailMatch[1])
+    if (!post) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    if (post.post_type === 'APARTMENT_THREAD' && !isBoardUser) {
+      const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+      const hasAccess = userMems.some(
+        (m) =>
+          post.target_apartment_ids?.includes(m.apartment_id) &&
+          new Date(m.since).getTime() <= new Date(post.created_at).getTime(),
+      )
+      if (!hasAccess) {
+        throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+      }
+    }
+    if (post.post_type === 'BOARD_TOPIC' && !isBoardUser) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    return {
+      id: post.id,
+      post_type: post.post_type,
+      category: post.category,
+      title: post.title,
+      body: post.body,
+      author_badge: { ...post.author_badge },
+      is_mine: post.author_user_id === user.user_id,
+      target_scope: post.target_scope,
+      target_entrance: post.target_entrance,
+      target_apartment_ids: post.target_apartment_ids,
+      is_active: post.is_active,
+      comments_enabled: post.comments_enabled,
+      comments_count: post.comments.length,
+      created_at: post.created_at,
+      last_activity_at:
+        post.comments.length > 0
+          ? post.comments[post.comments.length - 1].created_at
+          : post.created_at,
+      comments: post.comments.map((c) => ({
+        id: c.id,
+        post_id: post.id,
+        body: c.body,
+        author_badge: { ...c.author_badge },
+        is_mine: c.author_user_id === user.user_id,
+        created_at: c.created_at,
+      })),
+    }
+  }
+
+  if (postDetailMatch && method === 'DELETE') {
+    const idx = OFFLINE_POSTS.findIndex((p) => p.id === postDetailMatch[1])
+    if (idx === -1) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    const targetPost = OFFLINE_POSTS[idx]
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    if (targetPost.post_type === 'BOARD_TOPIC') {
+      if (!isBoardUser) {
+        throw makeOfflineError(403, 'FORBIDDEN', 'Only Board members can delete board topics.')
+      }
+      OFFLINE_POSTS.splice(idx, 1)
+      return null
+    }
+    if (user.building_role !== 'CHAIRMAN') {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only Chairman can delete forum topics.')
+    }
+    if (targetPost.post_type !== 'FORUM_TOPIC') {
+      throw makeOfflineError(409, 'POST_NOT_DELETABLE', 'This post cannot be deleted.')
+    }
+    OFFLINE_POSTS.splice(idx, 1)
+    return null
+  }
+
+  const commentPostMatch = pathname.match(/^\/communication\/posts\/([^/]+)\/comments$/)
+  if (commentPostMatch && method === 'POST') {
+    const post = OFFLINE_POSTS.find((p) => p.id === commentPostMatch[1])
+    if (!post) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    if (post.post_type === 'BOARD_TOPIC' && !isBoardUser) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    if (post.post_type === 'APARTMENT_THREAD' || post.post_type === 'BOARD_TOPIC') {
+      if (reqBody.author_apartment_id !== undefined && reqBody.author_apartment_id !== null) {
+        throw makeOfflineError(
+          422,
+          'INVALID_AUTHOR_APARTMENT',
+          'author_apartment_id is not allowed on this thread.',
+        )
+      }
+    }
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const boardFullNames = {
+      '018f0000-0000-7000-8000-000000000101': 'Oleg Sidorov',
+      '018f0000-0000-7000-8000-000000000105': 'Peeter Saar',
+    }
+    const authorBadge =
+      post.post_type === 'BOARD_TOPIC'
+        ? {
+            display_label: boardFullNames[user.user_id] || user.full_name,
+            role_badge: 'BOARD',
+          }
+        : post.post_type === 'APARTMENT_THREAD' && isBoardUser
+          ? {
+              display_label: user.building_role === 'CHAIRMAN' ? 'Chairman' : 'Board',
+              role_badge: 'BOARD',
+            }
+          : userMems[0]?.preview_badge || {
+              display_label: user.label,
+              role_badge: isBoardUser ? 'BOARD' : 'OWNER',
+            }
+    const newComment = {
+      id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+      post_id: post.id,
+      body: reqBody.body || '',
+      author_user_id: user.user_id,
+      author_badge: authorBadge,
+      created_at: new Date().toISOString(),
+    }
+    post.comments.push(newComment)
+    return {
+      ...newComment,
+      is_mine: true,
+    }
+  }
+
+  // Read-only fallback for non-GET actions in offline demo mode
+  const privacyMatch = pathname.match(/^\/property\/memberships\/([^/]+)\/privacy$/)
+  if (privacyMatch && method === 'PATCH') {
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const current = userMems[0] || {
+      membership_id: privacyMatch[1],
+      privacy_display_mode: 'FULL_NAME',
+      preview_badge: { display_label: user.label, role_badge: 'OWNER' },
+    }
+    return {
+      membership_id: current.membership_id,
+      privacy_display_mode: current.privacy_display_mode,
+      preview_badge: current.preview_badge,
+    }
+  }
+
+  const ackMatch = pathname.match(/^\/communication\/emergencies\/([^/]+)\/acknowledge$/)
+  if (ackMatch && method === 'POST') {
+    return {
+      post_id: ackMatch[1],
+      acknowledged_at: new Date().toISOString(),
+    }
+  }
+
+  // 12. Notifications & Auth in offline demo mode
+  if (pathname === '/notifications/unread-count' && method === 'GET') {
+    const items = getOfflineUserNotifications(user.user_id)
+    return { unread: items.filter((i) => !i.read_at).length }
+  }
+
+  if (pathname === '/notifications/feed' && method === 'GET') {
+    const unreadOnly = urlObj.searchParams.get('unread_only') === 'true'
+    const limit = Number(urlObj.searchParams.get('limit') || '50')
+    const offset = Number(urlObj.searchParams.get('offset') || '0')
+    const items = getOfflineUserNotifications(user.user_id)
+    const filtered = unreadOnly ? items.filter((i) => !i.read_at) : items
+    return JSON.parse(JSON.stringify(filtered.slice(offset, offset + limit)))
+  }
+
+  if (pathname === '/notifications/feed/read-all' && method === 'POST') {
+    const items = getOfflineUserNotifications(user.user_id)
+    const nowIso = new Date().toISOString()
+    let updated = 0
+    for (const item of items) {
+      if (!item.read_at) {
+        item.read_at = nowIso
+        updated += 1
+      }
+    }
+    return { updated }
+  }
+
+  const readOneMatch = pathname.match(/^\/notifications\/feed\/([^/]+)\/read$/)
+  if (readOneMatch && method === 'POST') {
+    const items = getOfflineUserNotifications(user.user_id)
+    const found = items.find((i) => i.id === readOneMatch[1])
+    if (!found) {
+      throw makeOfflineError(404, 'NOTIFICATION_NOT_FOUND', 'Notification not found.')
+    }
+    if (!found.read_at) {
+      found.read_at = new Date().toISOString()
+    }
+    return { id: found.id, read_at: found.read_at }
+  }
+
+  if (pathname === '/notifications/preferences') {
+    const preferences = getOfflineUserPreferences(user.user_id)
+    if (method === 'PUT') {
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const changes = Array.isArray(reqBody.preferences) ? reqBody.preferences : []
+      for (const chg of changes) {
+        const match = preferences.find(
+          (p) => p.event_type === chg.event_type && p.channel === chg.channel,
+        )
+        if (match?.mandatory && chg.enabled === false) {
+          throw makeOfflineError(
+            422,
+            'PREFERENCE_MANDATORY',
+            'Emergencies cannot be switched off.',
+          )
+        }
+      }
+      for (const chg of changes) {
+        const match = preferences.find(
+          (p) => p.event_type === chg.event_type && p.channel === chg.channel,
+        )
+        if (match && !match.mandatory) {
+          match.enabled = Boolean(chg.enabled)
+        }
+      }
+    }
+    return {
+      channels: [
+        { channel: 'in_app', available: true, reason: null },
+        { channel: 'email', available: false, reason: 'DEMO_MODE' },
+        { channel: 'telegram', available: false, reason: 'DEMO_MODE' },
+        { channel: 'webpush', available: false, reason: 'DEMO_MODE' },
+      ],
+      preferences: JSON.parse(JSON.stringify(preferences)),
+    }
+  }
+
+  if (pathname === '/notifications/bindings' && method === 'GET') {
+    return []
+  }
+
+  if (pathname === '/notifications/unsubscribe' && method === 'POST') {
+    const token = urlObj.searchParams.get('token') || ''
+    if (!token || token.length > 128) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Validation error')
+    }
+    if (token.startsWith('demo-')) {
+      const lower = token.toLowerCase()
+      const eventType = lower.includes('emergency')
+        ? 'EMERGENCY_RESOLVED'
+        : lower.includes('review')
+          ? 'PERIOD_REVIEW'
+          : lower.includes('poll')
+            ? 'POLL_OPENED'
+            : lower.includes('board')
+              ? 'APARTMENT_MESSAGE_TO_BOARD'
+              : lower.includes('message')
+                ? 'APARTMENT_MESSAGE'
+                : 'READING_DEADLINE'
+      const prefs = getOfflineUserPreferences(user.user_id)
+      const match = prefs.find((p) => p.event_type === eventType && p.channel === 'email')
+      if (match && !match.mandatory) {
+        match.enabled = false
+      }
+      return {
+        event_type: eventType,
+        channel: 'email',
+      }
+    }
+    throw makeOfflineError(400, 'INVALID_LINK', 'Invalid link')
+  }
+
+  if (pathname === '/auth/magic-link' && method === 'POST') {
+    offlineMagicLinkUsed = false
+    return { accepted: true }
+  }
+
+  if (pathname === '/auth/magic-link/redeem' && method === 'POST') {
+    const tokenStr = String(body?.token || '')
+
+    if (tokenStr.startsWith('demo-register-')) {
+      const parts = tokenStr.split('-')
+      const kindRaw = (parts[2] || 'owner').toUpperCase()
+      const targetVal = parts[3] || '14'
+      const invitation =
+        kindRaw === 'STAFF'
+          ? {
+              kind: 'STAFF',
+              apartment_number: null,
+              building_role: ['BOARD', 'ACCOUNTANT', 'CHAIRMAN'].includes(targetVal)
+                ? targetVal
+                : 'BOARD',
+            }
+          : {
+              kind: kindRaw === 'TENANT' ? 'TENANT' : 'OWNER',
+              apartment_number: targetVal,
+              building_role: null,
+            }
+      return {
+        status: 'REGISTRATION_REQUIRED',
+        registration_token: `reg-${Date.now()}`,
+        expires_in: 1800,
+        invitation,
+      }
+    }
+
+    if (tokenStr.startsWith('demo-accept-')) {
+      const parts = tokenStr.split('-')
+      const kindRaw = (parts[2] || 'tenant').toUpperCase()
+      const targetVal = parts[3] || '14'
+      return {
+        status: 'SIGN_IN_TO_ACCEPT',
+        invitation: {
+          kind: kindRaw === 'OWNER' ? 'OWNER' : 'TENANT',
+          apartment_number: targetVal,
+          building_role: null,
+        },
+      }
+    }
+
+    if (
+      (tokenStr === 'demo-valid-token' && !offlineMagicLinkUsed) ||
+      tokenStr.startsWith('demo-user-')
+    ) {
+      if (tokenStr === 'demo-valid-token') {
+        offlineMagicLinkUsed = true
+        offlineSignedInUserId = OFFLINE_DEMO_USERS[0].user_id
+      } else {
+        offlineSignedInUserId = tokenStr.replace('demo-user-', '')
+      }
+      const nowIso = new Date().toISOString()
+      offlineSessions = [
+        {
+          session_id: '018f0000-0000-7000-8000-000000009901',
+          device_kind: 'DESKTOP_BROWSER',
+          auth_method: 'MAGIC_LINK',
+          authenticated_at: nowIso,
+          last_used_at: nowIso,
+          current: true,
+        },
+        {
+          session_id: '018f0000-0000-7000-8000-000000009902',
+          device_kind: 'MOBILE_BROWSER',
+          auth_method: 'MAGIC_LINK',
+          authenticated_at: '2026-10-28T18:30:00Z',
+          last_used_at: '2026-10-30T11:20:00Z',
+          current: false,
+        },
+      ]
+      return {
+        status: 'SIGNED_IN',
+        session: {
+          access_token: `offline-demo-jwt-${offlineSignedInUserId}`,
+          token_type: 'Bearer',
+          expires_in: 900,
+          session_id: '018f0000-0000-7000-8000-000000009901',
+        },
+      }
+    }
+    const err = new Error('Invalid link')
+    err.status = 400
+    err.errorCode = 'INVALID_LINK'
+    err.payload = { error_code: 'INVALID_LINK' }
+    throw err
+  }
+
+  if (pathname === '/auth/password/login' && method === 'POST') {
+    const email = String(body?.email || '').trim()
+    const rawPassword = typeof body?.password === 'string' ? body.password : ''
+    if (email.length < 3 || email.length > 320 || !email.includes('@') || !rawPassword || rawPassword.length > 1024) {
+      const err = new Error('Validation error')
+      err.status = 422
+      err.errorCode = 'VALIDATION_ERROR'
+      err.payload = { error_code: 'VALIDATION_ERROR' }
+      throw err
+    }
+    const password = rawPassword.normalize('NFKC')
+    if (password !== 'demo-password-ok') {
+      const err = new Error('Invalid credentials')
+      err.status = 401
+      err.errorCode = 'INVALID_CREDENTIALS'
+      err.payload = { error_code: 'INVALID_CREDENTIALS' }
+      throw err
+    }
+    offlineSignedInUserId = email.toLowerCase().includes('peeter')
+      ? '018f0000-0000-7000-8000-000000000101'
+      : '018f0000-0000-7000-8000-000000000102'
+    const nowIso = new Date().toISOString()
+    offlineSessions = [
+      {
+        session_id: '018f0000-0000-7000-8000-000000009901',
+        device_kind: 'DESKTOP_BROWSER',
+        auth_method: 'PASSWORD',
+        authenticated_at: nowIso,
+        last_used_at: nowIso,
+        current: true,
+      },
+    ]
+    return {
+      access_token: `offline-demo-jwt-${offlineSignedInUserId}`,
+      token_type: 'Bearer',
+      expires_in: 900,
+      session_id: '018f0000-0000-7000-8000-000000009901',
+    }
+  }
+
+  if (pathname === '/auth/password') {
+    if (method === 'GET') {
+      return { is_set: offlineHasPassword }
+    }
+    if (method === 'PUT') {
+      const np = String(body?.new_password || '').normalize('NFKC')
+      const cp = String(body?.current_password || '').normalize('NFKC')
+      if (cp === 'wrong' || np.includes('reauth')) {
+        const err = new Error('Reauthentication required')
+        err.status = 403
+        err.errorCode = 'REAUTHENTICATION_REQUIRED'
+        err.payload = { error_code: 'REAUTHENTICATION_REQUIRED' }
+        throw err
+      }
+      const len = [...np].length
+      if (len < 15) {
+        const err = new Error('Password too weak')
+        err.status = 422
+        err.errorCode = 'PASSWORD_TOO_WEAK'
+        err.payload = { error_code: 'PASSWORD_TOO_WEAK', reason: 'TOO_SHORT' }
+        throw err
+      }
+      if (len > 128) {
+        const err = new Error('Password too weak')
+        err.status = 422
+        err.errorCode = 'PASSWORD_TOO_WEAK'
+        err.payload = { error_code: 'PASSWORD_TOO_WEAK', reason: 'TOO_LONG' }
+        throw err
+      }
+      if (np.toLowerCase().replace(/\s+/g, '') === 'password123password' || new Set([...np]).size < 5) {
+        const err = new Error('Password too weak')
+        err.status = 422
+        err.errorCode = 'PASSWORD_TOO_WEAK'
+        err.payload = { error_code: 'PASSWORD_TOO_WEAK', reason: 'TOO_COMMON' }
+        throw err
+      }
+      offlineHasPassword = true
+      offlineSessions = offlineSessions.filter((s) => s.current)
+      return null
+    }
+    if (method === 'DELETE') {
+      if (!offlineHasPassword) {
+        return null
+      }
+      const cp = String(body?.current_password || '').normalize('NFKC')
+      if (cp === 'wrong') {
+        const err = new Error('Reauthentication required')
+        err.status = 403
+        err.errorCode = 'REAUTHENTICATION_REQUIRED'
+        err.payload = { error_code: 'REAUTHENTICATION_REQUIRED' }
+        throw err
+      }
+      offlineHasPassword = false
+      offlineSessions = offlineSessions.filter((s) => s.current)
+      return null
+    }
+  }
+
+  const offlineResidentsMatch = pathname.match(/^\/auth\/apartments\/([^/]+)\/residents$/)
+  if (offlineResidentsMatch && method === 'GET') {
+    const aptId = offlineResidentsMatch[1]
+    return {
+      residents: [
+        {
+          user_id: '018f0000-0000-7000-8000-000000000102',
+          membership_id: '018f0000-0000-7000-8000-000000000214',
+          relation_type: 'OWNER',
+          display_label: 'Kati Kask (Apt 14)',
+          since: '2022-01-12T10:00:00Z',
+          invited_email: null,
+        },
+        {
+          user_id: '018f0000-0000-7000-8000-000000000104',
+          membership_id: '018f0000-0000-7000-8000-000000000399',
+          relation_type: 'TENANT',
+          display_label: 'M. T. (Apt 14)',
+          since: '2025-09-03T10:00:00Z',
+          invited_email: 'martin.tenant@demo.invalid',
+        },
+      ],
+      pending_invitations: [
+        {
+          invitation_id: '018f0000-0000-7000-8000-000000008301',
+          kind: 'TENANT',
+          email: 'new.tenant@demo.invalid',
+          apartment_id: aptId,
+          apartment_number: '14',
+          building_role: null,
+          status: 'PENDING',
+          mine: true,
+          created_at: '2026-10-30T10:00:00Z',
+          expires_at: new Date(Date.now() + 5 * 86400 * 1000).toISOString(),
+        },
+      ],
+    }
+  }
+
+  if (pathname === '/auth/users' && method === 'GET') {
+    return {
+      people: [
+        {
+          user_id: '018f0000-0000-7000-8000-000000000101',
+          is_me: true,
+          display_label: 'Peeter Tamm (Apt 01)',
+          building_role: 'CHAIRMAN',
+          invited_email: null,
+          memberships: [
+            {
+              membership_id: '018f0000-0000-7000-8000-000000000201',
+              apartment_id: '018f0000-0000-7000-8000-000000000301',
+              apartment_number: '01',
+              relation_type: 'OWNER',
+              display_label: 'Peeter Tamm (Apt 01)',
+              since: '2021-03-10T10:00:00Z',
+              invited_email: null,
+            },
+          ],
+        },
+        {
+          user_id: '018f0000-0000-7000-8000-000000000102',
+          is_me: false,
+          display_label: 'Kati Kask (Apt 14)',
+          building_role: 'USER',
+          invited_email: null,
+          memberships: [
+            {
+              membership_id: '018f0000-0000-7000-8000-000000000214',
+              apartment_id: '018f0000-0000-7000-8000-000000000314',
+              apartment_number: '14',
+              relation_type: 'OWNER',
+              display_label: 'Kati Kask (Apt 14)',
+              since: '2022-01-12T10:00:00Z',
+              invited_email: 'ivan.petrov@demo.invalid',
+            },
+          ],
+        },
+        {
+          user_id: '018f0000-0000-7000-8000-000000000103',
+          is_me: false,
+          display_label: 'Marika Rebane (Accountant)',
+          building_role: 'ACCOUNTANT',
+          invited_email: 'anna.kask@demo.invalid',
+          memberships: [],
+        },
+      ],
+    }
+  }
+
+  if (pathname === '/auth/invitations' && method === 'GET') {
+    return [
+      {
+        invitation_id: '018f0000-0000-7000-8000-000000008301',
+        kind: 'TENANT',
+        email: 'n***@demo.invalid',
+        apartment_id: '018f0000-0000-7000-8000-000000000314',
+        apartment_number: '14',
+        building_role: null,
+        status: 'PENDING',
+        mine: false,
+        created_at: '2026-10-30T10:00:00Z',
+        expires_at: new Date(Date.now() + 5 * 86400 * 1000).toISOString(),
+      },
+      {
+        invitation_id: '018f0000-0000-7000-8000-000000008302',
+        kind: 'OWNER',
+        email: 'tonu.owner@demo.invalid',
+        apartment_id: '018f0000-0000-7000-8000-000000000305',
+        apartment_number: '05',
+        building_role: null,
+        status: 'PENDING',
+        mine: true,
+        created_at: '2026-10-29T12:00:00Z',
+        expires_at: new Date(Date.now() + 6 * 86400 * 1000).toISOString(),
+      },
+    ]
+  }
+
+  if (pathname === '/auth/registration' && method === 'POST') {
+    const nowIso = new Date().toISOString()
+    offlineSessions = [
+      {
+        session_id: '018f0000-0000-7000-8000-000000009901',
+        device_kind: 'DESKTOP_BROWSER',
+        auth_method: 'INVITATION',
+        authenticated_at: nowIso,
+        last_used_at: nowIso,
+        current: true,
+      },
+    ]
+    return {
+      status: 'SIGNED_IN',
+      session: {
+        access_token: 'offline-demo-jwt-token',
+        token_type: 'Bearer',
+        expires_in: 900,
+        session_id: '018f0000-0000-7000-8000-000000009901',
+      },
+    }
+  }
+
+  if (pathname === '/auth/invitations/accept' && method === 'POST') {
+    return { applied: true }
+  }
+
+  if (pathname === '/auth/sessions' && method === 'GET') {
+    return offlineSessions
+  }
+
+  if (pathname === '/auth/sessions' && method === 'DELETE') {
+    offlineSessions = []
+    return null
+  }
+
+  const offlineSessionDel = pathname.match(/^\/auth\/sessions\/([^/]+)$/)
+  if (offlineSessionDel && method === 'DELETE') {
+    offlineSessions = offlineSessions.filter((s) => s.session_id !== offlineSessionDel[1])
+    return null
+  }
+
+  if (pathname === '/auth/logout' && method === 'POST') {
+    offlineSignedInUserId = ''
+    offlineSessions = []
+    return null
+  }
+
+  // =========================================================================
+  // Governance Polls (/governance/polls)
+  // =========================================================================
+  if (pathname === '/governance/polls' && method === 'GET') {
+    const statusFilter = urlObj.searchParams.get('status')
+    const limit = Math.min(Math.max(Number(urlObj.searchParams.get('limit') || '50'), 1), 100)
+    const offset = Math.max(Number(urlObj.searchParams.get('offset') || '0'), 0)
+
+    if (statusFilter && !['DRAFT', 'OPEN', 'CLOSED', 'CANCELLED'].includes(statusFilter)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid poll status filter.')
+    }
+
+    const visible = OFFLINE_POLLS.filter((p) => {
+      if (!isOfflinePollVisibleToUser(p, user)) return false
+      if (statusFilter && p.status !== statusFilter) return false
+      return true
+    })
+
+    visible.sort(compareOfflinePollsOrder)
+    return visible.slice(offset, offset + limit).map((p) => toOfflinePollSummary(p, user))
+  }
+
+  if (pathname === '/governance/polls' && method === 'POST') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only board members can create polls.')
+    }
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    const parsed = validateOfflinePollDraft(reqBody)
+    const nowIso = new Date().toISOString()
+    const created = {
+      id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+      ...parsed,
+      status: 'DRAFT',
+      opened_at: null,
+      closed_at: null,
+      cancelled_at: null,
+      created_at: nowIso,
+      ballots: [],
+    }
+    OFFLINE_POLLS.unshift(created)
+    return toOfflinePollView(created, user)
+  }
+
+  const offlinePollActionMatch = pathname.match(
+    /^\/governance\/polls\/([^/]+)\/(open|close|cancel)$/,
+  )
+  if (offlinePollActionMatch && method === 'POST') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only board members can manage polls.')
+    }
+    const [, pollId, action] = offlinePollActionMatch
+    const found = OFFLINE_POLLS.find((p) => p.id === pollId)
+    if (!found) {
+      throw makeOfflineError(404, 'POLL_NOT_FOUND', 'This poll is not available.')
+    }
+
+    const nowMs = Date.now()
+    const nowIso = new Date(nowMs).toISOString()
+    const maxFutureMs = nowMs + 366 * 86400 * 1000
+
+    if (action === 'open') {
+      if (found.status !== 'DRAFT') {
+        throw makeOfflineError(409, 'POLL_NOT_DRAFT', 'Only a draft poll can be opened.')
+      }
+      const closesMs = new Date(found.closes_at).getTime()
+      if (Number.isNaN(closesMs) || closesMs <= nowMs || closesMs > maxFutureMs) {
+        throw makeOfflineError(
+          422,
+          'INVALID_DEADLINE',
+          'The closing time must be in the future (at most one year ahead).',
+        )
+      }
+      if (computeOfflinePollElectorateCount(found) < 1) {
+        throw makeOfflineError(
+          422,
+          'POLL_HAS_NO_ELECTORATE',
+          'Nobody in the target scope can answer this poll.',
+        )
+      }
+      found.status = 'OPEN'
+      found.opened_at = nowIso
+      emitOfflinePollOpenedNotifications(found, user, nowIso)
+      return toOfflinePollView(found, user)
+    }
+
+    if (action === 'close') {
+      if (found.status !== 'OPEN') {
+        throw makeOfflineError(409, 'POLL_NOT_OPEN', 'Only an open poll can be closed.')
+      }
+      found.status = 'CLOSED'
+      found.closed_at = nowIso
+      return toOfflinePollView(found, user)
+    }
+
+    if (action === 'cancel') {
+      if (found.status !== 'OPEN') {
+        throw makeOfflineError(409, 'POLL_NOT_OPEN', 'Only an open poll can be cancelled.')
+      }
+      found.status = 'CANCELLED'
+      found.cancelled_at = nowIso
+      return toOfflinePollView(found, user)
+    }
+  }
+
+  const offlinePollDetailMatch = pathname.match(/^\/governance\/polls\/([^/]+)$/)
+  if (offlinePollDetailMatch && method === 'GET') {
+    const pollId = offlinePollDetailMatch[1]
+    const found = OFFLINE_POLLS.find((p) => p.id === pollId)
+    if (!found || !isOfflinePollVisibleToUser(found, user)) {
+      throw makeOfflineError(404, 'POLL_NOT_FOUND', 'This poll is not available.')
+    }
+    return toOfflinePollView(found, user)
+  }
+
+  if (offlinePollDetailMatch && method === 'PUT') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only board members can edit poll drafts.')
+    }
+    const pollId = offlinePollDetailMatch[1]
+    const found = OFFLINE_POLLS.find((p) => p.id === pollId)
+    if (!found) {
+      throw makeOfflineError(404, 'POLL_NOT_FOUND', 'This poll is not available.')
+    }
+    if (found.status !== 'DRAFT') {
+      throw makeOfflineError(409, 'POLL_NOT_DRAFT', 'Only a draft poll can be edited.')
+    }
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    const parsed = validateOfflinePollDraft(reqBody)
+    Object.assign(found, parsed)
+    return toOfflinePollView(found, user)
+  }
+
+  if (offlinePollDetailMatch && method === 'DELETE') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only board members can delete poll drafts.')
+    }
+    const pollId = offlinePollDetailMatch[1]
+    const idx = OFFLINE_POLLS.findIndex((p) => p.id === pollId)
+    if (idx === -1) {
+      throw makeOfflineError(404, 'POLL_NOT_FOUND', 'This poll is not available.')
+    }
+    if (OFFLINE_POLLS[idx].status !== 'DRAFT') {
+      throw makeOfflineError(409, 'POLL_NOT_DRAFT', 'Only a draft poll can be deleted.')
+    }
+    OFFLINE_POLLS.splice(idx, 1)
+    return null
+  }
+
+  if (offlinePollDetailMatch && method === 'PATCH') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only board members can extend poll deadlines.')
+    }
+    const pollId = offlinePollDetailMatch[1]
+    const found = OFFLINE_POLLS.find((p) => p.id === pollId)
+    if (!found) {
+      throw makeOfflineError(404, 'POLL_NOT_FOUND', 'This poll is not available.')
+    }
+    if (found.status !== 'OPEN') {
+      throw makeOfflineError(409, 'POLL_NOT_OPEN', 'Only an open poll deadline can be extended.')
+    }
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    const nextClosesAt = typeof reqBody?.closes_at === 'string' ? reqBody.closes_at.trim() : ''
+    const nextMs = new Date(nextClosesAt).getTime()
+    const currentMs = new Date(found.closes_at).getTime()
+    const maxFutureMs = Date.now() + 366 * 86400 * 1000
+    if (!nextClosesAt || Number.isNaN(nextMs) || nextMs <= currentMs || nextMs > maxFutureMs) {
+      throw makeOfflineError(
+        422,
+        'INVALID_DEADLINE',
+        'The new deadline must be later than the current deadline (and at most one year from now).',
+      )
+    }
+    found.closes_at = nextClosesAt
+    return toOfflinePollView(found, user)
+  }
+
+  const offlinePollBallotMatch = pathname.match(/^\/governance\/polls\/([^/]+)\/ballot$/)
+  if (offlinePollBallotMatch && method === 'PUT') {
+    const pollId = offlinePollBallotMatch[1]
+    const found = OFFLINE_POLLS.find((p) => p.id === pollId)
+    if (!found || !isOfflinePollVisibleToUser(found, user)) {
+      throw makeOfflineError(404, 'POLL_NOT_FOUND', 'This poll is not available.')
+    }
+    if (found.status !== 'OPEN' || new Date(found.closes_at).getTime() <= Date.now()) {
+      throw makeOfflineError(409, 'POLL_NOT_OPEN', 'This poll has closed.')
+    }
+
+    const { canAnswer, answerableApartmentIds } = computeOfflinePollAnswerability(found, user)
+    if (!canAnswer) {
+      throw makeOfflineError(403, 'NOT_ELIGIBLE', 'You cannot answer this poll.')
+    }
+
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    let targetApartmentId = null
+    if (found.unit === 'PERSON') {
+      if (reqBody.apartment_id !== undefined && reqBody.apartment_id !== null) {
+        throw makeOfflineError(
+          422,
+          'VALIDATION_ERROR',
+          'apartment_id must not be sent for a PERSON poll.',
+        )
+      }
+    } else {
+      if (reqBody.apartment_id !== undefined && reqBody.apartment_id !== null) {
+        if (!answerableApartmentIds.includes(String(reqBody.apartment_id))) {
+          throw makeOfflineError(403, 'NOT_ELIGIBLE', 'You cannot answer for this apartment.')
+        }
+        targetApartmentId = String(reqBody.apartment_id)
+      } else if (answerableApartmentIds.length === 1) {
+        targetApartmentId = answerableApartmentIds[0]
+      } else {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Select which apartment is answering.')
+      }
+    }
+
+    if (!Array.isArray(reqBody.answers)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'answers must be an array.')
+    }
+
+    const validation = validateOfflineBallotAnswers(found.questions, reqBody.answers)
+    if (!validation.valid) {
+      throw makeOfflineError(422, 'INVALID_ANSWER', 'Invalid answer.', {
+        question_id: validation.questionId,
+        reason: validation.reason,
+      })
+    }
+
+    const nowIso = new Date().toISOString()
+    const normalizedAnswers = validation.normalizedAnswers
+
+    const existingIdx = found.ballots.findIndex((b) =>
+      found.unit === 'APARTMENT'
+        ? b.apartment_id === targetApartmentId
+        : b.user_id === user.user_id,
+    )
+
+    if (existingIdx >= 0) {
+      found.ballots[existingIdx] = {
+        ...found.ballots[existingIdx],
+        updated_at: nowIso,
+        answers: normalizedAnswers,
+      }
+    } else {
+      found.ballots.push({
+        apartment_id: found.unit === 'APARTMENT' ? targetApartmentId : null,
+        user_id: found.unit === 'PERSON' ? user.user_id : null,
+        submitted_at: nowIso,
+        updated_at: nowIso,
+        answers: normalizedAnswers,
+      })
+    }
+
+    return toOfflinePollView(found, user)
+  }
+
+  const offlinePollResultsMatch = pathname.match(/^\/governance\/polls\/([^/]+)\/results$/)
+  if (offlinePollResultsMatch && method === 'GET') {
+    const pollId = offlinePollResultsMatch[1]
+    const found = OFFLINE_POLLS.find((p) => p.id === pollId)
+    if (!found || !isOfflinePollVisibleToUser(found, user)) {
+      throw makeOfflineError(404, 'POLL_NOT_FOUND', 'This poll is not available.')
+    }
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    const resultsAvailable =
+      found.status === 'CLOSED' || (found.status === 'OPEN' && isBoardUser)
+    if (!resultsAvailable) {
+      throw makeOfflineError(
+        409,
+        'RESULTS_NOT_AVAILABLE',
+        'Results are not available for this poll.',
+        { status: found.status },
+      )
+    }
+    return computeOfflinePollResults(found, isBoardUser)
+  }
+
+  return null
+}
+
+function getOfflineNextTwoSaturdays() {
+  const now = new Date()
+  const day = now.getUTCDay()
+  const daysToNextSat = (6 - day + 7) % 7 || 7
+  const sat1 = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysToNextSat),
+  )
+  const sat2 = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysToNextSat + 7),
+  )
+  return [sat1.toISOString().slice(0, 10), sat2.toISOString().slice(0, 10)]
+}
+
+const [OFFLINE_SAT_1, OFFLINE_SAT_2] = getOfflineNextTwoSaturdays()
+
+const OFFLINE_KNOWN_APARTMENT_ENTRANCES = {
+  '018f0000-0000-7000-8000-000000000301': 1,
+  '018f0000-0000-7000-8000-000000000302': 1,
+  '018f0000-0000-7000-8000-000000000305': 1,
+  '018f0000-0000-7000-8000-000000000309': 2,
+  '018f0000-0000-7000-8000-000000000314': 2,
+  '018f0000-0000-7000-8000-000000000315': 2,
+}
+
+const OFFLINE_POLLS = [
+  {
+    id: '018f0000-0000-7000-8000-000000000851',
+    kind: 'INFORMATIVE',
+    title: 'Spring clean-up in the yard',
+    description:
+      'We are planning the annual courtyard clean-up, hedge trimming, and bicycle shed tidying. Please let the board know which Saturday works best for your household and whether any tools or supplies are needed.',
+    status: 'OPEN',
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    eligibility: 'RESIDENTS',
+    unit: 'APARTMENT',
+    closes_at: new Date(Date.now() + 14 * 86400 * 1000).toISOString().slice(0, 11) + '21:59:59Z',
+    opened_at: '2026-10-24T09:00:00Z',
+    closed_at: null,
+    cancelled_at: null,
+    created_at: '2026-10-24T08:45:00Z',
+    questions: [
+      {
+        id: '018f0000-0000-7000-8000-000000000861',
+        position: 1,
+        text: 'Which Saturday suits you?',
+        prompt: 'Which Saturday suits you?',
+        answer_mode: 'MULTIPLE_CHOICE',
+        value_type: 'DATE',
+        required: true,
+        min_choices: 1,
+        max_choices: 2,
+        min_value: null,
+        max_value: null,
+        options: [
+          {
+            id: '018f0000-0000-7000-8000-000000000871',
+            position: 1,
+            value: OFFLINE_SAT_1,
+          },
+          {
+            id: '018f0000-0000-7000-8000-000000000872',
+            position: 2,
+            value: OFFLINE_SAT_2,
+          },
+        ],
+      },
+      {
+        id: '018f0000-0000-7000-8000-000000000862',
+        position: 2,
+        text: 'Anything the board should know?',
+        prompt: 'Anything the board should know?',
+        answer_mode: 'OWN_VALUE',
+        value_type: 'TEXT',
+        required: false,
+        min_choices: null,
+        max_choices: null,
+        min_value: null,
+        max_value: null,
+        options: [],
+      },
+    ],
+    ballots: [
+      {
+        apartment_id: '018f0000-0000-7000-8000-000000000301',
+        user_id: null,
+        submitted_at: '2026-10-24T11:15:00Z',
+        updated_at: '2026-10-24T11:15:00Z',
+        answers: [
+          {
+            question_id: '018f0000-0000-7000-8000-000000000861',
+            option_ids: ['018f0000-0000-7000-8000-000000000871'],
+            value: null,
+          },
+          {
+            question_id: '018f0000-0000-7000-8000-000000000862',
+            option_ids: [],
+            value: 'We can bring two rakes and heavy-duty garden waste bags.',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000852',
+    kind: 'INFORMATIVE',
+    title: 'Courtyard EV charging readiness survey',
+    description:
+      'Informative survey for apartment owners on preparing electrical conduit capacity in the courtyard parking area before the 2027 budget draft.',
+    status: 'OPEN',
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    eligibility: 'OWNERS',
+    unit: 'APARTMENT',
+    closes_at: new Date(Date.now() + 21 * 86400 * 1000).toISOString().slice(0, 11) + '21:59:59Z',
+    opened_at: '2026-10-25T10:00:00Z',
+    closed_at: null,
+    cancelled_at: null,
+    created_at: '2026-10-25T09:30:00Z',
+    questions: [
+      {
+        id: '018f0000-0000-7000-8000-000000000863',
+        position: 1,
+        text: 'Preferred approach for load-shared EV readiness',
+        prompt: 'Preferred approach for load-shared EV readiness',
+        answer_mode: 'SINGLE_CHOICE',
+        value_type: 'TEXT',
+        required: true,
+        min_choices: null,
+        max_choices: null,
+        min_value: null,
+        max_value: null,
+        options: [
+          {
+            id: '018f0000-0000-7000-8000-000000000873',
+            position: 1,
+            value: 'Install shared main cable conduit for all bays in 2027',
+          },
+          {
+            id: '018f0000-0000-7000-8000-000000000874',
+            position: 2,
+            value: 'Phase installation starting with 4 shared charging bays',
+          },
+          {
+            id: '018f0000-0000-7000-8000-000000000875',
+            position: 3,
+            value: 'Postpone until 2028 maintenance plan',
+          },
+        ],
+      },
+      {
+        id: '018f0000-0000-7000-8000-000000000864',
+        position: 2,
+        text: 'Maximum one-time reserve contribution per apartment (EUR)',
+        prompt: 'Maximum one-time reserve contribution per apartment (EUR)',
+        answer_mode: 'OWN_VALUE',
+        value_type: 'NUMBER',
+        required: false,
+        min_choices: null,
+        max_choices: null,
+        min_value: '0',
+        max_value: '1500',
+        options: [],
+      },
+    ],
+    ballots: [
+      {
+        apartment_id: '018f0000-0000-7000-8000-000000000301',
+        user_id: null,
+        submitted_at: '2026-10-25T12:10:00Z',
+        updated_at: '2026-10-25T12:10:00Z',
+        answers: [
+          {
+            question_id: '018f0000-0000-7000-8000-000000000863',
+            option_ids: ['018f0000-0000-7000-8000-000000000873'],
+            value: null,
+          },
+          {
+            question_id: '018f0000-0000-7000-8000-000000000864',
+            option_ids: [],
+            value: '350',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000853',
+    kind: 'INFORMATIVE',
+    title: 'Stairwell LED lighting & motion sensor schedule',
+    description: 'Completed resident poll on stairwell lighting warmth and night dimming hours.',
+    status: 'CLOSED',
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    eligibility: 'RESIDENTS',
+    unit: 'APARTMENT',
+    closes_at: '2026-10-15T20:59:59Z',
+    opened_at: '2026-10-01T09:00:00Z',
+    closed_at: '2026-10-15T21:00:00Z',
+    cancelled_at: null,
+    created_at: '2026-10-01T08:30:00Z',
+    questions: [
+      {
+        id: '018f0000-0000-7000-8000-000000000865',
+        position: 1,
+        text: 'Preferred stairwell colour temperature',
+        prompt: 'Preferred stairwell colour temperature',
+        answer_mode: 'SINGLE_CHOICE',
+        value_type: 'TEXT',
+        required: true,
+        min_choices: null,
+        max_choices: null,
+        min_value: null,
+        max_value: null,
+        options: [
+          {
+            id: '018f0000-0000-7000-8000-000000000876',
+            position: 1,
+            value: 'Warm white (3000K)',
+          },
+          {
+            id: '018f0000-0000-7000-8000-000000000877',
+            position: 2,
+            value: 'Neutral white (4000K)',
+          },
+        ],
+      },
+    ],
+    ballots: [
+      {
+        apartment_id: '018f0000-0000-7000-8000-000000000314',
+        user_id: null,
+        submitted_at: '2026-10-04T18:20:00Z',
+        updated_at: '2026-10-04T18:20:00Z',
+        answers: [
+          {
+            question_id: '018f0000-0000-7000-8000-000000000865',
+            option_ids: ['018f0000-0000-7000-8000-000000000876'],
+            value: null,
+          },
+        ],
+      },
+      {
+        apartment_id: '018f0000-0000-7000-8000-000000000301',
+        user_id: null,
+        submitted_at: '2026-10-03T10:00:00Z',
+        updated_at: '2026-10-03T10:00:00Z',
+        answers: [
+          {
+            question_id: '018f0000-0000-7000-8000-000000000865',
+            option_ids: ['018f0000-0000-7000-8000-000000000876'],
+            value: null,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000854',
+    kind: 'INFORMATIVE',
+    title: 'August courtyard movie evening date',
+    description: 'Cancelled due to scheduled facade inspection scaffolding in the courtyard.',
+    status: 'CANCELLED',
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    eligibility: 'RESIDENTS',
+    unit: 'PERSON',
+    closes_at: '2026-08-20T20:59:59Z',
+    opened_at: '2026-08-10T09:00:00Z',
+    closed_at: null,
+    cancelled_at: '2026-08-12T15:00:00Z',
+    created_at: '2026-08-10T08:30:00Z',
+    questions: [
+      {
+        id: '018f0000-0000-7000-8000-000000000866',
+        position: 1,
+        text: 'Preferred evening date',
+        prompt: 'Preferred evening date',
+        answer_mode: 'SINGLE_CHOICE',
+        value_type: 'DATE',
+        required: true,
+        min_choices: null,
+        max_choices: null,
+        min_value: null,
+        max_value: null,
+        options: [
+          {
+            id: '018f0000-0000-7000-8000-000000000878',
+            position: 1,
+            value: '2026-08-22',
+          },
+        ],
+      },
+    ],
+    ballots: [],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000855',
+    kind: 'INFORMATIVE',
+    title: 'Courtyard playground bench replacement',
+    description:
+      'Draft survey on replacing the two wooden benches next to the courtyard sandbox before spring.',
+    status: 'DRAFT',
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    eligibility: 'RESIDENTS',
+    unit: 'APARTMENT',
+    closes_at: new Date(Date.now() + 28 * 86400 * 1000).toISOString().slice(0, 11) + '21:59:59Z',
+    opened_at: null,
+    closed_at: null,
+    cancelled_at: null,
+    created_at: '2026-10-26T10:00:00Z',
+    questions: [
+      {
+        id: '018f0000-0000-7000-8000-000000000867',
+        position: 1,
+        text: 'Which bench material do you prefer?',
+        prompt: 'Which bench material do you prefer?',
+        answer_mode: 'SINGLE_CHOICE',
+        value_type: 'TEXT',
+        required: true,
+        min_choices: null,
+        max_choices: null,
+        min_value: null,
+        max_value: null,
+        options: [
+          {
+            id: '018f0000-0000-7000-8000-000000000879',
+            position: 1,
+            value: 'Oiled larch timber with backrest',
+          },
+          {
+            id: '018f0000-0000-7000-8000-000000000880',
+            position: 2,
+            value: 'Recycled composite slats with steel frame',
+          },
+        ],
+      },
+    ],
+    ballots: [],
+  },
+]
+
+function isOfflineApartmentTargeted(poll, aptId, entrance) {
+  if (poll.target_scope === 'ALL_BUILDING') return true
+  if (poll.target_scope === 'ENTRANCE') return poll.target_entrance === entrance
+  if (poll.target_scope === 'APARTMENT_LIST') {
+    return Array.isArray(poll.target_apartment_ids) && poll.target_apartment_ids.includes(aptId)
+  }
+  return true
+}
+
+function isOfflinePollVisibleToUser(poll, user) {
+  const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+  if (poll.status === 'DRAFT') return isBoardUser
+  if (isBoardUser || user.building_role === 'ACCOUNTANT') return true
+  const mems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+  return mems.some((m) => isOfflineApartmentTargeted(poll, m.apartment_id, m.entrance))
+}
+
+function computeOfflinePollAnswerability(poll, user) {
+  if (poll.status !== 'OPEN' || new Date(poll.closes_at).getTime() <= Date.now()) {
+    return { canAnswer: false, answerableApartmentIds: [] }
+  }
+  const mems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+  const qualifying = mems.filter((m) => {
+    if (!isOfflineApartmentTargeted(poll, m.apartment_id, m.entrance)) return false
+    if (poll.eligibility === 'OWNERS' && m.relation_type !== 'OWNER') return false
+    return true
+  })
+
+  if (poll.unit === 'PERSON') {
+    return { canAnswer: qualifying.length > 0, answerableApartmentIds: [] }
+  }
+  const sortedIds = qualifying
+    .slice()
+    .sort((a, b) => a.apartment_number.localeCompare(b.apartment_number))
+    .map((m) => m.apartment_id)
+  return { canAnswer: sortedIds.length > 0, answerableApartmentIds: sortedIds }
+}
+
+function computeOfflineMyBallots(poll, user) {
+  if (poll.status === 'CANCELLED') return []
+  if (poll.unit === 'PERSON') {
+    return poll.ballots
+      .filter((b) => b.user_id === user.user_id)
+      .map((b) => ({
+        apartment_id: null,
+        submitted_at: b.submitted_at,
+        updated_at: b.updated_at,
+        answers: b.answers.map((a) => ({
+          question_id: a.question_id,
+          option_ids: [...a.option_ids],
+          value: a.value,
+        })),
+      }))
+  }
+  const mems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+  const visibleAptIds = mems
+    .filter((m) => {
+      if (!isOfflineApartmentTargeted(poll, m.apartment_id, m.entrance)) return false
+      if (poll.eligibility === 'OWNERS' && m.relation_type !== 'OWNER') return false
+      return true
+    })
+    .map((m) => m.apartment_id)
+
+  return poll.ballots
+    .filter((b) => b.apartment_id && visibleAptIds.includes(b.apartment_id))
+    .map((b) => ({
+      apartment_id: b.apartment_id,
+      submitted_at: b.submitted_at,
+      updated_at: b.updated_at,
+      answers: b.answers.map((a) => ({
+        question_id: a.question_id,
+        option_ids: [...a.option_ids],
+        value: a.value,
+      })),
+    }))
+}
+
+function compareOfflinePollsOrder(a, b) {
+  const aOpen = a.status === 'OPEN' ? 0 : 1
+  const bOpen = b.status === 'OPEN' ? 0 : 1
+  if (aOpen !== bOpen) return aOpen - bOpen
+  if (a.status === 'OPEN' && b.status === 'OPEN') {
+    return new Date(a.closes_at).getTime() - new Date(b.closes_at).getTime()
+  }
+  const aRef = a.opened_at || a.created_at
+  const bRef = b.opened_at || b.created_at
+  return new Date(bRef).getTime() - new Date(aRef).getTime()
+}
+
+function toOfflinePollSummary(poll, user) {
+  const { canAnswer, answerableApartmentIds } = computeOfflinePollAnswerability(poll, user)
+  const myBallots = computeOfflineMyBallots(poll, user)
+  const answered =
+    poll.status === 'CANCELLED'
+      ? false
+      : poll.unit === 'APARTMENT' && answerableApartmentIds.length > 0
+        ? answerableApartmentIds.every((id) => myBallots.some((b) => b.apartment_id === id))
+        : myBallots.length > 0
+  const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+  const resultsAvailable =
+    poll.status === 'CLOSED' || (poll.status === 'OPEN' && isBoardUser)
+
+  return {
+    id: poll.id,
+    kind: poll.kind,
+    title: poll.title,
+    description: poll.description,
+    status: poll.status,
+    target_scope: poll.target_scope,
+    target_entrance: poll.target_entrance,
+    target_apartment_ids: poll.target_apartment_ids,
+    eligibility: poll.eligibility,
+    unit: poll.unit,
+    closes_at: poll.closes_at,
+    opened_at: poll.opened_at,
+    closed_at: poll.closed_at,
+    cancelled_at: poll.cancelled_at,
+    created_at: poll.created_at,
+    results_available: resultsAvailable,
+    can_answer: canAnswer,
+    answerable_apartment_ids: answerableApartmentIds,
+    answered,
+  }
+}
+
+function toOfflinePollView(poll, user) {
+  const summary = toOfflinePollSummary(poll, user)
+  const { answered, ...rest } = summary
+  return {
+    ...rest,
+    questions: poll.questions.map((q) => ({
+      ...q,
+      text: q.text || q.prompt,
+      prompt: q.text || q.prompt,
+      options: q.options.map((o) => ({ ...o })),
+    })),
+    my_ballots: computeOfflineMyBallots(poll, user),
+  }
+}
+
+function computeOfflinePollElectorateCount(poll) {
+  const targetedAptIds = Object.entries(OFFLINE_KNOWN_APARTMENT_ENTRANCES)
+    .filter(([aptId, ent]) => isOfflineApartmentTargeted(poll, aptId, ent))
+    .map(([aptId]) => aptId)
+
+  if (poll.unit === 'APARTMENT') {
+    let eligible = 0
+    for (const aptId of targetedAptIds) {
+      if (aptId === '018f0000-0000-7000-8000-000000000305') continue
+      if (aptId === '018f0000-0000-7000-8000-000000000302') {
+        if (poll.eligibility !== 'OWNERS') eligible += 1
+        continue
+      }
+      eligible += 1
+    }
+    return eligible
+  }
+
+  const eligibleUsers = new Set()
+  for (const [uid, mems] of Object.entries(OFFLINE_MEMBERSHIPS_BY_USER)) {
+    const qualifies = mems.some((m) => {
+      if (!targetedAptIds.includes(m.apartment_id)) return false
+      if (poll.eligibility === 'OWNERS' && m.relation_type !== 'OWNER') return false
+      return true
+    })
+    if (qualifies) eligibleUsers.add(uid)
+  }
+  return eligibleUsers.size
+}
+
+function computeOfflinePollResults(poll, isBoardUser) {
+  const electorate = computeOfflinePollElectorateCount(poll)
+  const answeredUnits = poll.ballots.length
+
+  const questions = poll.questions.map((q) => {
+    let qAnswered = 0
+
+    if (q.answer_mode === 'SINGLE_CHOICE' || q.answer_mode === 'MULTIPLE_CHOICE') {
+      const countsByOption = new Map()
+      for (const opt of q.options) {
+        countsByOption.set(opt.id, 0)
+      }
+      for (const ballot of poll.ballots) {
+        const ans = ballot.answers.find((a) => a.question_id === q.id)
+        if (ans && Array.isArray(ans.option_ids) && ans.option_ids.length > 0) {
+          qAnswered += 1
+          for (const oid of ans.option_ids) {
+            if (countsByOption.has(oid)) {
+              countsByOption.set(oid, (countsByOption.get(oid) || 0) + 1)
+            }
+          }
+        }
+      }
+      return {
+        question_id: q.id,
+        answered: qAnswered,
+        options: q.options.map((opt) => ({
+          option_id: opt.id,
+          count: countsByOption.get(opt.id) || 0,
+        })),
+        number: null,
+        dates: null,
+        texts: null,
+      }
+    }
+
+    const rawValues = []
+    for (const ballot of poll.ballots) {
+      const ans = ballot.answers.find((a) => a.question_id === q.id)
+      const val = ans?.value != null ? String(ans.value).trim() : ''
+      if (val !== '') {
+        qAnswered += 1
+        rawValues.push(val)
+      }
+    }
+
+    if (q.value_type === 'NUMBER') {
+      return {
+        question_id: q.id,
+        answered: qAnswered,
+        options: null,
+        number: computeNumberStats(rawValues),
+        dates: null,
+        texts: null,
+      }
+    }
+
+    if (q.value_type === 'DATE') {
+      const dateCounts = new Map()
+      for (const v of rawValues) {
+        dateCounts.set(v, (dateCounts.get(v) || 0) + 1)
+      }
+      const dates = Array.from(dateCounts.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([value, count]) => ({ value, count }))
+      return {
+        question_id: q.id,
+        answered: qAnswered,
+        options: null,
+        number: null,
+        dates,
+        texts: null,
+      }
+    }
+
+    let texts = null
+    if (isBoardUser) {
+      const textCounts = new Map()
+      for (const v of rawValues) {
+        textCounts.set(v, (textCounts.get(v) || 0) + 1)
+      }
+      texts = Array.from(textCounts.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([value, count]) => ({ value, count }))
+    }
+
+    return {
+      question_id: q.id,
+      answered: qAnswered,
+      options: null,
+      number: null,
+      dates: null,
+      texts,
+    }
+  })
+
+  return {
+    poll_id: poll.id,
+    status: poll.status,
+    unit: poll.unit,
+    participation: {
+      answered: answeredUnits,
+      electorate,
+    },
+    questions,
+  }
+}
+
+function validateOfflinePollDraft(body) {
+  const title = typeof body?.title === 'string' ? body.title.trim() : ''
+  if (!title || title.length > 255) {
+    throw makeOfflineError(422, 'VALIDATION_ERROR', 'Title is required.')
+  }
+  const description = typeof body?.description === 'string' ? body.description.trim() : ''
+  const targetScope = body?.target_scope
+  if (!['ALL_BUILDING', 'ENTRANCE', 'APARTMENT_LIST'].includes(targetScope)) {
+    throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target_scope.')
+  }
+  let targetEntrance = null
+  let targetApartmentIds = null
+  if (targetScope === 'ALL_BUILDING') {
+    if (
+      body.target_entrance != null ||
+      (Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0)
+    ) {
+      throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target fields for ALL_BUILDING.')
+    }
+  } else if (targetScope === 'ENTRANCE') {
+    const ent = Number(body.target_entrance)
+    if (!Number.isInteger(ent) || ![1, 2].includes(ent) || body.target_apartment_ids != null) {
+      throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target_entrance.')
+    }
+    targetEntrance = ent
+  } else if (targetScope === 'APARTMENT_LIST') {
+    if (
+      body.target_entrance != null ||
+      !Array.isArray(body.target_apartment_ids) ||
+      body.target_apartment_ids.length === 0
+    ) {
+      throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target_apartment_ids.')
+    }
+    const deduped = Array.from(new Set(body.target_apartment_ids.map((id) => String(id))))
+    for (const aptId of deduped) {
+      if (!OFFLINE_KNOWN_APARTMENT_ENTRANCES[aptId]) {
+        throw makeOfflineError(422, 'INVALID_TARGET', 'Unknown apartment.')
+      }
+    }
+    targetApartmentIds = deduped
+  }
+
+  const eligibility = body?.eligibility
+  const unit = body?.unit
+  const closesAt = typeof body?.closes_at === 'string' ? body.closes_at.trim() : ''
+  if (
+    !['RESIDENTS', 'OWNERS'].includes(eligibility) ||
+    !['APARTMENT', 'PERSON'].includes(unit) ||
+    !closesAt ||
+    Number.isNaN(new Date(closesAt).getTime())
+  ) {
+    throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid poll settings.')
+  }
+
+  const rawQuestions = Array.isArray(body?.questions) ? body.questions : []
+  if (rawQuestions.length < 1 || rawQuestions.length > 20) {
+    throw makeOfflineError(422, 'VALIDATION_ERROR', '1..20 questions required.')
+  }
+
+  const questions = rawQuestions.map((rq, idx) => {
+    const qText = String(rq?.text ?? rq?.prompt ?? '').trim()
+    if (!qText || qText.length > 500) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Question text is required.')
+    }
+    const mode = rq?.answer_mode
+    const vType = rq?.value_type
+    const rawOpts = Array.isArray(rq?.options) ? rq.options : []
+    const options =
+      mode === 'OWN_VALUE'
+        ? []
+        : rawOpts.map((o, oi) => ({
+            id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+            position: oi + 1,
+            value: String(typeof o === 'object' && o !== null ? o.value ?? '' : o ?? '').trim(),
+          }))
+    return {
+      id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+      position: idx + 1,
+      text: qText,
+      prompt: qText,
+      answer_mode: mode,
+      value_type: vType,
+      required: rq?.required !== false,
+      min_choices: mode === 'MULTIPLE_CHOICE' ? (rq?.min_choices ?? 1) : null,
+      max_choices: mode === 'MULTIPLE_CHOICE' ? (rq?.max_choices ?? options.length) : null,
+      min_value: mode === 'OWN_VALUE' && vType !== 'TEXT' ? (rq?.min_value ?? null) : null,
+      max_value: mode === 'OWN_VALUE' && vType !== 'TEXT' ? (rq?.max_value ?? null) : null,
+      options,
+    }
+  })
+
+  return {
+    kind: 'INFORMATIVE',
+    title,
+    description,
+    target_scope: targetScope,
+    target_entrance: targetEntrance,
+    target_apartment_ids: targetApartmentIds,
+    eligibility,
+    unit,
+    closes_at: closesAt,
+    questions,
+  }
+}
+
+const OFFLINE_NOTIFICATION_EVENTS = [
+  'EMERGENCY_PUBLISHED',
+  'EMERGENCY_RESOLVED',
+  'READING_DEADLINE',
+  'PERIOD_REVIEW',
+  'APARTMENT_MESSAGE',
+  'APARTMENT_MESSAGE_TO_BOARD',
+  'POLL_OPENED',
+]
+const OFFLINE_NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
+
+function getOfflineUserPreferences(userId) {
+  if (!offlinePreferencesByUser[userId]) {
+    const list = []
+    for (const event_type of OFFLINE_NOTIFICATION_EVENTS) {
+      for (const channel of OFFLINE_NOTIFICATION_CHANNELS) {
+        list.push({
+          event_type,
+          channel,
+          enabled: event_type === 'APARTMENT_MESSAGE_TO_BOARD' ? channel === 'in_app' : true,
+          mandatory: event_type === 'EMERGENCY_PUBLISHED',
+        })
+      }
+    }
+    offlinePreferencesByUser[userId] = list
+  }
+  return offlinePreferencesByUser[userId]
+}
+
+function getOfflineUserNotifications(userId) {
+  if (!offlineNotificationsByUser[userId]) {
+    const isBoardUser = ['018f0000-0000-7000-8000-000000000101', '018f0000-0000-7000-8000-000000000105'].includes(
+      userId,
+    )
+    const base = [
+      {
+        id: '018f0000-0000-7000-8000-000000009101',
+        event_type: 'EMERGENCY_PUBLISHED',
+        subject_type: 'post',
+        subject_id: '018f0000-0000-7000-8000-000000000701',
+        params: {
+          category: 'WATER_SHUTOFF',
+          target_scope: 'ENTRANCE',
+          target_entrance: 2,
+        },
+        created_at: '2026-10-25T10:00:00Z',
+        read_at: null,
+      },
+      isBoardUser
+        ? {
+            id: '018f0000-0000-7000-8000-000000009105',
+            event_type: 'APARTMENT_MESSAGE_TO_BOARD',
+            subject_type: 'post',
+            subject_id: '018f0000-0000-7000-8000-000000000751',
+            params: {
+              apartment_id: '018f0000-0000-7000-8000-000000000314',
+              apartment_number: '14',
+              from_board: false,
+            },
+            created_at: '2026-10-24T12:40:00Z',
+            read_at: null,
+          }
+        : {
+            id: '018f0000-0000-7000-8000-000000009104',
+            event_type: 'APARTMENT_MESSAGE',
+            subject_type: 'post',
+            subject_id: '018f0000-0000-7000-8000-000000000751',
+            params: {
+              apartment_id: '018f0000-0000-7000-8000-000000000314',
+              apartment_number: '14',
+              from_board: true,
+            },
+            created_at: '2026-10-24T10:15:00Z',
+            read_at: null,
+          },
+      {
+        id: '018f0000-0000-7000-8000-000000009102',
+        event_type: 'READING_DEADLINE',
+        subject_type: 'period',
+        subject_id: '018f0000-0000-7000-8000-000000000010',
+        params: {
+          period_code: '2026-10',
+          due_date: '2026-11-04',
+        },
+        created_at: '2026-10-24T09:00:00Z',
+        read_at: null,
+      },
+      {
+        id: '018f0000-0000-7000-8000-000000009103',
+        event_type: 'PERIOD_REVIEW',
+        subject_type: 'period',
+        subject_id: '018f0000-0000-7000-8000-000000000009',
+        params: {
+          period_code: '2026-09',
+        },
+        created_at: '2026-10-05T12:00:00Z',
+        read_at: '2026-10-05T14:30:00Z',
+      },
+    ]
+
+    if (
+      userId !== '018f0000-0000-7000-8000-000000000101' &&
+      userId !== '018f0000-0000-7000-8000-000000000103'
+    ) {
+      base.splice(1, 0, {
+        id: '018f0000-0000-7000-8000-000000009106',
+        event_type: 'POLL_OPENED',
+        subject_type: 'poll',
+        subject_id: '018f0000-0000-7000-8000-000000000851',
+        params: {
+          closes_at:
+            new Date(Date.now() + 14 * 86400 * 1000).toISOString().slice(0, 11) + '21:59:59Z',
+        },
+        created_at: '2026-10-24T09:05:00Z',
+        read_at: null,
+      })
+    }
+
+    offlineNotificationsByUser[userId] = base
+  }
+  return offlineNotificationsByUser[userId]
+}
+
+function emitOfflinePollOpenedNotifications(poll, openerUser, createdAtIso) {
+  for (const demoUser of OFFLINE_DEMO_USERS) {
+    if (demoUser.user_id === openerUser.user_id) continue
+    const { canAnswer } = computeOfflinePollAnswerability(poll, demoUser)
+    if (!canAnswer) continue
+
+    const prefs = getOfflineUserPreferences(demoUser.user_id)
+    const inAppPref = prefs.find(
+      (p) => p.event_type === 'POLL_OPENED' && p.channel === 'in_app',
+    )
+    if (!inAppPref || inAppPref.enabled) {
+      getOfflineUserNotifications(demoUser.user_id).unshift({
+        id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+        event_type: 'POLL_OPENED',
+        subject_type: 'poll',
+        subject_id: poll.id,
+        params: {
+          closes_at: poll.closes_at,
+        },
+        created_at: createdAtIso,
+        read_at: null,
+      })
+    }
+  }
+}
+
+function validateOfflineBallotAnswers(questions, rawAnswers) {
+  const seenQuestions = new Set()
+  const byQuestionId = new Map()
+
+  for (const item of rawAnswers) {
+    const qId = String(item?.question_id || '')
+    if (seenQuestions.has(qId)) {
+      return { valid: false, questionId: qId, reason: 'DUPLICATE', normalizedAnswers: [] }
+    }
+    const qDef = questions.find((q) => q.id === qId)
+    if (!qDef) {
+      return { valid: false, questionId: qId, reason: 'UNKNOWN_QUESTION', normalizedAnswers: [] }
+    }
+    seenQuestions.add(qId)
+    byQuestionId.set(qId, item)
+  }
+
+  const normalizedAnswers = []
+
+  for (const q of questions) {
+    const item = byQuestionId.get(q.id)
+    const optIds = Array.isArray(item?.option_ids)
+      ? item.option_ids.map((id) => String(id))
+      : []
+    const rawValue = item?.value != null ? String(item.value) : ''
+
+    if (q.answer_mode === 'SINGLE_CHOICE') {
+      if (rawValue !== '') {
+        return { valid: false, questionId: q.id, reason: 'VALUE', normalizedAnswers: [] }
+      }
+      if (optIds.length === 0) {
+        if (q.required) {
+          return { valid: false, questionId: q.id, reason: 'REQUIRED', normalizedAnswers: [] }
+        }
+        continue
+      }
+      if (optIds.length !== 1) {
+        return { valid: false, questionId: q.id, reason: 'CHOICES', normalizedAnswers: [] }
+      }
+      const validIds = new Set(q.options.map((o) => o.id))
+      if (!validIds.has(optIds[0])) {
+        return { valid: false, questionId: q.id, reason: 'UNKNOWN_OPTION', normalizedAnswers: [] }
+      }
+      normalizedAnswers.push({
+        question_id: q.id,
+        option_ids: [optIds[0]],
+        value: null,
+      })
+    } else if (q.answer_mode === 'MULTIPLE_CHOICE') {
+      if (rawValue !== '') {
+        return { valid: false, questionId: q.id, reason: 'VALUE', normalizedAnswers: [] }
+      }
+      if (optIds.length === 0) {
+        if (q.required) {
+          return { valid: false, questionId: q.id, reason: 'REQUIRED', normalizedAnswers: [] }
+        }
+        continue
+      }
+      const uniqueOpts = new Set(optIds)
+      if (uniqueOpts.size !== optIds.length) {
+        return { valid: false, questionId: q.id, reason: 'DUPLICATE', normalizedAnswers: [] }
+      }
+      const validIds = new Set(q.options.map((o) => o.id))
+      for (const id of optIds) {
+        if (!validIds.has(id)) {
+          return { valid: false, questionId: q.id, reason: 'UNKNOWN_OPTION', normalizedAnswers: [] }
+        }
+      }
+      const minC = q.min_choices ?? 1
+      const maxC = q.max_choices ?? q.options.length
+      if (optIds.length < minC || optIds.length > maxC) {
+        return { valid: false, questionId: q.id, reason: 'CHOICES', normalizedAnswers: [] }
+      }
+      normalizedAnswers.push({
+        question_id: q.id,
+        option_ids: [...optIds],
+        value: null,
+      })
+    } else if (q.answer_mode === 'OWN_VALUE') {
+      if (optIds.length > 0) {
+        return { valid: false, questionId: q.id, reason: 'CHOICES', normalizedAnswers: [] }
+      }
+      const trimmed = rawValue.trim()
+      if (trimmed === '') {
+        if (q.required) {
+          return { valid: false, questionId: q.id, reason: 'REQUIRED', normalizedAnswers: [] }
+        }
+        continue
+      }
+      if (q.value_type === 'TEXT') {
+        if (trimmed.length > 2000) {
+          return { valid: false, questionId: q.id, reason: 'VALUE', normalizedAnswers: [] }
+        }
+        normalizedAnswers.push({
+          question_id: q.id,
+          option_ids: [],
+          value: trimmed,
+        })
+      } else if (q.value_type === 'NUMBER') {
+        const canonical = normalizeCanonicalNumber(trimmed)
+        if (!canonical || !isValidCanonicalNumber(canonical)) {
+          return { valid: false, questionId: q.id, reason: 'VALUE', normalizedAnswers: [] }
+        }
+        if (q.min_value != null && compareCanonicalNumbers(canonical, q.min_value) < 0) {
+          return { valid: false, questionId: q.id, reason: 'OUT_OF_RANGE', normalizedAnswers: [] }
+        }
+        if (q.max_value != null && compareCanonicalNumbers(canonical, q.max_value) > 0) {
+          return { valid: false, questionId: q.id, reason: 'OUT_OF_RANGE', normalizedAnswers: [] }
+        }
+        normalizedAnswers.push({
+          question_id: q.id,
+          option_ids: [],
+          value: canonical,
+        })
+      } else if (q.value_type === 'DATE') {
+        if (!isValidCanonicalDate(trimmed)) {
+          return { valid: false, questionId: q.id, reason: 'VALUE', normalizedAnswers: [] }
+        }
+        if (q.min_value != null && trimmed < q.min_value) {
+          return { valid: false, questionId: q.id, reason: 'OUT_OF_RANGE', normalizedAnswers: [] }
+        }
+        if (q.max_value != null && trimmed > q.max_value) {
+          return { valid: false, questionId: q.id, reason: 'OUT_OF_RANGE', normalizedAnswers: [] }
+        }
+        normalizedAnswers.push({
+          question_id: q.id,
+          option_ids: [],
+          value: trimmed,
+        })
+      }
+    }
+  }
+
+  return { valid: true, normalizedAnswers }
+}

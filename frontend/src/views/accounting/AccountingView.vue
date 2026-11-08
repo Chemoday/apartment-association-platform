@@ -40,13 +40,17 @@ const csvSupported = ref(true)
 const historyReadingId = ref('')
 const historyTitle = ref('')
 
+let loadMatrixSeq = 0
+
 async function loadMatrix() {
   if (!session.actingUserId) return
+  const seq = ++loadMatrixSeq
   loading.value = true
   error.value = null
   try {
     if (!periodsList.value.length) {
       const fetchedPeriods = await listPeriods().catch(() => [])
+      if (seq !== loadMatrixSeq) return
       if (Array.isArray(fetchedPeriods) && fetchedPeriods.length > 0) {
         periodsList.value = fetchedPeriods
         if (!fetchedPeriods.some((p) => p.period_code === periodCode.value)) {
@@ -55,11 +59,15 @@ async function loadMatrix() {
       }
     }
     const data = await getPeriodMatrix(periodCode.value)
+    if (seq !== loadMatrixSeq) return
     matrix.value = data
   } catch (err) {
+    if (seq !== loadMatrixSeq) return
     error.value = err
   } finally {
-    loading.value = false
+    if (seq === loadMatrixSeq) {
+      loading.value = false
+    }
   }
 }
 

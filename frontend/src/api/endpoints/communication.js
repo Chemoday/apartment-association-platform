@@ -32,12 +32,13 @@ export function resolveEmergency(postId) {
 
 /**
  * List posts with optional filters and paging.
- * @param {{ post_type?: string | null, category?: string | null, limit?: number, offset?: number }} [params]
+ * @param {{ post_type?: string | null, apartment_id?: string | null, category?: string | null, limit?: number, offset?: number }} [params]
  * @returns {Promise<import('../schema').PostView[]>}
  */
 export function listPosts(params = {}) {
   const search = new URLSearchParams()
   if (params.post_type) search.set('post_type', params.post_type)
+  if (params.apartment_id) search.set('apartment_id', params.apartment_id)
   if (params.category) search.set('category', params.category)
   if (params.limit !== undefined) search.set('limit', String(params.limit))
   if (params.offset !== undefined) search.set('offset', String(params.offset))
@@ -46,7 +47,71 @@ export function listPosts(params = {}) {
 }
 
 /**
- * Create a new post (forum topic, official notice, or emergency).
+ * List private threads between the board and apartments (post_type=APARTMENT_THREAD).
+ * @param {{ apartment_id?: string | null, limit?: number, offset?: number }} [params]
+ * @returns {Promise<import('../schema').PostView[]>}
+ */
+export function listApartmentThreads(params = {}) {
+  return listPosts({
+    ...params,
+    post_type: 'APARTMENT_THREAD',
+  })
+}
+
+/**
+ * Start a new private thread between the board and a single apartment.
+ * Never sends author_apartment_id.
+ * @param {{ apartmentId: string, title: string, body: string, category?: import('../schema').PostCategory }} params
+ * @returns {Promise<import('../schema').PostView>}
+ */
+export function createApartmentThread({ apartmentId, title, body, category = 'GENERAL' }) {
+  return createPost({
+    post_type: 'APARTMENT_THREAD',
+    category,
+    title,
+    body,
+    target_scope: 'APARTMENT_LIST',
+    target_apartment_ids: [apartmentId],
+    comments_enabled: true,
+  })
+}
+
+/**
+ * List board micro-forum topics (post_type=BOARD_TOPIC), newest activity first.
+ * Accessible only to CHAIRMAN and BOARD.
+ * @param {{ category?: string | null, limit?: number, offset?: number }} [params]
+ * @returns {Promise<import('../schema').PostView[]>}
+ */
+export function listBoardTopics(params = {}) {
+  return listPosts({
+    ...params,
+    post_type: 'BOARD_TOPIC',
+  })
+}
+
+/**
+ * Create a new board micro-forum topic (post_type=BOARD_TOPIC).
+ * Never sends target fields or author_apartment_id.
+ * @param {{ title: string, body: string, category?: import('../schema').PostCategory, comments_enabled?: boolean }} params
+ * @returns {Promise<import('../schema').PostView>}
+ */
+export function createBoardTopic({
+  title,
+  body,
+  category = 'GENERAL',
+  comments_enabled = true,
+}) {
+  return createPost({
+    post_type: 'BOARD_TOPIC',
+    category,
+    title,
+    body,
+    comments_enabled,
+  })
+}
+
+/**
+ * Create a new post (forum topic, official notice, emergency, apartment thread, or board topic).
  * @param {import('../schema').PostCreateRequest} payload
  * @returns {Promise<import('../schema').PostView>}
  */
