@@ -38,7 +38,8 @@ From 2026-11-08:
 - **Notifications:** the board is told "a maintenance task is due" (in the app by default; the
   task title may leave the app, it is the board's own text and goes to the board only).
   Residents are told "new notice from the board" with a link and no text, for every official
-  notice, the hand-written ones included; on every channel by default.
+  notice, the hand-written ones included; on every channel by default. So is the board, which
+  learns what a colleague published (owner decision of 2026-11-08, after PR #111).
 - **The log:** the done date, who, a short note and an optional cost (exact euros). The
   accountant reads the log, costs included, but not the tasks and their internal notes.
   Residents see nothing of it.
@@ -85,7 +86,7 @@ A new module with its own tables (`maint_*`). It reads users and badges through
 | `event_type` | Recipients | Default | Mandatory |
 | :--- | :--- | :--- | :--- |
 | `MAINTENANCE_DUE` | the chairman and the board, when a task is published and at each overdue reminder | in-app on, external off | no |
-| `NOTICE_PUBLISHED` | the people the official notice is for, never its author; for every official notice | every channel | no |
+| `NOTICE_PUBLISHED` | the people the official notice is for, and the chairman and the board members (also without an apartment), once each, never its author; for every official notice | every channel | no |
 
 ## 6. Tasks
 

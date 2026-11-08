@@ -1,4 +1,5 @@
-"""The repository is English only; the exceptions are the localization CSVs of the modules."""
+"""The backend is English only; the exceptions are the localization CSVs of the modules and the
+web client synced into frontend/ from its own repository."""
 
 import re
 import shutil
@@ -14,6 +15,9 @@ ALLOWED = {
     "src/modules/maintenance/messages.csv",
 }
 CYRILLIC = re.compile("[\u0400-\u04ff]")
+# The web client is copied from its own repository by the frontend sync; it is localized (its
+# locales include Russian), and its language rules live there.
+SYNCED_CLIENT = "frontend/"
 
 
 def tracked_files() -> list[str]:
@@ -28,7 +32,7 @@ def tracked_files() -> list[str]:
 def test_only_the_localization_files_contain_cyrillic() -> None:
     offenders = []
     for name in tracked_files():
-        if name in ALLOWED:
+        if name in ALLOWED or name.startswith(SYNCED_CLIENT):
             continue
         path = ROOT / name
         try:

@@ -28,7 +28,7 @@ class EmergencyAlertPublished(DomainEvent):
 @dataclass(frozen=True, kw_only=True)
 class OfficialNoticePublished(DomainEvent):
     """An OFFICIAL_NOTICE was published (by hand or by the maintenance calendar); notifications
-    tell the people of its target (NOTICE_PUBLISHED, epic E10)."""
+    tell the people of its target and the board (NOTICE_PUBLISHED, epic E10)."""
 
     post_id: uuid.UUID
     building_id: uuid.UUID

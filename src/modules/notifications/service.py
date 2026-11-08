@@ -93,6 +93,8 @@ _PERIOD_REVIEW_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.ACCOUNTANT)
 _THREAD_BOARD_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
 _ISSUE_BOARD_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
 _MAINTENANCE_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
+# The roles that see every post (communication's sees_all_targets), so the send-time check passes.
+_NOTICE_BOARD_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
 
 
 def _now() -> datetime:
@@ -716,19 +718,23 @@ class NotificationsSubscriber:
             await session.commit()
 
     async def on_notice_published(self, event: OfficialNoticePublished) -> None:
-        """Every official notice: the active users of its target, never its author. The text
-        never leaves the app; the message says only that there is a notice."""
+        """Every official notice: the active users of its target and the board (also without an
+        apartment), once each, never its author. The text never leaves the app; the message says
+        only that there is a notice."""
         async with self._session() as session:
             properties = PropertyService(session)
-            recipients = await properties.resolve_recipients(
+            residents = await properties.resolve_recipients(
                 event.building_id,
                 event.target_scope,
                 event.target_entrance,
                 event.target_apartment_ids,
             )
+            board = await properties.users_with_roles(event.building_id, _NOTICE_BOARD_ROLES)
+            recipients = {r.user_id: r for r in (*residents, *board)}
+            recipients.pop(event.published_by_user_id, None)
             await self.notify(
                 session,
-                [r for r in recipients if r.user_id != event.published_by_user_id],
+                list(recipients.values()),
                 event_type=NotificationEventType.NOTICE_PUBLISHED,
                 dedup_key=notice_published_key(event.post_id),
                 subject=(SubjectType.POST, event.post_id),
