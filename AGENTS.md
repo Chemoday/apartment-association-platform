@@ -19,7 +19,7 @@ All AI coding, testing, and on-call agents operating in this repository MUST fol
 1. **System Architect Agent:** Maintains `docs/*.md`. Any schema or API change must be documented before implementation.
 2. **Core & Backend Agent:** Implements FastAPI modules (`src/core`, `src/modules/*`, `src/plugins/*`). Enforces strict module boundaries and `EventBus` decoupling.
 3. **Frontend Agent:** Builds a clean, mobile-first UI in `frontend/` supporting the 2-step anomaly confirmation modals, emergency alert banners, and chairman matrix view. Works against `docs/openapi.json` and follows `docs/FRONTEND_GUIDE.md`; never changes backend code.
-4. **QA & Observability Agent:** Writes unit tests for `policies.py` and integration tests for API routers. Verifies OpenTelemetry `trace_id` propagation and ensures zero PII leakage.
+4. **QA & Observability Agent:** Writes unit tests for `policies.py` and integration tests for API routers. Verifies OpenTelemetry `trace_id` propagation and ensures zero PII leakage. On the owner's request, the **QA tester** (`.claude/agents/qa-tester.md`) adds tests to code that is already written: it changes only `tests/`, never commits, and marks contract violations it finds as `xfail(strict=True)` for the implementing agent to fix. It is an extra step the owner asks for, not part of every task.
 5. **On-Call Responder Agent:** Activated by monitoring webhooks when user-impact alerts fire. Inspects correlated logs by `trace_id`, writes a regression test, patches the bug, and submits a Pull Request.
 
 ## 3. Non-Negotiable Guardrails
