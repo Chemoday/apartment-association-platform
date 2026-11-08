@@ -3,7 +3,8 @@
 - **Phase:** 2. **Status:** designed with the owner (2026-11-08); tasks I0-I3 below in one pull
   request, photos (I4) after the shared file storage. Builds on E1 (notifications), E7 (login)
   and E8 (the board <-> apartment thread for problems inside a flat). **Epic issue:**
-  [#104](https://github.com/Chemoday/apartment-association-platform/issues/104). Planning record: docs/cli_planning/2026-11-08-issue-tracker.md.
+  [#104](https://github.com/Chemoday/apartment-association-platform/issues/104). Planning record:
+  docs/cli_planning/2026-11-08-issue-tracker.md.
 - **Goal:** a broken light or door closer in a common area is reported once, everyone can see
   that it is known and how it is going, and the board works through the reports in one place
   instead of the forum.
@@ -49,8 +50,8 @@ changed in the app, not in the server's `.env`.
 - **Store:** one row per building and setting (key, JSON value, who changed it and when), in
   `core` so every module can declare its own settings without `property` knowing them.
 - **Declaration:** each module registers its settings in code (key, type, default, bounds), like
-  domain events are registered; only the chairman changes them. Unknown keys are rejected; a missing row means
-  the default, so a new setting needs no migration.
+  domain events are registered; only the chairman changes them. Unknown keys are rejected; a
+  missing row means the default, so a new setting needs no migration.
 - **Reading:** a module asks for its building's value (typed); the request reads it once.
 - **API:** `GET /api/v1/settings` (chairman and board: every setting with its value, default and
   bounds), `PUT /api/v1/settings` (chairman only, a partial map; `422` for an unknown key or a
@@ -130,8 +131,8 @@ changed in the app, not in the server's `.env`.
 ## 6. "+1", following and urgent reports
 
 - **"+1 / I see it too":** any user who sees an open issue may press it once and take it back.
-  It makes them a follower. The reporter is a follower from the start and cannot "+1" their own
-  issue. The list may sort by the number of followers.
+  It makes them a follower. The reporter is a follower from the start; they may stop following
+  and follow again (docs/API.md section 10). The list may sort by the number of followers.
 - **Urgent:** only when the chairman turned on `issues.urgent_enabled`. The reporter ticks it for
   something that cannot wait (no light on the whole staircase at night, water in the basement, a
   door that does not lock). It notifies the board mandatorily on every channel (section 7). The

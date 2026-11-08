@@ -753,7 +753,8 @@ Only the listed combinations change. Response: the same body as the `GET`.
 
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
-`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
+`ISSUE_STATUS_CHANGED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -1707,8 +1708,10 @@ Every endpoint needs a signed-in user.
 - `timeline`: every status with its time, oldest first: `{"status", "at", "action",
   "changed_by"}`. For the chairman and the board it is the action log: `action` is `STATUS`, or
   `URGENT_CLEARED` when the board cleared the urgent flag (such entries keep the current
-  `status`), and `changed_by` the privacy badge of section 0. For everyone else `action` is
-  always `STATUS`, `changed_by` is `null`, and `URGENT_CLEARED` entries are left out.
+  `status`), and `changed_by` the privacy badge of section 0 without an apartment context (a
+  resident who reported shows `role_badge` `RESIDENT`, also an owner). For everyone else
+  `action` is always `STATUS`, `changed_by` is `null`, and `URGENT_CLEARED` entries are left
+  out.
 - `reporter`: `null` for everyone except the chairman and the board, who get
   `{"badge": AuthorBadge, "apartment_id": "uuid" | null}`. The badge is the privacy badge of
   section 0 (the reporter's mode in that apartment), never a raw name or contacts;
@@ -1742,7 +1745,8 @@ Reports an issue; `201` with the `IssueView`. The reporter follows it from the s
   own, else `422 INVALID_AUTHOR_APARTMENT`. The chairman and the board report without an
   apartment when they send `"apartment_id": null` explicitly (or have none); then the report
   counts for no apartment.
-- `entrance`: one of `GET /issues/form` `entrances`, or `null`; else `422 INVALID_LOCATION`.
+- `entrance`: one of `GET /issues/form` `entrances`, or `null`. Another number from 1 up:
+  `422 INVALID_LOCATION`; 0 or less: `422 VALIDATION_ERROR` (the field's minimum is 1).
 - **Limits per apartment:** at most `issues.reports_per_apartment_per_day` reports from the same
   apartment in the last 24 hours (whoever in it filed them; withdrawn ones count), of them at
   most `issues.urgent_per_apartment_per_day` urgent. Over a limit: `429 RATE_LIMITED` with
