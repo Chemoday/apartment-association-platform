@@ -644,3 +644,79 @@ and per cleared urgent flag.)*
 - A status change locks the issue (`FOR UPDATE`); marking a duplicate also locks the original, the
   two rows in id order, so two board members merging in opposite directions cannot deadlock or
   make a cycle.
+
+---
+
+## 11. Module: `maintenance` (epic E10: the maintenance calendar and log)
+
+*Design: docs/epics/E10_MAINTENANCE_CALENDAR.md. API: docs/API.md section 11. Migration 020.
+Users are referenced by id only; names come from `PropertyService`.*
+
+### Table: `maint_tasks`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `title` | `VARCHAR(120)` | `NOT NULL, CHECK not blank` | |
+| `instructions` | `TEXT` | `NOT NULL, DEFAULT ''` | Board-only notes, up to 4000 characters (checked by the API) |
+| `period_unit` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('DAY', 'MONTH', 'YEAR')` | |
+| `period_count` | `INTEGER` | `NOT NULL, CHECK BETWEEN 1 AND 3650` | Bounds per unit checked by the API |
+| `lead_days` | `INTEGER` | `NOT NULL, CHECK BETWEEN 0 AND 90` | |
+| `anchor_date` | `DATE` | `NOT NULL` | Occurrence k falls on anchor + k periods |
+| `anchor_day` | `INTEGER` | `NOT NULL, CHECK BETWEEN 1 AND 31` | The rhythm's day of the month, clamped in shorter months; kept when a new period re-anchors on a clamped date |
+| `status` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('ACTIVE', 'PAUSED', 'ARCHIVED')` | |
+| `notice_title` | `VARCHAR(255)` | `NULLABLE` | The residents' notice; all `notice_*` columns are set together or not at all |
+| `notice_body` | `TEXT` | `NULLABLE` | |
+| `notice_category` | `VARCHAR(50)` | `NULLABLE` | A post category |
+| `notice_target_scope` | `VARCHAR(32)` | `NULLABLE` | Target as for `comm_posts`, the same consistency check |
+| `notice_target_entrance` | `INTEGER` | `NULLABLE` | |
+| `notice_target_apartment_ids` | `JSONB` | `NULLABLE` | |
+| `notice_comments_enabled` | `BOOLEAN` | `NULLABLE` | |
+| `created_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
+| `updated_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `archived_at` | `TIMESTAMPTZ` | `NULLABLE` | Set exactly when `ARCHIVED` |
+
+- `ix_maint_tasks_building_status`: `(building_id, status)`.
+
+### Table: `maint_occurrences`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `task_id` | `UUID` | `FK(maint_tasks.id), NOT NULL` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `seq` | `INTEGER` | `NOT NULL, CHECK >= 0` | k of the schedule from the task's current anchor |
+| `due_date` | `DATE` | `NOT NULL` | |
+| `status` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('OPEN', 'DONE', 'SKIPPED', 'CANCELLED')` | |
+| `closed_at` | `TIMESTAMPTZ` | `NULLABLE` | Set exactly when not `OPEN` |
+| `published_at` | `TIMESTAMPTZ` | `NULLABLE` | Task M2: when the board topic went out |
+| `board_post_id` | `UUID` | `NULLABLE` | Task M2: the board topic (`comm_posts.id`, no FK across modules) |
+| `notice_post_id` | `UUID` | `NULLABLE` | Task M2: the residents' notice |
+| `notice_failed` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Task M2: the notice target was no longer valid |
+| `last_reminded_on` | `DATE` | `NULLABLE` | Task M2: the local date of the last reminder |
+| `reminder_count` | `INTEGER` | `NOT NULL, DEFAULT 0` | Task M2: overdue reminders sent |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- `uq_maint_occurrences_one_open`: unique `(task_id) WHERE status = 'OPEN'`.
+- `ix_maint_occurrences_open_due`: `(due_date) WHERE status = 'OPEN'`, for the publisher (M2).
+
+### Table: `maint_log_entries`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `task_id` | `UUID` | `FK(maint_tasks.id), NOT NULL` | |
+| `occurrence_id` | `UUID` | `FK(maint_occurrences.id), NOT NULL, UNIQUE` | |
+| `kind` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('DONE', 'SKIPPED')` | |
+| `closed_on` | `DATE` | `NOT NULL` | The done date, or the skip date |
+| `note` | `VARCHAR(1000)` | `NOT NULL, DEFAULT ''` | Required (not blank) for `SKIPPED`, checked by the API |
+| `cost` | `NUMERIC(12,2)` | `NULLABLE, CHECK >= 0` | Only for `DONE` (`ck_maint_log_entries_cost_done`) |
+| `recorded_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
+| `updated_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- `ix_maint_log_entries_building_closed`: `(building_id, closed_on)`;
+  `ix_maint_log_entries_task_closed`: `(task_id, closed_on)`.
+- Every write to a task or its occurrences locks the task row (`FOR UPDATE`), so two board
+  members closing the same occurrence get one entry and one `409 OCCURRENCE_CLOSED`; an edit of a
+  log entry locks that entry.

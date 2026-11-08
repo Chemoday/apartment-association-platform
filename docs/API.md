@@ -24,8 +24,8 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 401 | `NOT_AUTHENTICATED` / `INVALID_TOKEN` / `UNKNOWN_USER` | No credentials, a bad or expired token, or an unknown or inactive user (sent with `WWW-Authenticate: Bearer`) |
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
-| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` | The request is valid, but conflicts with the current state |
+| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
 | 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION`, `INVALID_DUPLICATE` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
@@ -1828,3 +1828,163 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (ta
 | 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` |
 | 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE` |
 | 429 | `RATE_LIMITED` |
+
+## 11. Maintenance calendar and log (`maintenance`), epic E10
+
+Recurring maintenance of the building: the board enters tasks ("inspect the fire extinguishers
+every 12 months"), marks each occurrence done or skipped, and keeps a log. Design and owner
+decisions: docs/epics/E10_MAINTENANCE_CALENDAR.md. Task M1 (this section) covers the tasks, the
+occurrences and the log; publishing reminders and notices follows in task M2, notifications in
+M3. Every endpoint needs a signed-in user. The chairman and the board use every endpoint; the
+accountant reads the log only (`GET /log`); anyone else gets `403 FORBIDDEN`. Another building's
+task: `404 MAINTENANCE_TASK_NOT_FOUND`. Dates are calendar dates (`YYYY-MM-DD`) in the instance
+time zone (`INSTANCE_TIMEZONE`).
+
+### Task object (`TaskView`)
+```json
+{
+  "id": "uuid",
+  "title": "Inspect the fire extinguishers",
+  "instructions": "Basement and every landing. The key is in the board's box.",
+  "period_unit": "MONTH",
+  "period_count": 12,
+  "lead_days": 14,
+  "anchor_date": "2027-04-15",
+  "status": "ACTIVE",
+  "notice": {
+    "title": "Fire extinguishers are inspected",
+    "body": "The service company checks every extinguisher on the stairs.",
+    "category": "MAINTENANCE",
+    "target_scope": "ALL_BUILDING",
+    "target_entrance": null,
+    "target_apartment_ids": null,
+    "comments_enabled": false
+  },
+  "current": {
+    "occurrence_id": "uuid",
+    "due_date": "2027-04-15",
+    "publish_on": "2027-04-01",
+    "state": "UPCOMING"
+  },
+  "last_closed_on": null,
+  "created_at": "2026-11-08T10:00:00Z",
+  "updated_at": "2026-11-08T10:00:00Z",
+  "archived_at": null
+}
+```
+- `period_unit`: `DAY` (`period_count` 7..3650), `MONTH` (1..120) or `YEAR` (1..10). Every
+  occurrence is counted from `anchor_date` and keeps the rhythm's day of the month: monthly from
+  31 January gives 28 (or 29) February, then 31 March; yearly from 29 February gives 28 February
+  in common years.
+- `lead_days`: 0..90 and shorter than the period (DAY: the count; MONTH: 28 x the count; YEAR:
+  365 x the count). Reminders and the notice go out `lead_days` before the due date (task M2).
+- `instructions`: the board's internal notes (0..4000 characters); never shown to residents.
+- `notice`: an official notice for residents published with each occurrence (task M2), or
+  `null`. `title` 1..255, `body` 1..10000, `category` a post category (default `MAINTENANCE`),
+  the target fields as for posts (section 4), `comments_enabled` (default `false`).
+- `status`: `ACTIVE`, `PAUSED` or `ARCHIVED`.
+- `current`: the open occurrence (`null` once archived). `publish_on` is `due_date - lead_days`.
+  `state`: `UPCOMING` (before `publish_on`), `DUE` (from `publish_on` up to the due date),
+  `OVERDUE` (after the due date), `PAUSED` (the task is paused).
+- `last_closed_on`: the date the last occurrence was done or skipped, or `null`.
+
+### `GET /api/v1/maintenance/tasks?status=ACTIVE&state=OVERDUE&limit=50&offset=0`
+The building's tasks as `TaskView`. Without `status`: active and paused tasks. Ordered by the
+current due date (archived ones: newest `archived_at` first). `state` filters by the current
+occurrence's state; `limit` 1..100, `offset` 0..100000.
+
+### `POST /api/v1/maintenance/tasks`
+Creates a task; `201` with the `TaskView`.
+```json
+{
+  "title": "Inspect the fire extinguishers",
+  "instructions": "Basement and every landing.",
+  "period_unit": "MONTH",
+  "period_count": 12,
+  "lead_days": 14,
+  "first_due_date": "2027-04-15",
+  "notice": null
+}
+```
+- `first_due_date` becomes the anchor and the first occurrence. It may be up to 366 days in the
+  past (the task is then overdue at once) and at most 10 years ahead, else `422 VALIDATION_ERROR`.
+- A notice target that does not fit the building (an unknown entrance or apartment):
+  `422 INVALID_TARGET` (with `unknown_apartment_ids` for unknown apartments, as for posts). Other problems: `422 VALIDATION_ERROR` (unknown fields are rejected).
+
+### `GET /api/v1/maintenance/tasks/{task_id}`
+The `TaskView`.
+
+### `PATCH /api/v1/maintenance/tasks/{task_id}`
+Changes any of `title`, `instructions`, `lead_days`, `notice` (an object replaces it, `null`
+removes it), `period_unit` with `period_count` (both together), and `next_due_date`. Returns the
+`TaskView`. `null` is refused (`422 VALIDATION_ERROR`) for every field except `notice` and
+`instructions`; a field sent with its current value changes nothing.
+- A new period continues from the current due date, which becomes the anchor; the rhythm keeps
+  its day of the month (a task of the 31st stays on the 31st).
+- `next_due_date` moves the open occurrence (same bounds as `first_due_date`) and becomes the
+  anchor with its day. Send `occurrence_id` (the shown `current.occurrence_id`) with it: if
+  someone closed that occurrence meanwhile, `409 OCCURRENCE_CLOSED` with
+  `current_occurrence_id` instead of moving the next one.
+- An archived task: `409 TASK_ARCHIVED`.
+
+### `POST /api/v1/maintenance/tasks/{task_id}/pause`, `.../resume` and `.../archive`
+- `pause`: `ACTIVE` -> `PAUSED` (nothing is published while paused). `resume`: `PAUSED` ->
+  `ACTIVE`, optionally with `{"next_due_date": "...", "occurrence_id": "..."}`. `archive`: an active or paused task ->
+  `ARCHIVED` for good; its open occurrence is cancelled; the log stays.
+- Any other state: `409 INVALID_TASK_TRANSITION` with `status`. Returns the `TaskView`.
+
+### `POST /api/v1/maintenance/tasks/{task_id}/done` and `.../skip`
+Closes the open occurrence and opens the next one; `201` with `{"entry": LogEntryView,
+"task": TaskView}`.
+```json
+{"occurrence_id": "uuid", "done_on": "2027-04-20", "note": "All 14 checked.", "cost": "145.00"}
+```
+- `done`: `done_on` not in the future, at most 366 days before the planned date and not before
+  the task's last closed occurrence; `note` 0..1000;
+  `cost` optional, a decimal string with up to 2 decimals (`"145"`, `"145.50"`), 0 or more.
+- `skip`: `{"occurrence_id": "uuid", "note": "The roof is being replaced"}`; `note` is required
+  (1..1000); the skip date is today.
+- The next due date keeps the planned rhythm: the first date of the schedule after both the
+  planned date and `done_on` (a task done very late does not leave missed dates behind; one done
+  early keeps its rhythm).
+- `occurrence_id` must be the task's open occurrence, else `409 OCCURRENCE_CLOSED` with
+  `current_occurrence_id` (someone else closed it meanwhile). An archived task:
+  `409 TASK_ARCHIVED`. A paused task may be marked done or skipped.
+
+### Log entry object (`LogEntryView`)
+```json
+{
+  "id": "uuid",
+  "task_id": "uuid",
+  "task_title": "Inspect the fire extinguishers",
+  "kind": "DONE",
+  "planned_date": "2027-04-15",
+  "closed_on": "2027-04-20",
+  "note": "All 14 checked.",
+  "cost": "145.00",
+  "recorded_by": {"display_label": "Oleg Sidorov", "role_badge": "BOARD"},
+  "recorded_at": "2027-04-20T15:00:00Z",
+  "updated_at": "2027-04-20T15:00:00Z",
+  "updated_by": null
+}
+```
+- `kind`: `DONE` or `SKIPPED`. `cost`: a decimal string with 2 decimals, or `null` (always `null`
+  for `SKIPPED`).
+- `recorded_by` / `updated_by`: who wrote or last changed the entry, by full name (the board acts
+  publicly for the association, as in the board's micro-forum, section 4).
+
+### `GET /api/v1/maintenance/log?task_id=&from=2027-01-01&to=2027-12-31&limit=50&offset=0`
+The chairman, the board and the accountant. Entries newest `closed_on` first; `from` / `to` filter
+`closed_on` (inclusive).
+
+### `PATCH /api/v1/maintenance/log/{entry_id}` (chairman and board)
+Changes `note` and `cost` (`cost` on a `SKIPPED` entry: `422 VALIDATION_ERROR`); `closed_on` never
+changes, because the schedule depends on it. `404 LOG_ENTRY_NOT_FOUND`.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 404 | `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND` |
+| 409 | `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` |
+| 422 | `VALIDATION_ERROR`, `INVALID_TARGET` |

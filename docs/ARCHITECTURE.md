@@ -332,3 +332,19 @@ section 10.
   there.
 - **Limits:** counted per apartment from `iss_issues` (no separate counter); a transaction-scoped
   advisory lock on the apartment serializes concurrent reports.
+
+## 8. Module `maintenance` (epic E10)
+
+Design: docs/epics/E10_MAINTENANCE_CALENDAR.md. Tables: docs/SCHEMA.md section 11. API:
+docs/API.md section 11.
+
+- **Place:** reads users and badges through `PropertyService` (`get_named_author_badges` for the
+  log), validates the notice target through `CommunicationService.notice_target_problem` (task
+  M1), and in task M2 publishes posts through `CommunicationService` as a current board member.
+  No other module imports it until task M3 (notifications).
+- **Rules as pure functions** in `maintenance/policies.py`: month arithmetic with day clamping,
+  always from the anchor date; the next occurrence after done or skip (the first schedule date
+  after both the planned and the done date, found in closed form with a bounded correction); the
+  shown state; the period and lead-time bounds.
+- **Time:** due dates are calendar dates in `INSTANCE_TIMEZONE`; "today" is the local date of
+  now, so a change of daylight saving time never moves them.
