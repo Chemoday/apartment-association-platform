@@ -28,6 +28,7 @@ from src.modules.auth.router import router as auth_router
 from src.modules.communication.router import router as communication_router
 from src.modules.governance.router import router as governance_router
 from src.modules.issues.router import router as issues_router
+from src.modules.maintenance.router import router as maintenance_router
 from src.modules.meters.router import router as meters_router
 from src.modules.notifications.dispatcher import (
     Dispatcher,
@@ -105,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(governance_router)
     app.include_router(settings_router)
     app.include_router(issues_router)
+    app.include_router(maintenance_router)
     # One registry per app instance, so enabling a plugin never leaks between apps or tests.
     # Plugins with incomplete settings raise here, so the app does not start half-configured.
     plugins = build_plugin_registry(settings)
