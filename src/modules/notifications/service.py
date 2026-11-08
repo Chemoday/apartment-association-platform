@@ -32,6 +32,8 @@ from src.modules.communication.events import (
 from src.modules.communication.service import CommunicationService
 from src.modules.governance.events import PollOpened
 from src.modules.governance.service import GovernanceService
+from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
+from src.modules.issues.service import IssuesService
 from src.modules.meters.events import ReadingPeriodStatusChanged
 from src.modules.meters.schemas import PeriodStatus
 from src.modules.notifications.models import ChannelBinding, Delivery, LinkCode, Preference
@@ -45,6 +47,8 @@ from src.modules.notifications.policies import (
     external_channels_allowed,
     is_enabled,
     is_mandatory,
+    issue_reported_key,
+    issue_status_key,
     period_review_key,
     poll_opened_key,
     priority_for,
@@ -82,6 +86,7 @@ _EMERGENCY_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
 _PERIOD_REVIEW_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.ACCOUNTANT)
 # Candidates for APARTMENT_MESSAGE_TO_BOARD; communication's visibility rule has the last word.
 _THREAD_BOARD_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
+_ISSUE_BOARD_ROLES = (BuildingRole.CHAIRMAN, BuildingRole.BOARD)
 
 
 def _now() -> datetime:
@@ -410,6 +415,9 @@ class NotificationsSubscriber:
         bus.subscribe(ReadingPeriodStatusChanged, self.on_period_status_changed)
         bus.subscribe(ApartmentMessagePosted, self.on_apartment_message)
         bus.subscribe(PollOpened, self.on_poll_opened)
+        bus.subscribe(IssueReported, self.on_issue_reported)
+        bus.subscribe(IssueStatusChanged, self.on_issue_status_changed)
+        bus.subscribe(IssueMerged, self.on_issue_merged)
         bus.subscribe(UserAccountClosed, self.on_account_closed)
 
     async def on_account_closed(self, event: UserAccountClosed) -> None:
@@ -594,6 +602,110 @@ class NotificationsSubscriber:
             )
             await session.commit()
 
+    async def on_issue_reported(self, event: IssueReported) -> None:
+        """A new report: the chairman and the board, never the reporter. An urgent one is
+        mandatory (ISSUE_URGENT instead of ISSUE_REPORTED). A report that ended before the event
+        is processed (withdrawn) notifies nobody."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            issue = await IssuesService(session, properties).get_issue_ref(event.issue_id)
+            if issue is None or not issue.is_open:
+                return
+            board = await properties.users_with_roles(issue.building_id, _ISSUE_BOARD_ROLES)
+            event_type = (
+                NotificationEventType.ISSUE_URGENT
+                if event.urgent
+                else NotificationEventType.ISSUE_REPORTED
+            )
+            await self.notify(
+                session,
+                [r for r in board if r.user_id != event.reporter_user_id],
+                event_type=event_type,
+                dedup_key=issue_reported_key(event.issue_id),
+                subject=(SubjectType.ISSUE, event.issue_id),
+                params={"category": issue.category.value, "entrance": issue.entrance},
+            )
+            await session.commit()
+
+    async def on_issue_status_changed(self, event: IssueStatusChanged) -> None:
+        """The board moved an issue on: its followers who still see it, never the actor."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            issues = IssuesService(session, properties)
+            issue = await issues.get_issue_ref(event.issue_id)
+            if issue is None:
+                return
+            await self._notify_followers(
+                session,
+                properties,
+                issues,
+                followers_of=event.issue_id,
+                subject_id=event.issue_id,
+                actor=event.changed_by_user_id,
+                dedup_key=issue_status_key(event.change_id),
+                params={
+                    "category": issue.category.value,
+                    "entrance": issue.entrance,
+                    "status": event.status,
+                    "merged": False,
+                },
+            )
+            await session.commit()
+
+    async def on_issue_merged(self, event: IssueMerged) -> None:
+        """A duplicate was merged: its followers (who now follow the original) are told once,
+        about the issue they followed, with a link to the original."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            issues = IssuesService(session, properties)
+            duplicate = await issues.get_issue_ref(event.issue_id)
+            if duplicate is None:
+                return
+            await self._notify_followers(
+                session,
+                properties,
+                issues,
+                followers_of=event.issue_id,
+                subject_id=event.original_id,
+                actor=event.changed_by_user_id,
+                dedup_key=issue_status_key(event.change_id),
+                params={
+                    "category": duplicate.category.value,
+                    "entrance": duplicate.entrance,
+                    "status": "DUPLICATE",
+                    "merged": True,
+                },
+            )
+            await session.commit()
+
+    async def _notify_followers(
+        self,
+        session: AsyncSession,
+        properties: PropertyService,
+        issues: IssuesService,
+        *,
+        followers_of: uuid.UUID,
+        subject_id: uuid.UUID,
+        actor: uuid.UUID,
+        dedup_key: str,
+        params: dict[str, Any],
+    ) -> None:
+        readers = []
+        for user_id in await issues.follower_ids(followers_of):
+            if user_id == actor:
+                continue
+            user = await properties.get_current_user(user_id)
+            if user is not None and await issues.can_see(user, subject_id):
+                readers.append(user_id)
+        await self.notify(
+            session,
+            await properties.get_recipients(readers),
+            event_type=NotificationEventType.ISSUE_STATUS_CHANGED,
+            dedup_key=dedup_key,
+            subject=(SubjectType.ISSUE, subject_id),
+            params=params,
+        )
+
     @staticmethod
     async def _can_read(
         properties: PropertyService,
@@ -615,9 +727,9 @@ class NotificationsSubscriber:
         params: dict[str, Any],
         now: datetime | None = None,
     ) -> None:
-        """Insert a non-mandatory notification for these recipients on every channel they want
-        and can be reached on (in the caller's transaction; the caller commits). Also used by
-        the scheduler for reading reminders."""
+        """Insert a notification for these recipients on every channel they want (a mandatory one
+        on every channel) and can be reached on, in the caller's transaction (the caller
+        commits). Also used by the scheduler for reading reminders."""
         recipients = list(recipients)
         rows = {
             "event_type": event_type,

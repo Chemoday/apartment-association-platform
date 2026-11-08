@@ -36,6 +36,7 @@ from src.modules.communication.events import (
 )
 from src.modules.communication.schemas import PostCategory, PostType, TargetScope
 from src.modules.governance.events import PollOpened
+from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
 from src.modules.meters.events import MeterReadingSubmitted, ReadingPeriodStatusChanged
 from src.modules.meters.schemas import PeriodStatus, ReadingSource
 from src.modules.property.models import Building
@@ -83,6 +84,23 @@ def _samples() -> dict[str, DomainEvent]:
             post_id=post, building_id=building, resolved_by_user_id=user
         ),
         "PollOpened": PollOpened(poll_id=post, building_id=building, opened_by_user_id=user),
+        "IssueReported": IssueReported(
+            issue_id=post, building_id=building, reporter_user_id=user, urgent=True
+        ),
+        "IssueStatusChanged": IssueStatusChanged(
+            issue_id=post,
+            building_id=building,
+            change_id=uuid.uuid4(),
+            changed_by_user_id=user,
+            status="RESOLVED",
+        ),
+        "IssueMerged": IssueMerged(
+            issue_id=post,
+            original_id=building,
+            building_id=building,
+            change_id=uuid.uuid4(),
+            changed_by_user_id=user,
+        ),
         "PostDeleted": PostDeleted(
             post_id=post,
             building_id=building,

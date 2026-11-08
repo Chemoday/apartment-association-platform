@@ -39,6 +39,10 @@ class NotificationEventType(StrEnum):
     APARTMENT_MESSAGE_TO_BOARD = "APARTMENT_MESSAGE_TO_BOARD"
     # A poll was opened (epic E3): to everyone who may answer it.
     POLL_OPENED = "POLL_OPENED"
+    # The issue tracker (epic E9): new reports to the board, status changes to the followers.
+    ISSUE_REPORTED = "ISSUE_REPORTED"
+    ISSUE_URGENT = "ISSUE_URGENT"
+    ISSUE_STATUS_CHANGED = "ISSUE_STATUS_CHANGED"
 
 
 class DeliveryStatus(StrEnum):
@@ -53,6 +57,7 @@ class SubjectType(StrEnum):
     POST = "post"
     PERIOD = "period"
     POLL = "poll"
+    ISSUE = "issue"
 
 
 class UnavailableReason(StrEnum):

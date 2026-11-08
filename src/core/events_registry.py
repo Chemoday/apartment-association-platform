@@ -25,6 +25,7 @@ _MODULE_EVENT_MODULES = (
     "src.modules.auth.events",
     "src.modules.communication.events",
     "src.modules.governance.events",
+    "src.modules.issues.events",
     "src.modules.meters.events",
 )
 

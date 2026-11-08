@@ -9479,7 +9479,10 @@
           "PERIOD_REVIEW",
           "APARTMENT_MESSAGE",
           "APARTMENT_MESSAGE_TO_BOARD",
-          "POLL_OPENED"
+          "POLL_OPENED",
+          "ISSUE_REPORTED",
+          "ISSUE_URGENT",
+          "ISSUE_STATUS_CHANGED"
         ],
         "title": "NotificationEventType"
       },
@@ -10764,7 +10767,7 @@
               "$ref": "#/components/schemas/PreferenceChange"
             },
             "type": "array",
-            "maxItems": 28,
+            "maxItems": 40,
             "title": "Preferences"
           }
         },
@@ -11948,7 +11951,8 @@
         "enum": [
           "post",
           "period",
-          "poll"
+          "poll",
+          "issue"
         ],
         "title": "SubjectType"
       },

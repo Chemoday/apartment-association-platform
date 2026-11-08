@@ -46,8 +46,8 @@ def test_the_default_matrix_covers_every_combination() -> None:
     assert all(DEFAULT_PREFERENCES[(e, C.IN_APP)] for e in E)
 
 
-def test_only_the_published_emergency_is_mandatory() -> None:
-    assert [e for e in E if is_mandatory(e)] == [E.EMERGENCY_PUBLISHED]
+def test_only_the_emergency_and_an_urgent_issue_are_mandatory() -> None:
+    assert [e for e in E if is_mandatory(e)] == [E.EMERGENCY_PUBLISHED, E.ISSUE_URGENT]
 
 
 def test_a_stored_preference_overrides_the_default_except_for_mandatory_events() -> None:
@@ -58,9 +58,10 @@ def test_a_stored_preference_overrides_the_default_except_for_mandatory_events()
     assert is_enabled(E.READING_DEADLINE, C.IN_APP, stored) is True  # default
 
 
-def test_only_the_emergency_jumps_the_queue() -> None:
-    assert priority_for(E.EMERGENCY_PUBLISHED) == 0
-    assert {priority_for(e) for e in E if e != E.EMERGENCY_PUBLISHED} == {1}
+def test_only_the_mandatory_events_jump_the_queue() -> None:
+    first = {E.EMERGENCY_PUBLISHED, E.ISSUE_URGENT}
+    assert {priority_for(e) for e in first} == {0}
+    assert {priority_for(e) for e in E if e not in first} == {1}
 
 
 def test_dedup_keys() -> None:

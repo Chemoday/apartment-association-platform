@@ -25,8 +25,10 @@ from sqlalchemy.dialects.postgresql import UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.building_settings import BuildingSettings
-from src.core.database import DbSession
+from src.core.database import DbSession, get_event_outbox
+from src.core.event_bus import EventOutbox
 from src.core.exceptions import DomainError
+from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
 from src.modules.issues.models import Issue, IssueFollower, IssueStatusChange
 from src.modules.issues.policies import (
     ENDED_STATUSES,
@@ -48,6 +50,7 @@ from src.modules.issues.schemas import (
     IssueCategory,
     IssueEdit,
     IssueForm,
+    IssueRefDTO,
     IssueReport,
     IssueStatus,
     IssueSummary,
@@ -135,10 +138,58 @@ def _rate_limited(wait: int) -> DomainError:
 
 
 class IssuesService:
-    def __init__(self, session: AsyncSession, property_service: PropertyService):
+    def __init__(
+        self,
+        session: AsyncSession,
+        property_service: PropertyService,
+        outbox: EventOutbox | None = None,
+    ):
         self.session = session
         self.property_service = property_service
         self.settings = BuildingSettings(session)
+        # Events go out only after the request's transaction commits. None only for
+        # system-level readers (the notifications module), which never write.
+        self.outbox = outbox
+
+    # --- System-level reads (no request caller; used by the notifications module) ---------------
+
+    async def get_issue_ref(self, issue_id: uuid.UUID) -> IssueRefDTO | None:
+        """The issue's state now, for the texts and the send-time checks. None if unknown."""
+        issue = await self.session.get(Issue, issue_id, populate_existing=True)
+        if issue is None:
+            return None
+        return IssueRefDTO(
+            issue_id=issue.id,
+            building_id=issue.building_id,
+            status=issue.status,
+            is_open=is_open(issue.status),
+            urgent=issue.urgent,
+            category=issue.category,
+            entrance=issue.entrance,
+        )
+
+    async def follower_ids(self, issue_id: uuid.UUID) -> list[uuid.UUID]:
+        """Who follows the issue (the reporter and "+1"), in a stable order; never returned by
+        the API."""
+        rows = await self.session.scalars(
+            select(IssueFollower.user_id)
+            .where(IssueFollower.issue_id == issue_id)
+            .order_by(IssueFollower.user_id)
+        )
+        return list(rows)
+
+    async def can_see(self, user: CurrentUserDTO, issue_id: uuid.UUID) -> bool:
+        """Whether this user sees the issue under the rules of GET /issues/{id}."""
+        try:
+            await self._visible_issue(user, issue_id)
+        except DomainError:
+            return False
+        return True
+
+    def _publish(self, event: IssueReported | IssueStatusChanged | IssueMerged) -> None:
+        if self.outbox is None:
+            raise RuntimeError("writing issues needs the request outbox")
+        self.outbox.add(event)
 
     # --- Reporting ------------------------------------------------------------------------------
 
@@ -198,6 +249,14 @@ class IssuesService:
             ]
         )
         await self.session.flush()
+        self._publish(
+            IssueReported(
+                issue_id=issue.id,
+                building_id=issue.building_id,
+                reporter_user_id=user.id,
+                urgent=issue.urgent,
+            )
+        )
         return await self._view(user, issue)
 
     async def edit(
@@ -304,27 +363,36 @@ class IssuesService:
                 raise _invalid_duplicate()
             if original.status == IssueStatus.REPORTED:
                 # Others now follow it: its reporter may no longer rewrite or withdraw it.
-                self.session.add(
-                    IssueStatusChange(
+                started = IssueStatusChange(
+                    id=uuid.uuid4(),
+                    issue_id=original.id,
+                    from_status=IssueStatus.REPORTED,
+                    to_status=IssueStatus.IN_PROGRESS,
+                    changed_by_user_id=user.id,
+                    changed_at=now,
+                )
+                self.session.add(started)
+                original.status, original.updated_at = IssueStatus.IN_PROGRESS, now
+                self._publish(
+                    IssueStatusChanged(
                         issue_id=original.id,
-                        from_status=IssueStatus.REPORTED,
-                        to_status=IssueStatus.IN_PROGRESS,
+                        building_id=original.building_id,
+                        change_id=started.id,
                         changed_by_user_id=user.id,
-                        changed_at=now,
+                        status=IssueStatus.IN_PROGRESS.value,
                     )
                 )
-                original.status, original.updated_at = IssueStatus.IN_PROGRESS, now
 
         target = IssueStatus(request.status.value)
-        self.session.add(
-            IssueStatusChange(
-                issue_id=issue.id,
-                from_status=issue.status,
-                to_status=target,
-                changed_by_user_id=user.id,
-                changed_at=now,
-            )
+        change = IssueStatusChange(
+            id=uuid.uuid4(),
+            issue_id=issue.id,
+            from_status=issue.status,
+            to_status=target,
+            changed_by_user_id=user.id,
+            changed_at=now,
         )
+        self.session.add(change)
         issue.status, issue.updated_at = target, now
         issue.ended_at = None if is_open(target) else now
         issue.duplicate_of_id = original.id if original is not None else None
@@ -340,6 +408,26 @@ class IssuesService:
                 .on_conflict_do_nothing(index_elements=["issue_id", "user_id"])
             )
         await self.session.flush()
+        if original is not None:
+            self._publish(
+                IssueMerged(
+                    issue_id=issue.id,
+                    original_id=original.id,
+                    building_id=issue.building_id,
+                    change_id=change.id,
+                    changed_by_user_id=user.id,
+                )
+            )
+        else:
+            self._publish(
+                IssueStatusChanged(
+                    issue_id=issue.id,
+                    building_id=issue.building_id,
+                    change_id=change.id,
+                    changed_by_user_id=user.id,
+                    status=target.value,
+                )
+            )
         return await self._view(user, issue)
 
     async def clear_urgent(self, user: CurrentUserDTO, issue_id: uuid.UUID) -> IssueView:
@@ -643,6 +731,8 @@ class IssuesService:
 
 
 def get_issues_service(
-    session: DbSession, property_service: PropertyService = Depends(get_property_service)
+    session: DbSession,
+    property_service: PropertyService = Depends(get_property_service),
+    outbox: EventOutbox = Depends(get_event_outbox),
 ) -> IssuesService:
-    return IssuesService(session, property_service)
+    return IssuesService(session, property_service, outbox)

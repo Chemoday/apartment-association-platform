@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.building_settings import BuildingSettingRecord
 from src.core.database import build_engine
+from src.core.event_bus import EventOutbox, InMemoryEventBus
 from src.core.exceptions import DomainError
 from src.core.migrations import alembic_config
 from src.modules.issues.models import Issue
@@ -46,7 +47,8 @@ async def committed(database_url: str) -> AsyncIterator[tuple[AsyncEngine, Issue
 
 async def service_for(session: AsyncSession, user_id):
     properties = PropertyService(session)
-    return IssuesService(session, properties), await properties.get_current_user(user_id)
+    service = IssuesService(session, properties, EventOutbox(InMemoryEventBus()))
+    return service, await properties.get_current_user(user_id)
 
 
 REPORT = IssueReport(category=IssueCategory.LIGHTING, entrance=2, place="Landing", title="Dark")

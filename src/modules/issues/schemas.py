@@ -143,6 +143,20 @@ class ReporterView(BaseModel):
     apartment_id: uuid.UUID | None
 
 
+class IssueRefDTO(BaseModel):
+    """An issue's state for the notifications module (system-level, no text, no people)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    issue_id: uuid.UUID
+    building_id: uuid.UUID
+    status: IssueStatus
+    is_open: bool
+    urgent: bool
+    category: IssueCategory
+    entrance: int | None
+
+
 class IssueSummary(BaseModel):
     id: uuid.UUID
     category: IssueCategory
