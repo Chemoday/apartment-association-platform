@@ -37,6 +37,8 @@ class NotificationEventType(StrEnum):
     # Board <-> apartment threads (epic E8): to the apartment's members, and to the board.
     APARTMENT_MESSAGE = "APARTMENT_MESSAGE"
     APARTMENT_MESSAGE_TO_BOARD = "APARTMENT_MESSAGE_TO_BOARD"
+    # A poll was opened (epic E3): to everyone who may answer it.
+    POLL_OPENED = "POLL_OPENED"
 
 
 class DeliveryStatus(StrEnum):
@@ -50,6 +52,7 @@ class DeliveryStatus(StrEnum):
 class SubjectType(StrEnum):
     POST = "post"
     PERIOD = "period"
+    POLL = "poll"
 
 
 class UnavailableReason(StrEnum):

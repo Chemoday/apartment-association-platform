@@ -28,6 +28,23 @@ from src.core.telemetry import configure_logging
 from src.core.validation import canonical_email
 from src.modules.communication.models import Comment, Post
 from src.modules.communication.schemas import PostCategory, PostType, TargetScope
+from src.modules.governance.models import (
+    Ballot,
+    BallotAnswer,
+    BallotRevision,
+    Poll,
+    PollElector,
+    PollOption,
+    PollQuestion,
+)
+from src.modules.governance.schemas import (
+    AnswerMode,
+    Eligibility,
+    PollKind,
+    PollStatus,
+    PollUnit,
+    ValueType,
+)
 from src.modules.meters.models import MeterDevice, MeterReading, MeterReadingLog, ReadingPeriod
 from src.modules.meters.policies import period_due_date
 from src.modules.meters.schemas import MeterUnit, PeriodStatus, ReadingSource, ResourceType
@@ -176,6 +193,13 @@ _INSERT_ORDER = (
     MeterReadingLog,
     Post,
     Comment,
+    Poll,
+    PollQuestion,
+    PollOption,
+    PollElector,
+    Ballot,
+    BallotAnswer,
+    BallotRevision,
 )
 
 
@@ -466,6 +490,105 @@ class _Builder:
             )
             post.last_activity_at = max(post.last_activity_at or post.created_at, created_at)
 
+    # --- governance ---
+
+    def poll(self, building: Building, now: datetime) -> None:
+        """An open informative poll (E3): which Saturday for the spring clean-up, answered by
+        apartment 1. Every apartment with demo users is in the electorate."""
+        users, apartments = self.users, self.apartments
+        saturdays = [
+            (now + timedelta(days=offset)).date()
+            for offset in range(1, 30)
+            if (now + timedelta(days=offset)).weekday() == 5
+        ][:2]
+        poll = Poll(
+            id=demo_id("poll:clean-up"),
+            building_id=building.id,
+            created_by_user_id=users[DemoUserKey.CHAIRMAN].id,
+            kind=PollKind.INFORMATIVE,
+            title="Spring clean-up in the yard",
+            description="We rake the yard and wash the stairwells together. Which Saturday?",
+            target_scope=TargetScope.ALL_BUILDING,
+            eligibility=Eligibility.RESIDENTS,
+            unit=PollUnit.APARTMENT,
+            status=PollStatus.OPEN,
+            closes_at=now + timedelta(days=14),
+            opened_at=now - timedelta(days=1),
+            created_at=now - timedelta(days=1, hours=1),
+            updated_at=now - timedelta(days=1),
+        )
+        day = PollQuestion(
+            id=demo_id("poll:clean-up:day"),
+            poll_id=poll.id,
+            building_id=building.id,
+            position=1,
+            text="Which Saturday suits you?",
+            answer_mode=AnswerMode.MULTIPLE_CHOICE,
+            value_type=ValueType.DATE,
+            required=True,
+            min_choices=1,
+            max_choices=2,
+        )
+        note = PollQuestion(
+            id=demo_id("poll:clean-up:note"),
+            poll_id=poll.id,
+            building_id=building.id,
+            position=2,
+            text="Anything the board should know?",
+            answer_mode=AnswerMode.OWN_VALUE,
+            value_type=ValueType.TEXT,
+            required=False,
+        )
+        options = [
+            PollOption(
+                id=demo_id(f"poll:clean-up:day:{index}"),
+                question_id=day.id,
+                poll_id=poll.id,
+                position=index,
+                value=saturday.isoformat(),
+            )
+            for index, saturday in enumerate(saturdays, start=1)
+        ]
+        lived_in = sorted(
+            {demo.apartment_number for demo in DEMO_USERS if demo.apartment_number}, key=str
+        )
+        electors = {
+            number: PollElector(
+                id=demo_id(f"poll:clean-up:elector:{number}"),
+                poll_id=poll.id,
+                building_id=building.id,
+                apartment_id=apartments[number].id,
+            )
+            for number in lived_in
+        }
+        ballot = Ballot(
+            id=demo_id("poll:clean-up:ballot:1"),
+            poll_id=poll.id,
+            elector_id=electors["1"].id,
+            cast_by_user_id=users[DemoUserKey.OWNER_1].id,
+            revision=1,
+            created_at=now - timedelta(hours=20),
+            updated_at=now - timedelta(hours=20),
+        )
+        answer = BallotAnswer(
+            id=demo_id("poll:clean-up:ballot:1:answer"),
+            ballot_id=ballot.id,
+            poll_id=poll.id,
+            question_id=day.id,
+            option_id=options[0].id,
+        )
+        revision = BallotRevision(
+            id=demo_id("poll:clean-up:ballot:1:revision"),
+            ballot_id=ballot.id,
+            revision=1,
+            cast_by_user_id=ballot.cast_by_user_id,
+            answers=[
+                {"question_id": str(day.id), "option_ids": [str(options[0].id)], "value": None}
+            ],
+            created_at=ballot.created_at,
+        )
+        self.add(poll, day, note, *options, *electors.values(), ballot, answer, revision)
+
 
 async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> bool:
     """Add the demo building to an empty database. Returns False when nothing was done.
@@ -531,6 +654,7 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
             )
 
     builder.posts(building, now)
+    builder.poll(building, now)
     await builder.insert()
     logger.info(
         "seed_completed",

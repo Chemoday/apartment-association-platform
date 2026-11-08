@@ -39,6 +39,7 @@ def test_the_catalog_has_a_column_per_locale_and_english_everywhere() -> None:
         (E.APARTMENT_MESSAGE, {"apartment_number": "14", "from_board": True}),
         (E.APARTMENT_MESSAGE, {"apartment_number": "14", "from_board": False}),
         (E.APARTMENT_MESSAGE_TO_BOARD, {"apartment_number": "14", "from_board": False}),
+        (E.POLL_OPENED, {"closes_at": "2026-11-12T21:59:59+00:00"}),
     ],
 )
 def test_every_event_renders_in_every_language_with_the_footer(
@@ -166,3 +167,18 @@ def test_a_thread_message_says_who_wrote_but_never_what(
     assert message.subject == subject
     assert "Debt" not in message.body + message.subject
     assert "120" not in message.body
+
+
+def test_a_new_poll_says_when_to_answer_by_but_never_what() -> None:
+    message = compose(
+        E.POLL_OPENED,
+        "en",
+        {"closes_at": "2026-11-12T22:30:00+00:00"},
+        site_url=SITE,
+        timezone=TZ,
+        title="Debt collection company",
+    )
+
+    assert message.subject == "New poll from the board"
+    assert "Please answer by 13.11.2026." in message.body, "the local date in Tallinn"
+    assert "Debt" not in message.body + message.subject

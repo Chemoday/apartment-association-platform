@@ -13,7 +13,7 @@ src/
 │   ├── notifications/         # [Phase 2, E1] Deliveries, preferences, channel bindings
 │   ├── auth/                  # [Phase 2, E7] Sign-in, sessions, invitations, identities
 │   ├── billing/               # [Phase 2, E2] Tariffs, Parent/Child Cost Allocation, Charges
-│   └── governance/            # [Phase 3, E3] Voting (.asice hash verification), Documents
+│   └── governance/            # [Phase 2, E3] Informative polls; later voting (.asice verification)
 └── plugins/                   # Plugin names are dotted paths: "common.csv_export"
     ├── registry.py            # Protocol definitions & dynamic plugin loader
     ├── common/                # Generic: csv_export, email_smtp, telegram, webpush
@@ -104,7 +104,7 @@ Both start in the app lifespan, stop on shutdown, and have switches (`NOTIFICATI
   - **clean-up:** deliveries older than `NOTIFICATIONS_RETENTION_DAYS` (also the "published" rows of an emergency still active after that long, so its "resolved" then reaches nobody; accepted, alerts are resolved within days); then bindings revoked before that which no delivery refers to; link codes and link attempts older than 24 hours. Plain `DELETE`s: enough at the scale of a building; batch them and index `binding_id` if volumes grow.
 
 ### 3.4 Contracts with other modules
-System-level methods (no `CurrentUserDTO`), returning DTOs, used only by notifications:
+System-level methods (no request caller; `can_read_post` and `may_answer` take a `CurrentUserDTO` loaded by `get_current_user`), returning DTOs, used only by notifications:
 
 | Module | Method | Returns |
 | :--- | :--- | :--- |
@@ -123,6 +123,10 @@ System-level methods (no `CurrentUserDTO`), returning DTOs, used only by notific
 | `communication` | `can_read_post(user, post_id)` | `bool`: whether this user (a `CurrentUserDTO` from `PropertyService.get_current_user`) sees the post under the one visibility rule of docs/API.md section 4; used for thread recipients and again right before sending |
 | `property` | `get_current_user(user_id)` | `CurrentUserDTO` of an active user with their active memberships, or `None` (the same loader as for requests) |
 | `property` | `apartment_ref(apartment_id)` | `ApartmentRefDTO(apartment_id, building_id, number)`: the apartment number for `APARTMENT_MESSAGE*` params |
+| `property` | `get_recipients(user_ids)` | `list[RecipientDTO]` of the active users among them (`POLL_OPENED`) |
+| `governance` | `get_poll_audience(poll_id)` | `PollAudienceDTO(poll_id, building_id, is_open, closes_at, user_ids)` or `None`: who may answer the poll now (the eligible members of its snapshot apartments, or its snapshot people) |
+| `governance` | `get_poll_ref(poll_id)` | `PollRefDTO(poll_id, building_id, is_open, closes_at)` or `None`: the poll's state right before a `POLL_OPENED` message is sent (`POLL_NOT_OPEN`, the current deadline in the text) |
+| `governance` | `may_answer(user, poll_id)` | `bool`: whether this user (a `CurrentUserDTO`) may answer the open poll now, under the rules of `PUT .../ballot`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 
 - `EmergencyRefDTO`: `post_id`, `building_id`, `author_user_id`, `is_active`, `target_scope`, `target_entrance`, `target_apartment_ids`, `title`, `body`, `category`. The body is read only by the dispatcher, right before an emergency message is rendered, and never logged.
 - **Locale** is resolved when a delivery row is inserted (`RecipientDTO.locale`, else `DEFAULT_LOCALE`) and stored on the row, so the dispatcher needs no extra lookup.
@@ -269,3 +273,24 @@ Every query that resolves people filters closed accounts (`core_users.is_active`
 - **Response headers:** every answer (the SPA and the API) carries `Referrer-Policy: no-referrer` (`src/core/headers.py`), so a link page never leaks its URL.
 - **Client IP:** the per-IP limits use the address uvicorn takes from `X-Forwarded-For` (`--proxy-headers`); an IPv6 address counts by its /64. Spans never carry it: the scrubber also redacts `net.peer.ip`, `net.sock.peer.addr` and `client.address`. Caddy sets that header, and the backend port is published only to Caddy, never to the internet.
 - **Logs:** uvicorn runs without an access log. The reverse proxy keeps its access log off, or excludes `Cookie` and `Authorization`.
+
+## 5. Module `governance` (epic E3)
+
+Design: [docs/epics/E3_GOVERNANCE_VOTING.md](epics/E3_GOVERNANCE_VOTING.md). Tables: docs/SCHEMA.md
+section 8. API: docs/API.md section 8.
+
+- **Place:** reads apartments and memberships only through `PropertyService`. Only
+  `notifications` imports it: the durable event `PollOpened` (stored in the same transaction as
+  the opening) and the system-level reads `get_poll_audience`, `get_poll_ref` and `may_answer`
+  (section 3.4). Results are a pure function of the electorate snapshot and the ballots
+  (`governance/policies.py`), so official decisions (part B) add rules there.
+- **Contract with `property`** (system-level, no `CurrentUserDTO`):
+
+| Method | Returns |
+| :--- | :--- |
+| `poll_electors(building_id, scope, entrance, apartment_ids, owners_only)` | `list[ElectorDTO(user_id, apartment_id)]`: active users with an active membership (an `OWNER` one when `owners_only`) in a targeted apartment of the building, under the shared targeting rule |
+| `list_apartments(building_id)` | the building's apartments (target checks) |
+
+- Who may answer for an apartment is checked from the caller's `CurrentUserDTO.memberships` at
+  answer time; the snapshot fixes which units exist.
+

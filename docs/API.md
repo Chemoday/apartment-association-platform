@@ -23,11 +23,11 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | :--- | :--- | :--- |
 | 401 | `NOT_AUTHENTICATED` / `INVALID_TOKEN` / `UNKNOWN_USER` | No credentials, a bad or expired token, or an unknown or inactive user (sent with `WWW-Authenticate: Bearer`) |
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
-| 403 | `FORBIDDEN` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it |
-| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE` | The request is valid, but conflicts with the current state |
+| 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
+| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
-| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
+| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
 | other | `HTTP_<status>` | Any other framework-level HTTP error |
 
@@ -558,7 +558,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 - **Building:** entrance 1 has apartments 1, 2, 3; entrance 2 has 13, 14, 15. Apartments 3 and 13 have no app users. Every apartment has a cold and a hot water meter; the basement has a cold and a hot water master meter.
 - **History:** `2026-07`, `2026-08`, `2026-09` are `LOCKED` with readings for every meter. Readings of apartments without app users were entered by the chairman (`ADMIN_OVERRIDE`); Apt 13 in `2026-08` is `AUTO_ESTIMATED`. The master meters show a small loss over the apartments. Apt 14's cold water reading of `2026-09` was corrected once, so its history has two entries.
 - **October (`2026-10`, `OPEN_FOR_RESIDENTS`):** Apt 1 submitted both meters and Apt 2 its cold water. Apt 15's hot water is a confirmed anomaly (31 m³, a leaking tap). **Apt 14 has submitted nothing**, so the demo can start there; a normal value is its previous value plus about 4.8 m³ (cold) or 2.2 m³ (hot). A delta above 3 × its 3-month average (about 14.4 m³ cold, 6.5 m³ hot) or above the meter limit (25 / 15 m³) triggers the two popups.
-- **Communication:** an active `EMERGENCY` (hot water off) targeted at entrance 2, so Apt 14 sees the banner and Apt 2 does not; an `OFFICIAL_NOTICE` without comments; two forum topics with comments from several residents; an `APARTMENT_THREAD` from the chairman to Apt 14 with the owner's reply (the board and Apt 14 see it, Apt 2 does not); a `BOARD_TOPIC` about the keys with a reply of the board member (only the chairman and the board see it, by name). Every demo membership starts on 2024-06-01.
+- **Communication:** an active `EMERGENCY` (hot water off) targeted at entrance 2, so Apt 14 sees the banner and Apt 2 does not; an `OFFICIAL_NOTICE` without comments; two forum topics with comments from several residents; an `APARTMENT_THREAD` from the chairman to Apt 14 with the owner's reply (the board and Apt 14 see it, Apt 2 does not); a `BOARD_TOPIC` about the keys with a reply of the board member (only the chairman and the board see it, by name). Polls: an open poll about the Saturday of the spring clean-up (one answer per apartment, all residents), answered by Apt 1. Every demo membership starts on 2024-06-01.
 - Seeding publishes and stores no domain events, so no notifications are sent, now or later.
 
 ## 6. Notifications (`notifications`), epic E1
@@ -590,8 +590,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   fixed system text in the user's `locale`. The chairman cannot change system texts. What leaves
   the system on external channels: the event type, the emergency title and body (written by the
   board), the target (e.g. "entrance 2"), the period code and due date, that a message between the
-  board and an apartment exists and the apartment number, and a link to the site. Comments, forum
-  posts, thread messages and author names never do.
+  board and an apartment exists and the apartment number, that a poll was opened and its deadline
+  date, and a link to the site. Comments, forum posts, thread messages and author names never do.
 - **Who gets what:**
 
 | `event_type` | Recipients | Mandatory |
@@ -602,6 +602,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `PERIOD_REVIEW` | the chairman and accountants when a period moves to `REVIEW_BY_BOARD`, except the person who moved it | no |
 | `APARTMENT_MESSAGE` | a new thread or reply (`APARTMENT_THREAD`, section 4): the active members of the thread's apartment who see the thread, except the author. A board member who is also such a member gets only this one, once | no |
 | `APARTMENT_MESSAGE_TO_BOARD` | a new thread or reply written from the apartment (not by the board): the chairman and the board members, except the author and those who already get `APARTMENT_MESSAGE`. A message written by the board notifies no other board member | no |
+| `POLL_OPENED` | a poll was opened (section 8): everyone who may answer it (the eligible members of the snapshot apartments, or the snapshot people), never the board member who opened it | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -612,6 +613,13 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   collapses the messages of one thread into the latest one (the collapse key is the post).
   An in-app notification stays in the feed after its recipient lost access to the thread; opening
   its subject then answers `404 POST_NOT_FOUND`.
+- **A new poll** (epic E3, task V3) notifies once, when the poll opens: "The board started a poll.
+  Please answer by 12.11.2026." (the local deadline date), without the title or the questions.
+  Right before an external message is sent, a poll that is no longer open (closed or cancelled
+  meanwhile) is skipped with `POLL_NOT_OPEN`, and a recipient who may no longer answer it (moved
+  out, or no longer an owner of a targeted apartment for an owners-only poll) with
+  `SUBJECT_NOT_FOUND`. The text names the poll's current deadline, so an extension made before
+  sending is in it.
 
 - Users who join, link a channel or add a device while an emergency is active see it as the banner
   (`GET /api/v1/communication/emergencies/active`); old alerts are not sent to them on any channel.
@@ -636,6 +644,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `PERIOD_REVIEW` | on | on | off | off |
 | `APARTMENT_MESSAGE` | on | on | on | on |
 | `APARTMENT_MESSAGE_TO_BOARD` | on | off | off | off |
+| `POLL_OPENED` | on | on | on | on |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences.
@@ -655,12 +664,14 @@ member can switch on e-mail, Telegram or WebPush in the preferences.
 }
 ```
 - `subject_type` `post` links to `GET /api/v1/communication/posts/{subject_id}`; `period` links to
-  the readings of that period (`params.period_code`).
+  the readings of that period (`params.period_code`); `poll` links to
+  `GET /api/v1/governance/polls/{subject_id}`.
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
   `from_board` (`true`: the board wrote; `false`: a resident of the apartment wrote). The subject
-  is the thread (`subject_type` `post`), also for a reply.
+  is the thread (`subject_type` `post`), also for a reply; `POLL_OPENED` `closes_at` (the
+  deadline when the poll opened, UTC; the board may extend it later, the poll has the current one).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -699,7 +710,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 24 combinations of `event_type` and `channel` (30 once
+- `preferences` always has all 28 combinations of `event_type` and `channel` (35 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -715,7 +726,7 @@ Only the listed combinations change. Response: the same body as the `GET`.
 
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
-`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -1327,3 +1338,229 @@ chair@example.com`.
 | 409 | `EMAIL_ALREADY_REGISTERED` (registration only), `TENANT_LIMIT_REACHED`, `INVITATION_ALREADY_PENDING`, `INVITATION_ACCEPTED`, `INVITATION_NO_LONGER_VALID`, `LAST_CHAIRMAN` |
 | 422 | `VALIDATION_ERROR`, `PASSWORD_TOO_WEAK` |
 | 429 | `RATE_LIMITED` |
+
+## 8. Polls (`governance`), epic E3 part A
+
+The board asks the residents or the owners questions; everyone sees totals only. Design and owner
+decisions: docs/epics/E3_GOVERNANCE_VOTING.md section 3. Results: `GET /polls/{id}/results`
+(task V2); opening a poll notifies everyone who may answer (`POLL_OPENED`, section 6).
+Every endpoint needs a signed-in user;
+"the board" is `CHAIRMAN` or `BOARD`.
+
+### Poll object (`PollView`)
+```json
+{
+  "id": "uuid",
+  "kind": "INFORMATIVE",
+  "title": "Spring clean-up",
+  "description": "We meet in the yard at 10:00.",
+  "status": "OPEN",
+  "target_scope": "ALL_BUILDING",
+  "target_entrance": null,
+  "target_apartment_ids": null,
+  "eligibility": "RESIDENTS",
+  "unit": "APARTMENT",
+  "closes_at": "2026-11-12T21:59:59Z",
+  "opened_at": "2026-11-05T09:00:00Z",
+  "closed_at": null,
+  "cancelled_at": null,
+  "created_at": "2026-11-05T08:30:00Z",
+  "questions": [
+    {
+      "id": "uuid", "position": 1, "text": "Which Saturday suits you?",
+      "answer_mode": "MULTIPLE_CHOICE", "value_type": "DATE", "required": true,
+      "min_choices": 1, "max_choices": 2, "min_value": null, "max_value": null,
+      "options": [
+        {"id": "uuid", "position": 1, "value": "2026-04-12"},
+        {"id": "uuid", "position": 2, "value": "2026-04-19"}
+      ]
+    }
+  ],
+  "can_answer": true,
+  "answerable_apartment_ids": ["uuid"],
+  "results_available": false,
+  "my_ballots": [
+    {"apartment_id": "uuid", "answers": [{"question_id": "uuid", "option_ids": ["uuid"], "value": null}], "updated_at": "2026-11-05T10:00:00Z"}
+  ]
+}
+```
+- `kind`: `INFORMATIVE` only (official decisions come later). `status`: `DRAFT`, `OPEN`,
+  `CLOSED`, `CANCELLED`. An open poll whose `closes_at` has passed is `CLOSED` (with `closed_at`
+  `null`); one the board closed early has `closed_at`.
+- Target fields as for posts (section 4): `ALL_BUILDING`, `ENTRANCE` with `target_entrance`, or
+  `APARTMENT_LIST` with `target_apartment_ids`.
+- `eligibility`: `RESIDENTS` (every active member of a targeted apartment) or `OWNERS` (active
+  owners only). `unit`: `APARTMENT` (one answer per apartment) or `PERSON` (one per person).
+- **Questions:** `answer_mode` is `SINGLE_CHOICE`, `MULTIPLE_CHOICE` or `OWN_VALUE`; `value_type`
+  is `TEXT`, `NUMBER` or `DATE`. Option values and own values are strings: text as written, a
+  number as a decimal string (`"2"`, `"2.5"`, no exponent), a date as `YYYY-MM-DD`. Render numbers
+  and dates in the reader's language. `min_choices` / `max_choices` only for `MULTIPLE_CHOICE`;
+  `min_value` / `max_value` (optional bounds, same format as the values) only for `OWN_VALUE` with
+  `NUMBER` or `DATE`.
+- `can_answer`: the poll is open and the caller may answer now. `answerable_apartment_ids`: for
+  unit `APARTMENT`, the apartments the caller may answer for (several when the caller lives in
+  more than one targeted apartment); empty for unit `PERSON`.
+- `my_ballots`: the current answers of the caller's units: for unit `APARTMENT` one per
+  answerable apartment that has answered, whoever in the apartment answered (never who); for unit
+  `PERSON` the caller's own. `value` is set for `OWN_VALUE` questions, `option_ids` for choices.
+- `results_available`: whether `GET .../results` answers for the caller now: the board once the
+  poll is open, everyone else after it closed; never for a draft or a cancelled poll.
+- Never in a payload: who created the poll, who answered, how another unit answered.
+
+### Who sees a poll
+- The board: every poll of the building, drafts included.
+- Everyone else: an open, closed or cancelled poll whose target includes one of their apartments
+  (also when not eligible: a tenant sees an owners-only poll with `can_answer: false`). Drafts,
+  other polls and other buildings: `404 POLL_NOT_FOUND`.
+
+### `GET /api/v1/governance/polls?status=OPEN&limit=50&offset=0`
+The polls the caller sees (`PollView` without `questions` and `my_ballots`, with
+`results_available`, plus `answered`:
+whether every unit the caller may answer for has answered; `false` when there is none and
+for a cancelled poll, which also has `can_answer: false` and no
+`answerable_apartment_ids`). Open polls first, by `closes_at`;
+then the others, newest `opened_at` (drafts: newest `created_at`) first. `status` filters
+(optional); `limit` 1..100, `offset` 0..100000.
+
+### `GET /api/v1/governance/polls/{poll_id}`
+The full `PollView`. `404 POLL_NOT_FOUND` when not visible.
+
+### `POST /api/v1/governance/polls` (board)
+Creates a draft. Response `201` with the `PollView`.
+```json
+{
+  "title": "Spring clean-up",
+  "description": "We meet in the yard at 10:00.",
+  "target_scope": "ALL_BUILDING",
+  "eligibility": "RESIDENTS",
+  "unit": "APARTMENT",
+  "closes_at": "2026-11-12T21:59:59Z",
+  "questions": [
+    {"text": "Which Saturday suits you?", "answer_mode": "MULTIPLE_CHOICE", "value_type": "DATE",
+     "required": true, "min_choices": 1, "max_choices": 2,
+     "options": ["2026-04-12", "2026-04-19"]},
+    {"text": "Anything else?", "answer_mode": "OWN_VALUE", "value_type": "TEXT", "required": false}
+  ]
+}
+```
+- `title` 1..255, `description` 0..5000 characters (optional), question `text` 1..500, an option
+  1..200; 1..20 questions; choice questions 2..20 options, all different and valid for the
+  `value_type`; `OWN_VALUE` questions take no options. Unknown fields are rejected.
+- `MULTIPLE_CHOICE`: `1 <= min_choices <= max_choices <= number of options` (defaults 1 and the
+  number of options). Bounds: `min_value <= max_value`.
+- `closes_at` can be anything in a draft; it is checked when the poll opens. Deadlines are
+  stored and returned in UTC, whatever offset was sent.
+- Text options are compared exactly: "Yes" and "yes" are two different options.
+- Target rules as for posts (`422 INVALID_TARGET`).
+- Validation errors: `422 VALIDATION_ERROR`.
+
+### `PUT /api/v1/governance/polls/{poll_id}` (board)
+Replaces a draft with the same body; questions and options get new ids. `409 POLL_NOT_DRAFT`
+otherwise.
+
+### `DELETE /api/v1/governance/polls/{poll_id}` (board)
+Deletes a draft. `204`; `409 POLL_NOT_DRAFT` otherwise (cancel an open poll instead).
+
+### `POST /api/v1/governance/polls/{poll_id}/open` (board)
+Opens a draft and fixes its electorate (docs/epics/E3_GOVERNANCE_VOTING.md 3.3): for unit
+`APARTMENT`, the targeted apartments with at least one eligible member; for unit `PERSON`, the
+eligible people. Response: the `PollView`.
+- `409 POLL_NOT_DRAFT`; `422 INVALID_DEADLINE` when `closes_at` is not in the future or more
+  than a year away;
+  `422 POLL_HAS_NO_ELECTORATE` when nobody could answer.
+- From now on questions never change.
+
+### `POST /api/v1/governance/polls/{poll_id}/close` and `.../cancel` (board)
+Close early, or cancel, an open poll. Response: the `PollView`. `409 POLL_NOT_OPEN` (also after
+`closes_at`). A cancelled poll stays visible; its answers are never shown.
+
+### `PATCH /api/v1/governance/polls/{poll_id}` (board)
+`{"closes_at": "..."}`: extends an open poll. The new time must be later than the current
+`closes_at` and at most a year from now, else `422 INVALID_DEADLINE`. `409 POLL_NOT_OPEN`.
+
+### `PUT /api/v1/governance/polls/{poll_id}/ballot`
+Answers, or replaces the caller's unit's answer; the last answer counts. Response: the
+`PollView`.
+```json
+{
+  "apartment_id": "uuid",
+  "answers": [
+    {"question_id": "uuid", "option_ids": ["uuid", "uuid"]},
+    {"question_id": "uuid", "value": "Bring gloves"}
+  ]
+}
+```
+- `apartment_id`: for unit `APARTMENT`, the apartment answered for; may be omitted when
+  `answerable_apartment_ids` has exactly one. Not taken for unit `PERSON`.
+- Every required question is answered; optional ones may be left out. Choices give `option_ids`
+  (exactly one for `SINGLE_CHOICE`, between `min_choices` and `max_choices` for
+  `MULTIPLE_CHOICE`); `OWN_VALUE` gives `value` (text 1..2000 characters, a number or a date
+  within the bounds).
+- Errors: `404 POLL_NOT_FOUND`; `409 POLL_NOT_OPEN`; `403 NOT_ELIGIBLE` (not allowed to answer,
+  or not for that apartment); `422 INVALID_ANSWER` with `question_id` and `reason`
+  (`REQUIRED`, `UNKNOWN_QUESTION`, `UNKNOWN_OPTION`, `CHOICES`, `VALUE`, `OUT_OF_RANGE`,
+  `DUPLICATE`); `422 VALIDATION_ERROR`.
+- Every version is kept (history for official decisions later) and never shown; the same
+  person sending the same answers again changes nothing and adds no version (another member of
+  the apartment confirming them does add one).
+- `answers` in `my_ballots` follow the order of the questions, and `option_ids` the order of the
+  options.
+
+### `GET /api/v1/governance/polls/{poll_id}/results`
+Totals of a poll (task V2): the board at any time after opening (live while the poll is open),
+everyone else who sees the poll after it closed (a tenant also for an owners-only poll).
+```json
+{
+  "poll_id": "uuid",
+  "status": "CLOSED",
+  "unit": "APARTMENT",
+  "participation": {"answered": 12, "electorate": 30},
+  "questions": [
+    {
+      "question_id": "uuid", "answered": 11,
+      "options": [{"option_id": "uuid", "count": 7}, {"option_id": "uuid", "count": 6}],
+      "number": null, "dates": null, "texts": null
+    },
+    {
+      "question_id": "uuid", "answered": 9,
+      "options": null,
+      "number": {"min": "1", "max": "4", "average": "2.333333"}, "dates": null, "texts": null
+    },
+    {
+      "question_id": "uuid", "answered": 3,
+      "options": null, "number": null, "dates": null,
+      "texts": [{"value": "Bring gloves", "count": 2}, {"value": "Not before 10", "count": 1}]
+    }
+  ]
+}
+```
+- `participation`: `answered` units (apartments or people with a current answer; a ballot that
+  left every optional question out counts too) of the `electorate` (the units of the snapshot
+  taken at opening). Every unit counts 1 in part A.
+- Per question, in question order, `answered` is the number of units that answered it (optional
+  questions can be left out), and at most one of the following is set by the question's kind;
+  the others are `null`:
+  - choice questions: `options`, every option in option order with the units that chose it (with
+    `MULTIPLE_CHOICE` the counts add up to more than `answered`);
+  - `OWN_VALUE` with `NUMBER`: `number` with `min`, `max` and `average` as decimal strings
+    (`average` rounded half-even to at most 6 decimals); `null` while nobody answered;
+  - `OWN_VALUE` with `DATE`: `dates`, each answered date with its count, by date;
+  - `OWN_VALUE` with `TEXT`: `texts`, for the board only: each distinct text with its count, in
+    alphabetical order (never the answer order), without authors. Everyone else gets `null` and
+    sees `answered` only.
+- Never returned: who answered, how a unit answered, the answer times.
+- Errors: `404 POLL_NOT_FOUND` (not visible, as for `GET` of the poll); `409 RESULTS_NOT_AVAILABLE`
+  with `status` for a draft, a cancelled poll (its answers are never shown), and an open poll
+  for a caller who is not on the board.
+
+### Domain events
+Stored durably with the request (docs/ARCHITECTURE.md 2), ids only:
+- `PollOpened`: `poll_id`, `building_id`, `opened_by_user_id`; drives `POLL_OPENED` (section 6).
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` (board endpoints), `NOT_ELIGIBLE` |
+| 404 | `POLL_NOT_FOUND` |
+| 409 | `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` |
+| 422 | `VALIDATION_ERROR`, `INVALID_TARGET`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` |

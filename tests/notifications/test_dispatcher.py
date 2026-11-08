@@ -1007,3 +1007,133 @@ async def test_who_left_the_board_before_sending_is_skipped(
     [state] = await email_rows(db_session, id=row.id)
     assert (state.status, state.error_code) == ("SKIPPED", "SUBJECT_NOT_FOUND")
     assert smtp_server.messages == []
+
+
+# --- New polls (E3/V3) ----------------------------------------------------------------------------
+
+
+POLL_DEADLINE = (datetime.now(UTC) + timedelta(days=10)).replace(
+    hour=12, minute=0, second=0, microsecond=0
+)
+
+
+async def open_poll_as(client: AsyncClient, author: User, settings: Settings) -> str:
+    body = {
+        "title": "Debt collection company",
+        "eligibility": "RESIDENTS",
+        "unit": "APARTMENT",
+        "closes_at": POLL_DEADLINE.isoformat(),
+        "questions": [
+            {
+                "text": "Agree?",
+                "answer_mode": "SINGLE_CHOICE",
+                "value_type": "TEXT",
+                "options": ["Yes", "No"],
+            }
+        ],
+    }
+    created = await client.post(
+        "/api/v1/governance/polls", json=body, headers=bearer(author, settings)
+    )
+    assert created.status_code == 201, created.text
+    poll_id = created.json()["id"]
+    opened = await client.post(
+        f"/api/v1/governance/polls/{poll_id}/open", headers=bearer(author, settings)
+    )
+    assert opened.status_code == 200, opened.text
+    return poll_id
+
+
+async def test_a_new_poll_e_mail_names_the_deadline_but_not_the_poll(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    await open_poll_as(api_client, world.chairman, email_settings)
+
+    await dispatcher.tick()
+
+    sent = {email["To"]: email for email in smtp_server.messages}
+    email = sent[mailboxes["owner_14"]]
+    assert email["Subject"] == "New poll from the board"
+    text = email.get_content()
+    assert f"Please answer by {POLL_DEADLINE:%d.%m.%Y}" in text, "the local (Tallinn) date"
+    assert "Debt collection" not in text and "Agree?" not in text
+    assert "Stop these e-mails" in text
+    assert mailboxes["chairman"] not in sent, "never the board member who opened it"
+
+
+@pytest.mark.parametrize("action", ["close", "cancel"])
+async def test_a_poll_closed_or_cancelled_before_sending_is_skipped(
+    action: str,
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    db_session: AsyncSession,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    poll_id = await open_poll_as(api_client, world.chairman, email_settings)
+    ended = await api_client.post(
+        f"/api/v1/governance/polls/{poll_id}/{action}",
+        headers=bearer(world.chairman, email_settings),
+    )
+    assert ended.status_code == 200
+
+    await dispatcher.tick()
+
+    rows = await email_rows(db_session, event_type="POLL_OPENED")
+    assert rows and {(row.status, row.error_code) for row in rows} == {("SKIPPED", "POLL_NOT_OPEN")}
+    assert smtp_server.messages == []
+
+
+async def test_who_may_no_longer_answer_before_sending_is_skipped(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    db_session: AsyncSession,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    await open_poll_as(api_client, world.chairman, email_settings)
+    [row] = await email_rows(db_session, user_id=world.owner_14.id)
+    await db_session.execute(
+        update(ApartmentMembership)
+        .where(ApartmentMembership.user_id == world.owner_14.id)
+        .values(ended_at=datetime.now(UTC))
+    )
+
+    await dispatcher.tick()
+
+    [state] = await email_rows(db_session, id=row.id)
+    assert (state.status, state.error_code) == ("SKIPPED", "SUBJECT_NOT_FOUND")
+    sent = {email["To"] for email in smtp_server.messages}
+    assert mailboxes["owner_14"] not in sent and mailboxes["board_15"] in sent
+
+
+async def test_the_e_mail_names_a_deadline_extended_before_sending(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    poll_id = await open_poll_as(api_client, world.chairman, email_settings)
+    later = POLL_DEADLINE + timedelta(days=3)
+    extended = await api_client.patch(
+        f"/api/v1/governance/polls/{poll_id}",
+        json={"closes_at": later.isoformat()},
+        headers=bearer(world.chairman, email_settings),
+    )
+    assert extended.status_code == 200, extended.text
+
+    await dispatcher.tick()
+
+    sent = {email["To"]: email for email in smtp_server.messages}
+    assert f"Please answer by {later:%d.%m.%Y}" in sent[mailboxes["owner_14"]].get_content()

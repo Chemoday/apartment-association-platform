@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import Settings
 from src.core.domain_events import SessionFactory
 from src.modules.communication.service import CommunicationService
+from src.modules.governance.service import GovernanceService
 from src.modules.notifications.messages import compose, default_catalog, email_text
 from src.modules.notifications.models import ChannelBinding, Delivery
 from src.modules.notifications.policies import (
@@ -318,6 +319,7 @@ class Dispatcher:
                 return skip("PREFERENCE_OFF")
 
         title = body = ""
+        params = row.params
         if row.event_type in APARTMENT_MESSAGE_EVENTS:
             # The thread's visibility rule again: someone who moved out or left the board since
             # the message was posted is not told about it. The text never carries the message.
@@ -325,6 +327,20 @@ class Dispatcher:
             communication = CommunicationService(session, properties)
             if user is None or not await communication.can_read_post(user, row.subject_id):
                 return skip("SUBJECT_NOT_FOUND")
+        elif row.subject_type == SubjectType.POLL:
+            # A poll closed or cancelled since: nobody is asked to answer it any more. Someone who
+            # meanwhile moved out (or lost the owner membership) is not asked either. The text
+            # names the current deadline: the board may have extended it.
+            governance = GovernanceService(session, properties)
+            poll = await governance.get_poll_ref(row.subject_id)
+            if poll is None:
+                return skip("SUBJECT_NOT_FOUND")
+            if not poll.is_open:
+                return skip("POLL_NOT_OPEN")
+            user = await properties.get_current_user(row.user_id)
+            if user is None or not await governance.may_answer(user, row.subject_id):
+                return skip("SUBJECT_NOT_FOUND")
+            params = {**row.params, "closes_at": poll.closes_at.isoformat()}
         elif row.subject_type == SubjectType.POST:
             ref = await CommunicationService(session, properties).get_emergency_ref(row.subject_id)
             if ref is None:
@@ -340,7 +356,7 @@ class Dispatcher:
         rendered = compose(
             row.event_type,
             row.locale,
-            row.params,
+            params,
             site_url=self._settings.PUBLIC_BASE_URL,
             timezone=self._settings.INSTANCE_TIMEZONE,
             title=title,
