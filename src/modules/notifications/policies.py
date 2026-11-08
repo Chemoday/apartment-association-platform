@@ -11,7 +11,7 @@ import re
 import secrets
 import uuid
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 
 from src.modules.notifications.schemas import Channel, NotificationEventType, UnavailableReason
 
@@ -65,6 +65,15 @@ DEFAULT_PREFERENCES: Mapping[tuple[NotificationEventType, Channel], bool] = {
     (_E.ISSUE_STATUS_CHANGED, _C.EMAIL): True,
     (_E.ISSUE_STATUS_CHANGED, _C.TELEGRAM): True,
     (_E.ISSUE_STATUS_CHANGED, _C.WEBPUSH): True,
+    # The board's maintenance reminders are quiet, like new issue reports (E10).
+    (_E.MAINTENANCE_DUE, _C.IN_APP): True,
+    (_E.MAINTENANCE_DUE, _C.EMAIL): False,
+    (_E.MAINTENANCE_DUE, _C.TELEGRAM): False,
+    (_E.MAINTENANCE_DUE, _C.WEBPUSH): False,
+    (_E.NOTICE_PUBLISHED, _C.IN_APP): True,
+    (_E.NOTICE_PUBLISHED, _C.EMAIL): True,
+    (_E.NOTICE_PUBLISHED, _C.TELEGRAM): True,
+    (_E.NOTICE_PUBLISHED, _C.WEBPUSH): True,
 }
 
 ISSUE_REPORT_EVENTS = frozenset(
@@ -205,6 +214,16 @@ def poll_opened_key(poll_id: uuid.UUID) -> str:
 
 def issue_reported_key(issue_id: uuid.UUID) -> str:
     return f"issue_reported:{issue_id}"
+
+
+def maintenance_due_key(occurrence_id: uuid.UUID, due_date: date, reminder_number: int) -> str:
+    """One per publication and reminder; a moved occurrence is published again under its new
+    date, so that notice is a new one."""
+    return f"maintenance_due:{occurrence_id}:{due_date.isoformat()}:{reminder_number}"
+
+
+def notice_published_key(post_id: uuid.UUID) -> str:
+    return f"notice_published:{post_id}"
 
 
 def issue_status_key(change_id: uuid.UUID) -> str:

@@ -19,7 +19,7 @@ __all__ = [
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -58,6 +58,11 @@ def _target(catalog: MessageCatalog, locale: str, params: Mapping[str, Any]) -> 
 
 def _local_date(value: str, timezone: str) -> str:
     return datetime.fromisoformat(value).astimezone(ZoneInfo(timezone)).strftime("%d.%m.%Y")
+
+
+def _short_date(value: str) -> str:
+    """A calendar date (YYYY-MM-DD) as the texts write it."""
+    return date.fromisoformat(value).strftime("%d.%m.%Y")
 
 
 def _issue_location(catalog: MessageCatalog, locale: str, entrance: object) -> str:
@@ -120,6 +125,21 @@ def compose(
         text = catalog.render(
             "text.POLL_OPENED", locale, closes_at=_local_date(params["closes_at"], timezone)
         )
+    elif event_type == E.MAINTENANCE_DUE:  # the board's own task title, to the board only
+        values = {"title": params["title"], "due_date": _short_date(params["due_date"])}
+        subject = catalog.render(subject_key, locale, **values)
+        if params.get("overdue"):
+            text = catalog.render(
+                "text.MAINTENANCE_DUE.OVERDUE",
+                locale,
+                number=params.get("reminder_number", 0),
+                **values,
+            )
+        else:
+            text = catalog.render("text.MAINTENANCE_DUE", locale, **values)
+    elif event_type == E.NOTICE_PUBLISHED:  # only that there is a notice, never its text
+        subject = catalog.render(subject_key, locale)
+        text = catalog.render("text.NOTICE_PUBLISHED", locale)
     else:  # ISSUE_*: the category, the location and the status, never what a resident wrote
         where = {
             "category": catalog.render(f"issue.category.{params['category']}", locale),

@@ -11087,7 +11087,9 @@
           "POLL_OPENED",
           "ISSUE_REPORTED",
           "ISSUE_URGENT",
-          "ISSUE_STATUS_CHANGED"
+          "ISSUE_STATUS_CHANGED",
+          "MAINTENANCE_DUE",
+          "NOTICE_PUBLISHED"
         ],
         "title": "NotificationEventType"
       },
@@ -12420,7 +12422,7 @@
               "$ref": "#/components/schemas/PreferenceChange"
             },
             "type": "array",
-            "maxItems": 40,
+            "maxItems": 48,
             "title": "Preferences"
           }
         },
@@ -13626,7 +13628,8 @@
           "post",
           "period",
           "poll",
-          "issue"
+          "issue",
+          "maintenance_task"
         ],
         "title": "SubjectType"
       },

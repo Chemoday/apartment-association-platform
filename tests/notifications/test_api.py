@@ -430,7 +430,7 @@ async def test_the_preferences_matrix_with_defaults(
         {"channel": "telegram", "available": False, "reason": "DEMO_MODE"},
         {"channel": "webpush", "available": False, "reason": "DEMO_MODE"},
     ]
-    assert len(body["preferences"]) == 40
+    assert len(body["preferences"]) == 48
     by_key = {(p["event_type"], p["channel"]): p for p in body["preferences"]}
     # Messages with the board (E8): residents on every channel, the board quietly in the app.
     for channel in ("in_app", "email", "telegram", "webpush"):
@@ -441,6 +441,9 @@ async def test_the_preferences_matrix_with_defaults(
         assert by_key[("ISSUE_REPORTED", channel)]["enabled"] is (channel == "in_app")
         assert by_key[("ISSUE_URGENT", channel)]["mandatory"] is True
         assert by_key[("ISSUE_STATUS_CHANGED", channel)]["enabled"] is True
+        # Maintenance (E10): the board quietly in the app; every notice on every channel.
+        assert by_key[("MAINTENANCE_DUE", channel)]["enabled"] is (channel == "in_app")
+        assert by_key[("NOTICE_PUBLISHED", channel)]["enabled"] is True
     assert by_key[("EMERGENCY_PUBLISHED", "email")] == {
         "event_type": "EMERGENCY_PUBLISHED",
         "channel": "email",

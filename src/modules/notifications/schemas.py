@@ -43,6 +43,9 @@ class NotificationEventType(StrEnum):
     ISSUE_REPORTED = "ISSUE_REPORTED"
     ISSUE_URGENT = "ISSUE_URGENT"
     ISSUE_STATUS_CHANGED = "ISSUE_STATUS_CHANGED"
+    # The maintenance calendar (epic E10): due tasks to the board; every official notice.
+    MAINTENANCE_DUE = "MAINTENANCE_DUE"
+    NOTICE_PUBLISHED = "NOTICE_PUBLISHED"
 
 
 class DeliveryStatus(StrEnum):
@@ -58,6 +61,7 @@ class SubjectType(StrEnum):
     PERIOD = "period"
     POLL = "poll"
     ISSUE = "issue"
+    MAINTENANCE_TASK = "maintenance_task"
 
 
 class UnavailableReason(StrEnum):

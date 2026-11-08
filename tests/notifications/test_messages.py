@@ -56,6 +56,12 @@ def test_the_catalog_has_a_column_per_locale_and_english_everywhere() -> None:
             E.ISSUE_STATUS_CHANGED,
             {"category": "LIFT", "entrance": None, "status": "DUPLICATE", "merged": True},
         ),
+        (E.MAINTENANCE_DUE, {"title": "Gutters", "due_date": "2027-04-15", "overdue": False}),
+        (
+            E.MAINTENANCE_DUE,
+            {"title": "Gutters", "due_date": "2027-04-15", "overdue": True, "reminder_number": 2},
+        ),
+        (E.NOTICE_PUBLISHED, {}),
     ],
 )
 def test_every_event_renders_in_every_language_with_the_footer(

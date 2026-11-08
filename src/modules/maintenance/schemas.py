@@ -218,6 +218,20 @@ class LogEntryView(BaseModel):
     updated_by: AuthorBadgeDTO | None
 
 
+class OccurrenceRefDTO(BaseModel):
+    """An occurrence's state for the notifications module (system-level)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    occurrence_id: uuid.UUID
+    task_id: uuid.UUID
+    building_id: uuid.UUID
+    title: str
+    due_date: date
+    is_open: bool
+    task_active: bool
+
+
 class ClosedOccurrence(BaseModel):
     """Response of done / skip: the new log entry and the task with its next occurrence."""
 

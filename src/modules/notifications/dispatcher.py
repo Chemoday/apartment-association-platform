@@ -35,6 +35,7 @@ from src.core.domain_events import SessionFactory
 from src.modules.communication.service import CommunicationService
 from src.modules.governance.service import GovernanceService
 from src.modules.issues.service import IssuesService
+from src.modules.maintenance.service import MaintenanceService
 from src.modules.notifications.messages import compose, default_catalog, email_text
 from src.modules.notifications.models import ChannelBinding, Delivery
 from src.modules.notifications.policies import (
@@ -64,6 +65,7 @@ from src.modules.notifications.schemas import (
     SubjectType,
 )
 from src.modules.notifications.service import stored_preferences
+from src.modules.property.schemas import BuildingRole
 from src.modules.property.service import PropertyService
 from src.plugins.registry import DeliveryResult, OutgoingMessage, PluginRegistry
 
@@ -174,6 +176,13 @@ def _collapse_key(row: Claimed) -> str:
     if row.subject_type == SubjectType.POST:
         return f"post:{row.subject_id}"
     return f"{row.event_type.value}:{row.subject_id}"
+
+
+_BOARD_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
+# Not urgent, no deadline: external messages of these wait for 09:00 when it is night.
+_DAYTIME_EVENTS = frozenset(
+    {NotificationEventType.MAINTENANCE_DUE, NotificationEventType.NOTICE_PUBLISHED}
+)
 
 
 class Dispatcher:
@@ -312,6 +321,12 @@ class Dispatcher:
                 if resume >= deadline:
                     return skip("DEADLINE_PASSED")
                 return _Prepared(row=row, outcome=Outcome("DEFER", defer_until=resume))
+        if row.event_type in _DAYTIME_EVENTS and not in_reminder_hours(now, self._timezone):
+            # A board reminder or a notice is not urgent: at night it waits for the morning.
+            return _Prepared(
+                row=row,
+                outcome=Outcome("DEFER", defer_until=next_reminder_hours(now, self._timezone)),
+            )
         properties = PropertyService(session)
         if not await properties.is_user_active(row.user_id):
             return skip("USER_INACTIVE")
@@ -361,6 +376,28 @@ class Dispatcher:
                 and issue.status.value != row.params.get("status")
             ):
                 return skip("STATUS_OUTDATED")
+        elif row.event_type == NotificationEventType.NOTICE_PUBLISHED:
+            # Someone who moved out of the target meanwhile is not told; the text never leaves.
+            user = await properties.get_current_user(row.user_id)
+            communication = CommunicationService(session, properties)
+            if user is None or not await communication.can_read_post(user, row.subject_id):
+                return skip("SUBJECT_NOT_FOUND")
+        elif row.subject_type == SubjectType.MAINTENANCE_TASK:
+            # Closed or paused meanwhile: the reminder is outdated. The title is read now, so a
+            # renamed task goes out with its new name.
+            ref = await MaintenanceService(session, properties).get_occurrence_ref(
+                uuid.UUID(str(row.params.get("occurrence_id")))
+            )
+            user = await properties.get_current_user(row.user_id)
+            if ref is None or user is None or user.building_role not in _BOARD_ROLES:
+                return skip("SUBJECT_NOT_FOUND")
+            if not ref.is_open:
+                return skip("TASK_DONE")
+            if not ref.task_active:
+                return skip("TASK_NOT_ACTIVE")
+            if ref.due_date.isoformat() != row.params.get("due_date"):
+                return skip("TASK_MOVED")  # the move publishes or reminds again on its own
+            params = {**row.params, "title": ref.title}
         elif row.subject_type == SubjectType.POST:
             ref = await CommunicationService(session, properties).get_emergency_ref(row.subject_id)
             if ref is None:

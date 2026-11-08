@@ -50,6 +50,7 @@ from src.modules.maintenance.schemas import (
     LogKind,
     NoticeDraft,
     NoticeView,
+    OccurrenceRefDTO,
     OccurrenceState,
     OccurrenceStatus,
     PeriodUnit,
@@ -137,6 +138,31 @@ class MaintenanceService:
 
     def _today(self) -> date:
         return local_today(_now(), self.timezone)
+
+    # --- System-level reads (no request caller; used by the notifications module) ---------------
+
+    async def get_occurrence_ref(self, occurrence_id: uuid.UUID) -> OccurrenceRefDTO | None:
+        """The task's current title and the occurrence's state now; None if unknown."""
+        row = (
+            await self.session.execute(
+                select(Occurrence, Task)
+                .join(Task, Task.id == Occurrence.task_id)
+                .where(Occurrence.id == occurrence_id)
+                .execution_options(populate_existing=True)
+            )
+        ).first()
+        if row is None:
+            return None
+        occurrence, task = row
+        return OccurrenceRefDTO(
+            occurrence_id=occurrence.id,
+            task_id=task.id,
+            building_id=task.building_id,
+            title=task.title,
+            due_date=occurrence.due_date,
+            is_open=occurrence.status == OccurrenceStatus.OPEN,
+            task_active=task.status == TaskStatus.ACTIVE,
+        )
 
     # --- Tasks ----------------------------------------------------------------------------------
 
