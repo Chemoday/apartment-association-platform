@@ -80,6 +80,8 @@ Build the navigation from `GET /api/v1/property/me` (`building_role`, `membershi
 | Polls: create, open, close, extend, cancel | no | yes | yes | no |
 | Polls: see | when targeted | all | all | when targeted |
 | Polls: answer | when targeted and eligible | when targeted and eligible | when targeted and eligible | when targeted and eligible |
+| Building settings (`/settings`): see | no | yes | yes | no |
+| Building settings: change | no | no | yes | no |
 
 A user with no apartment gets `apartments: []` from the dashboard; hide the meter card, do not
 show an error. `GET /property/me` never returns the user's own name or email: greet with the
@@ -461,3 +463,20 @@ Contract: docs/API.md section 8.
   `dates` counts, or for text answers only `answered` (the board also gets `texts`). Render
   numbers and dates in the reader's language. Percentages are of `answered`.
 
+## 14. Building settings (epic E9)
+
+Contract: docs/API.md section 9.
+
+- **Page:** "Association settings" for the chairman (edit) and the board (read only); nobody else
+  sees the menu entry (others get `403 FORBIDDEN`). Load `GET /api/v1/settings`.
+- **One control per setting by `type`:** a number field with `minimum` / `maximum` for `INTEGER`,
+  a switch for `BOOLEAN`. The label and a one-line help text come from the locales by `key`
+  (unknown keys: show the key itself, so a new backend setting is never hidden). Group by the
+  prefix (`issues.` = "Issue reports").
+- Show "default" next to settings with `is_default: true`, and a "Reset to default" action for
+  the others, which sends `null` for that key.
+- **Saving:** one `PUT` with only the changed keys. On `422 VALIDATION_ERROR` mark the fields named
+  in `errors[].loc[2]`; nothing was saved.
+- Changes apply at once to the next request. Residents cannot read this page: a feature that
+  depends on a setting tells its own clients (e.g. the issue tracker of task I1 says whether the
+  urgent flag is offered).

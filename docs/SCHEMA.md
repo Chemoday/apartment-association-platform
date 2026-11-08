@@ -544,3 +544,40 @@ Every version of a ballot, for official decisions later; never returned in part 
 | `cast_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
 | `answers` | `JSONB` | `NOT NULL` | `[{"question_id", "option_ids", "value"}]` after the check (canonical values); the same answers again add no revision |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+---
+
+## 9. Core infrastructure (`src/core`): building settings (epic E9, task I0)
+
+*Settings of the association, changed by the chairman in the app (docs/API.md section 9). Like
+`core_domain_events`, these tables are infrastructure owned by `src/core/building_settings.py`;
+each module declares its own settings in code (key, type, default, bounds), so a new setting
+needs no migration and core never knows a module's rules. Migration 017.*
+
+### Table: `core_building_settings`
+*(Only the settings the chairman changed; a missing row means the default.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `building_id` | `UUID` | `PK`, `FK(property_buildings.id) ON DELETE CASCADE` | |
+| `key` | `VARCHAR(64)` | `PK` | A declared key, e.g. `issues.urgent_enabled`. Rows of a key that is no longer declared are ignored |
+| `value` | `JSONB` | `NOT NULL` | A JSON integer or boolean, checked against the declaration on every write |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `updated_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who set the current value (never returned by the API) |
+
+### Table: `core_building_setting_changes`
+*(The log of changes, kept forever: a few rows a year.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id) ON DELETE CASCADE, NOT NULL` | |
+| `key` | `VARCHAR(64)` | `NOT NULL` | |
+| `old_value` | `JSONB` | `NULLABLE` | `NULL`: it was the default |
+| `new_value` | `JSONB` | `NULLABLE` | `NULL`: reset to the default |
+| `changed_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | |
+| `changed_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- `ix_core_building_setting_changes_building_time`: `(building_id, changed_at)`.
+- A `PUT` writes its rows and their log entries in one transaction, under a transaction-scoped
+  advisory lock on the building (`core:settings:<building_id>`), so two changes of the same
+  setting, also its first ones, are logged in order with their real old values.
+- Seeding (`src/core/seed.py`) writes no settings: the demo uses the defaults.

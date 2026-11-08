@@ -1564,3 +1564,62 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids only:
 | 404 | `POLL_NOT_FOUND` |
 | 409 | `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` |
 | 422 | `VALIDATION_ERROR`, `INVALID_TARGET`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` |
+
+## 9. Building settings (`core`), epic E9
+
+Settings of the association that the chairman changes in the app (task I0,
+docs/epics/E9_ISSUE_TRACKER.md section 2a). Each setting belongs to a module, which declares it
+with a type, a default and bounds; until the chairman changes it, its value is the default.
+Every endpoint needs a signed-in user of the building.
+
+### Setting object (`SettingView`)
+```json
+{
+  "key": "issues.reports_per_apartment_per_day",
+  "type": "INTEGER",
+  "value": 3,
+  "default": 3,
+  "minimum": 1,
+  "maximum": 20,
+  "is_default": true,
+  "updated_at": null
+}
+```
+- `type`: `INTEGER` (a JSON integer between `minimum` and `maximum`) or `BOOLEAN` (`true` /
+  `false`; `minimum` and `maximum` are `null`).
+- `is_default`: the chairman never set it (or reset it); `value` equals `default` then.
+  `updated_at`: the last change, `null` while it is the default.
+- The key names the module (`issues.`); the frontend picks the label and the help text by key.
+  Never in a payload: who changed a setting.
+
+| Key | Type | Default | Bounds | What it does |
+| :--- | :--- | :--- | :--- | :--- |
+| `issues.reports_per_apartment_per_day` | `INTEGER` | 3 | 1..20 | Issue reports one apartment may file in 24 hours (epic E9) |
+| `issues.urgent_enabled` | `BOOLEAN` | `false` | | Residents may mark an issue report urgent |
+| `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
+
+### `GET /api/v1/settings` (chairman and board)
+`{"settings": [SettingView, ...]}`, every declared setting, ordered by `key`. Anyone else:
+`403 FORBIDDEN`.
+
+### `PUT /api/v1/settings` (chairman)
+Changes some settings at once and returns the same body as `GET`.
+```json
+{"values": {"issues.urgent_enabled": true, "issues.reports_per_apartment_per_day": null}}
+```
+- `values`: 1..50 keys. A value of the setting's type sets it; `null` resets it to the default.
+- All or nothing: one invalid entry changes nothing. `422 VALIDATION_ERROR` with entries in
+  `errors` whose `loc` starts with `["body", "values", "<key>"]`: a value that is neither an
+  integer, a boolean nor `null` (`"3"`, `3.0`) is refused by the request check first (one or more
+  entries for that key); then an unknown key, a value of the other type (`1` for a `BOOLEAN`,
+  `true` for an `INTEGER`) or a number out of bounds, one entry each.
+- Setting the current value again changes nothing (no log entry); while a setting is not set,
+  its default is its current value.
+- Every change is logged (old value, new value, who, when; docs/SCHEMA.md section 9). The board
+  and everyone else: `403 FORBIDDEN`.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 422 | `VALIDATION_ERROR` |

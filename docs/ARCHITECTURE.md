@@ -294,3 +294,22 @@ section 8. API: docs/API.md section 8.
 - Who may answer for an apartment is checked from the caller's `CurrentUserDTO.memberships` at
   answer time; the snapshot fixes which units exist.
 
+## 6. Building settings (`src/core/building_settings.py`), epic E9
+
+Design: docs/epics/E9_ISSUE_TRACKER.md section 2a. Tables: docs/SCHEMA.md section 9. API:
+docs/API.md section 9.
+
+- **Why in core:** every module may need a setting of the association (the issue limits now; later
+  the tenant limit, reminder days, the chairman's info header). `property` must not learn other
+  modules' rules, so core owns the store and the API, and each module owns its declarations.
+- **Declaring:** a module lists its settings in its own `settings.py` as `IntSetting(key, default,
+  minimum, maximum)` or `BoolSetting(key, default)` in a tuple `SETTINGS`; the key starts with the
+  module name. Core imports these files lazily from a fixed list (`_MODULE_SETTING_MODULES`), the
+  same way as the event registry, so core never imports a module at import time. Two declarations
+  of one key, or a default out of its own bounds, fail at start-up (`create_app` loads them).
+- **Reading:** `await BuildingSettings(session).get(building_id, SPEC)` returns the typed value
+  (the stored one if valid, else the default). A module reads its value inside the request that
+  needs it; there is no cache, a change applies to the next request.
+- **Writing:** only `PUT /api/v1/settings` (the chairman). A module never writes settings.
+- **Logs and spans:** a change logs `building_setting_changed` with the key (and the request's
+  usual `user_id` and `trace_id`); the values stay in the database.
