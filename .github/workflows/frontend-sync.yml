@@ -90,16 +90,32 @@ jobs:
         id: proposed
         if: steps.copy.outputs.changed == 'true'
         working-directory: platform
+        env:
+          GH_TOKEN: ${{ secrets.FRONTEND_SYNC_TOKEN }}
+          SHA: ${{ steps.copy.outputs.sha }}
         run: |
-          proposed=$(git ls-remote --exit-code origin "refs/heads/$SYNC_BRANCH" >/dev/null 2>&1 \
-            && git fetch -q origin "$SYNC_BRANCH" \
-            && git show "FETCH_HEAD:frontend/.source-commit" 2>/dev/null || true)
-          if [ "$proposed" = "${{ steps.copy.outputs.sha }}" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "$SYNC_BRANCH already proposes ${{ steps.copy.outputs.sha }}."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+          # Skip only when an open pull request already proposes this version as one commit on
+          # top of the current main. Otherwise the branch is rebuilt on the current main: after
+          # main got new commits (for example a CI fix the old branch lacks), or after the pull
+          # request was closed.
+          skip=false
+          if git ls-remote --exit-code origin "refs/heads/$SYNC_BRANCH" >/dev/null 2>&1; then
+            # The branch may be deleted between the two calls: then there is nothing to skip.
+            git fetch -q --depth=2 origin "$SYNC_BRANCH" || { echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; }
+            proposed=$(git show "FETCH_HEAD:frontend/.source-commit" 2>/dev/null || true)
+            parent=$(git rev-parse -q --verify "FETCH_HEAD^" 2>/dev/null || true)
+            main=$(git rev-parse HEAD)
+            # A fork may have a branch of the same name: only this repository's pull request counts.
+            open=$(gh pr list --head "$SYNC_BRANCH" --state open --json number,isCrossRepository \
+              --jq 'map(select(.isCrossRepository | not)) | .[0].number')
+            if [ "$proposed" = "$SHA" ] && [ "$parent" = "$main" ] && [ -n "$open" ]; then
+              skip=true
+              echo "Pull request #$open already proposes $SHA on top of main $main."
+            elif [ "$proposed" = "$SHA" ]; then
+              echo "$SYNC_BRANCH has $SHA, but not on top of main $main in an open pull request: rebuilding it."
+            fi
           fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
       - name: Push the branch and open or update the pull request
         if: steps.copy.outputs.changed == 'true' && steps.proposed.outputs.skip == 'false'
@@ -134,7 +150,8 @@ jobs:
 
           gh label create "$PREVIEW_LABEL" --color 0e8a16 \
             --description "CI deploys this pull request to dev" 2>/dev/null || true
-          number=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')
+          number=$(gh pr list --head "$SYNC_BRANCH" --state open --json number,isCrossRepository \
+            --jq 'map(select(.isCrossRepository | not)) | .[0].number')
           if [ -z "$number" ]; then
             gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body "$body" \
               --label "$PREVIEW_LABEL"
