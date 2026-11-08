@@ -618,7 +618,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_URGENT` | an urgent issue was reported (instead of `ISSUE_REPORTED`): the chairman and the board members, never the reporter | yes |
 | `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
 | `MAINTENANCE_DUE` | the maintenance calendar published a task or reminded of an overdue one (section 11): the chairman and the board members | no |
-| `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target, never its author | no |
+| `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target and the chairman and the board members (also without an apartment), once each, never its author | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -660,9 +660,9 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   `TASK_MOVED` (the move publishes or reminds again on its own), a recipient no longer on the
   board with `SUBJECT_NOT_FOUND`; a message that would go out at night waits for 09:00 local
   time. `NOTICE_PUBLISHED` says only "New notice from the board" with a link, never the
-  notice's title or text; it is for the residents of the notice's target (the board sees every
-  notice in the feed and is not told); a recipient who no longer sees the notice (moved out) is
-  skipped with `SUBJECT_NOT_FOUND`, and outside the app it also waits for 09:00 at night.
+  notice's title or text; it is for the residents of the notice's target and for the board
+  (who learn what a colleague published); a recipient who no longer sees the notice (moved out)
+  is skipped with `SUBJECT_NOT_FOUND`, and outside the app it also waits for 09:00 at night.
 
 - Users who join, link a channel or add a device while an emergency is active see it as the banner
   (`GET /api/v1/communication/emergencies/active`); old alerts are not sent to them on any channel.
