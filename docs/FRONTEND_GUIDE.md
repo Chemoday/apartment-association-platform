@@ -545,6 +545,12 @@ Contract: docs/API.md section 11.
 - **Publishing (task M2):** show on the task when its reminder went out (`published_at`, link to
   the board topic `board_post_id`), the residents' notice (`notice_post_id`), a warning when
   `notice_failed` is true ("the notice could not be published: correct its target for the next
-  time"), and the number of overdue reminders. In the board room and the feed, a post with `origin`
+  time"), and the number of overdue reminders.
+- **Notifications (task M3):** `MAINTENANCE_DUE` (`subject_type` `maintenance_task`, open the task)
+  "Maintenance due on {due_date}" or, with `overdue`, "overdue since {due_date}" (load the task for
+  its title); shown to the chairman and the board only in the settings. `NOTICE_PUBLISHED`
+  (`subject_type` `post`, open the notice) "New notice from the board"; shown to everyone with an
+  apartment. The preferences matrix now has 48 rows.
+- In the board room and the feed, a post with `origin`
   `MAINTENANCE` gets a small "automatic reminder" (or "automatic notice") label next to the
   author's badge.

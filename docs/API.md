@@ -599,8 +599,10 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   the system on external channels: the event type, the emergency title and body (written by the
   board), the target (e.g. "entrance 2"), the period code and due date, that a message between the
   board and an apartment exists and the apartment number, that a poll was opened and its deadline
-  date, the category, entrance and status of an issue, and a link to the site. Comments, forum
-  posts, thread messages, issue titles and descriptions, and author names never do.
+  date, the category, entrance and status of an issue, that a notice was published, the title
+  and due date of a maintenance task (to the board only), and a link to the site. Comments, forum
+  posts, thread messages, notice texts, issue titles and descriptions, and author names never
+  do.
 - **Who gets what:**
 
 | `event_type` | Recipients | Mandatory |
@@ -615,6 +617,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_REPORTED` | an issue was reported (section 10): the chairman and the board members, never the reporter | no |
 | `ISSUE_URGENT` | an urgent issue was reported (instead of `ISSUE_REPORTED`): the chairman and the board members, never the reporter | yes |
 | `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
+| `MAINTENANCE_DUE` | the maintenance calendar published a task or reminded of an overdue one (section 11): the chairman and the board members | no |
+| `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target, never its author | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -647,6 +651,18 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   in progress -> waiting -> in progress, both "in progress" notices go out). `ISSUE_URGENT` is
   mandatory and goes out first, like an emergency; withdrawing, editing, "+1" and clearing the
   urgent flag notify nobody.
+- **Maintenance and notices** (epic E10, task M3): `MAINTENANCE_DUE` names the task (the board's
+  own title, to the board only) and its date: "Maintenance due: Inspect the fire extinguishers,
+  15.04.2027", or "... overdue since 15.04.2027 (reminder 2)". The title is read right before
+  sending, so a renamed task is sent with its new name. Right before an external message is
+  sent: an occurrence done, skipped or cancelled meanwhile is skipped with `TASK_DONE`, a task
+  paused meanwhile with `TASK_NOT_ACTIVE`, an occurrence whose date was moved meanwhile with
+  `TASK_MOVED` (the move publishes or reminds again on its own), a recipient no longer on the
+  board with `SUBJECT_NOT_FOUND`; a message that would go out at night waits for 09:00 local
+  time. `NOTICE_PUBLISHED` says only "New notice from the board" with a link, never the
+  notice's title or text; it is for the residents of the notice's target (the board sees every
+  notice in the feed and is not told); a recipient who no longer sees the notice (moved out) is
+  skipped with `SUBJECT_NOT_FOUND`, and outside the app it also waits for 09:00 at night.
 
 - Users who join, link a channel or add a device while an emergency is active see it as the banner
   (`GET /api/v1/communication/emergencies/active`); old alerts are not sent to them on any channel.
@@ -675,6 +691,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_REPORTED` | on | off | off | off |
 | `ISSUE_URGENT` (mandatory) | on | on | on | on |
 | `ISSUE_STATUS_CHANGED` | on | on | on | on |
+| `MAINTENANCE_DUE` | on | off | off | off |
+| `NOTICE_PUBLISHED` | on | on | on | on |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
@@ -697,7 +715,8 @@ reports, but not for urgent ones (epic E9).
 - `subject_type` `post` links to `GET /api/v1/communication/posts/{subject_id}`; `period` links to
   the readings of that period (`params.period_code`); `poll` links to
   `GET /api/v1/governance/polls/{subject_id}`; `issue` links to
-  `GET /api/v1/issues/{subject_id}` (for a merge notice, the original).
+  `GET /api/v1/issues/{subject_id}` (for a merge notice, the original); `maintenance_task` links
+  to `GET /api/v1/maintenance/tasks/{subject_id}`.
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
@@ -706,7 +725,9 @@ reports, but not for urgent ones (epic E9).
   deadline when the poll opened, UTC; the board may extend it later, the poll has the current one);
   `ISSUE_REPORTED` and `ISSUE_URGENT` `category`, `entrance` (or `null`);
   `ISSUE_STATUS_CHANGED` `category`, `entrance`, `status` (the new one) and `merged` (`true` for
-  the merge notice, whose `status` is `DUPLICATE`).
+  the merge notice, whose `status` is `DUPLICATE`); `MAINTENANCE_DUE` `occurrence_id`,
+  `due_date`, `overdue` and `reminder_number` (0 for the publication; the title is loaded with
+  the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -745,7 +766,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 40 combinations of `event_type` and `channel` (50 once
+- `preferences` always has all 48 combinations of `event_type` and `channel` (60 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -762,7 +783,7 @@ Only the listed combinations change. Response: the same body as the `GET`.
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
 `PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
-`ISSUE_STATUS_CHANGED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**

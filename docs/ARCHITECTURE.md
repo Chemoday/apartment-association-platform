@@ -128,6 +128,7 @@ System-level methods (no request caller; `can_read_post` and `may_answer` take a
 | `governance` | `get_poll_ref(poll_id)` | `PollRefDTO(poll_id, building_id, is_open, closes_at)` or `None`: the poll's state right before a `POLL_OPENED` message is sent (`POLL_NOT_OPEN`, the current deadline in the text) |
 | `issues` | `get_issue_ref(issue_id)` | `IssueRefDTO(issue_id, building_id, status, is_open, urgent, category, entrance)` or `None`: the issue's state for the texts and the send-time checks (`ISSUE_ENDED`, `URGENT_CLEARED`, `STATUS_OUTDATED`) |
 | `issues` | `follower_ids(issue_id)` | `list[UUID]`: who follows the issue (`ISSUE_STATUS_CHANGED`); never returned by the API |
+| `maintenance` | `get_occurrence_ref(occurrence_id)` | `OccurrenceRefDTO(occurrence_id, task_id, building_id, title, due_date, is_open, task_active)` or `None`: the task's title and state right before a `MAINTENANCE_DUE` message is sent (`TASK_DONE`, `TASK_NOT_ACTIVE`) |
 | `issues` | `can_see(user, issue_id)` | `bool`: whether this user (a `CurrentUserDTO`) sees the issue under the rules of `GET /issues/{id}`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 | `governance` | `may_answer(user, poll_id)` | `bool`: whether this user (a `CurrentUserDTO`) may answer the open poll now, under the rules of `PUT .../ballot`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 
@@ -341,7 +342,8 @@ docs/API.md section 11.
 - **Place:** reads users and badges through `PropertyService` (`get_named_author_badges` for the
   log), validates the notice target through `CommunicationService.notice_target_problem` (task
   M1), and in task M2 publishes posts through `CommunicationService` as a current board member.
-  No other module imports it until task M3 (notifications).
+  Only `notifications` imports it (task M3): the event `MaintenanceTaskDue` and
+  `get_occurrence_ref`.
 - **Rules as pure functions** in `maintenance/policies.py`: month arithmetic with day clamping,
   always from the anchor date; the next occurrence after done or skip (the first schedule date
   after both the planned and the done date, found in closed form with a bounded correction); the
