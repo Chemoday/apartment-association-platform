@@ -591,7 +591,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   the system on external channels: the event type, the emergency title and body (written by the
   board), the target (e.g. "entrance 2"), the period code and due date, that a message between the
   board and an apartment exists and the apartment number, that a poll was opened and its deadline
-  date, and a link to the site. Comments, forum posts, thread messages and author names never do.
+  date, the category, entrance and status of an issue, and a link to the site. Comments, forum
+  posts, thread messages, issue titles and descriptions, and author names never do.
 - **Who gets what:**
 
 | `event_type` | Recipients | Mandatory |
@@ -603,6 +604,9 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `APARTMENT_MESSAGE` | a new thread or reply (`APARTMENT_THREAD`, section 4): the active members of the thread's apartment who see the thread, except the author. A board member who is also such a member gets only this one, once | no |
 | `APARTMENT_MESSAGE_TO_BOARD` | a new thread or reply written from the apartment (not by the board): the chairman and the board members, except the author and those who already get `APARTMENT_MESSAGE`. A message written by the board notifies no other board member | no |
 | `POLL_OPENED` | a poll was opened (section 8): everyone who may answer it (the eligible members of the snapshot apartments, or the snapshot people), never the board member who opened it | no |
+| `ISSUE_REPORTED` | an issue was reported (section 10): the chairman and the board members, never the reporter | no |
+| `ISSUE_URGENT` | an urgent issue was reported (instead of `ISSUE_REPORTED`): the chairman and the board members, never the reporter | yes |
+| `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -620,6 +624,21 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   out, or no longer an owner of a targeted apartment for an owners-only poll) with
   `SUBJECT_NOT_FOUND`. The text names the poll's current deadline, so an extension made before
   sending is in it.
+- **Issues** (epic E9, task I3): the texts name only the category, the location and the status,
+  never the title or the description written by a resident: "New issue report: lighting,
+  entrance 2", "Urgent issue report: lift, entrance 1", "The issue you follow (lighting, entrance
+  2) is now: in progress." A merge tells the followers of the duplicate once: "The issue you
+  follow (lighting, entrance 2) was merged into another report of the same problem; you now follow
+  that one", and links to the original. When the merge also starts a `REPORTED` original
+  (section 10), the original's followers, the moved ones included, get its "now: in progress"
+  notice as well. Right before an external message is sent: an issue the
+  recipient no longer sees is skipped with `SUBJECT_NOT_FOUND`; a report that has ended
+  meanwhile (withdrawn, declined, resolved) with `ISSUE_ENDED`; an urgent alert whose flag the
+  board cleared as a false alarm with `URGENT_CLEARED`; a status notice whose status is no longer
+  the issue's with `STATUS_OUTDATED` (a later notice follows; after a quick round trip such as
+  in progress -> waiting -> in progress, both "in progress" notices go out). `ISSUE_URGENT` is
+  mandatory and goes out first, like an emergency; withdrawing, editing, "+1" and clearing the
+  urgent flag notify nobody.
 
 - Users who join, link a channel or add a device while an emergency is active see it as the banner
   (`GET /api/v1/communication/emergencies/active`); old alerts are not sent to them on any channel.
@@ -645,9 +664,13 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `APARTMENT_MESSAGE` | on | on | on | on |
 | `APARTMENT_MESSAGE_TO_BOARD` | on | off | off | off |
 | `POLL_OPENED` | on | on | on | on |
+| `ISSUE_REPORTED` | on | off | off | off |
+| `ISSUE_URGENT` (mandatory) | on | on | on | on |
+| `ISSUE_STATUS_CHANGED` | on | on | on | on |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
-member can switch on e-mail, Telegram or WebPush in the preferences.
+member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
+reports, but not for urgent ones (epic E9).
 
 *(Planned, N7:)* `mobile_push` takes the same defaults as `webpush`.
 
@@ -665,13 +688,17 @@ member can switch on e-mail, Telegram or WebPush in the preferences.
 ```
 - `subject_type` `post` links to `GET /api/v1/communication/posts/{subject_id}`; `period` links to
   the readings of that period (`params.period_code`); `poll` links to
-  `GET /api/v1/governance/polls/{subject_id}`.
+  `GET /api/v1/governance/polls/{subject_id}`; `issue` links to
+  `GET /api/v1/issues/{subject_id}` (for a merge notice, the original).
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
   `from_board` (`true`: the board wrote; `false`: a resident of the apartment wrote). The subject
   is the thread (`subject_type` `post`), also for a reply; `POLL_OPENED` `closes_at` (the
-  deadline when the poll opened, UTC; the board may extend it later, the poll has the current one).
+  deadline when the poll opened, UTC; the board may extend it later, the poll has the current one);
+  `ISSUE_REPORTED` and `ISSUE_URGENT` `category`, `entrance` (or `null`);
+  `ISSUE_STATUS_CHANGED` `category`, `entrance`, `status` (the new one) and `merged` (`true` for
+  the merge notice, whose `status` is `DUPLICATE`).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -710,7 +737,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 28 combinations of `event_type` and `channel` (35 once
+- `preferences` always has all 40 combinations of `event_type` and `channel` (50 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -1778,6 +1805,16 @@ it.
 Clears the urgent flag (a false alarm); returns the `IssueView`. Logged as an `URGENT_CLEARED`
 entry. The report still counts as urgent for the apartment's urgent limit. Already not urgent:
 changes nothing. On an ended issue: `409 ISSUE_ENDED`.
+
+### Domain events
+Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (task I3):
+- `IssueReported`: `issue_id`, `building_id`, `reporter_user_id`, `urgent`; drives
+  `ISSUE_REPORTED` / `ISSUE_URGENT` (section 6).
+- `IssueStatusChanged`: `issue_id`, `building_id`, `change_id` (the timeline entry),
+  `changed_by_user_id`, `status`; drives `ISSUE_STATUS_CHANGED` (not for `DUPLICATE`, see
+  `IssueMerged`).
+- `IssueMerged`: `issue_id` (the duplicate), `original_id`, `building_id`, `change_id`,
+  `changed_by_user_id`; drives the merge notice.
 
 ### Error codes of this section
 | Status | `error_code` |

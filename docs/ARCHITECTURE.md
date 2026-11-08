@@ -126,6 +126,9 @@ System-level methods (no request caller; `can_read_post` and `may_answer` take a
 | `property` | `get_recipients(user_ids)` | `list[RecipientDTO]` of the active users among them (`POLL_OPENED`) |
 | `governance` | `get_poll_audience(poll_id)` | `PollAudienceDTO(poll_id, building_id, is_open, closes_at, user_ids)` or `None`: who may answer the poll now (the eligible members of its snapshot apartments, or its snapshot people) |
 | `governance` | `get_poll_ref(poll_id)` | `PollRefDTO(poll_id, building_id, is_open, closes_at)` or `None`: the poll's state right before a `POLL_OPENED` message is sent (`POLL_NOT_OPEN`, the current deadline in the text) |
+| `issues` | `get_issue_ref(issue_id)` | `IssueRefDTO(issue_id, building_id, status, is_open, urgent, category, entrance)` or `None`: the issue's state for the texts and the send-time checks (`ISSUE_ENDED`, `URGENT_CLEARED`, `STATUS_OUTDATED`) |
+| `issues` | `follower_ids(issue_id)` | `list[UUID]`: who follows the issue (`ISSUE_STATUS_CHANGED`); never returned by the API |
+| `issues` | `can_see(user, issue_id)` | `bool`: whether this user (a `CurrentUserDTO`) sees the issue under the rules of `GET /issues/{id}`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 | `governance` | `may_answer(user, poll_id)` | `bool`: whether this user (a `CurrentUserDTO`) may answer the open poll now, under the rules of `PUT .../ballot`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 
 - `EmergencyRefDTO`: `post_id`, `building_id`, `author_user_id`, `is_active`, `target_scope`, `target_entrance`, `target_apartment_ids`, `title`, `body`, `category`. The body is read only by the dispatcher, right before an emergency message is rendered, and never logged.
@@ -321,8 +324,9 @@ section 10.
 
 - **Place:** reads users, apartments, memberships and badges only through `PropertyService`
   (`get_masked_author_badges` for the board's reporter badge, `list_apartments` for the
-  entrances) and its settings through `BuildingSettings` (section 6). No other module imports it;
-  task I3 adds its durable events for notifications.
+  entrances) and its settings through `BuildingSettings` (section 6). Only `notifications`
+  imports it: the durable events `IssueReported`, `IssueStatusChanged` and `IssueMerged` (stored
+  in the same transaction as the change) and the system-level reads of section 3.4.
 - **Rules as pure functions** in `issues/policies.py`: which statuses are open or ended, who sees
   an issue, the limit check and the retry time, so the board's transitions (task I2) add rules
   there.

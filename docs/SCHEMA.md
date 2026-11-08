@@ -278,10 +278,10 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `channel` | `VARCHAR(16)` | `NOT NULL` | Enum `channel` |
 | `binding_id` | `UUID` | `FK(notif_channel_bindings.id), NULLABLE` | Set exactly for `telegram` and `webpush` |
 | `event_type` | `VARCHAR(32)` | `NOT NULL` | Enum `event_type` |
-| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}` |
-| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll')` | What the notification is about (`poll` since migration 016) |
-| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id` or `gov_polls.id` (no FK: other modules' tables) |
-| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at` |
+| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}`, `issue_reported:{issue_id}`, `issue_status:{change_id}` (the timeline entry of a status change or a merge) |
+| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue')` | What the notification is about (`poll` since migration 016, `issue` since 019) |
+| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id`, `gov_polls.id` or `iss_issues.id` (no FK: other modules' tables) |
+| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at`; for an issue `category`, `entrance`, and for a status notice `status`, `merged` |
 | `locale` | `VARCHAR(5)` | `NOT NULL, CHECK IN ('et', 'ru', 'en')` | Language for the external text, resolved at insert time (`core_users.locale` or `DEFAULT_LOCALE`) |
 | `priority` | `SMALLINT` | `NOT NULL` | `0` for `EMERGENCY_PUBLISHED` only, `1` for everything else; lower is sent first |
 | `status` | `VARCHAR(16)` | `NOT NULL` | Enum delivery `status` |
@@ -289,7 +289,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `next_attempt_at` | `TIMESTAMPTZ` | `NOT NULL` | When a `PENDING` row is due |
 | `lease_until` | `TIMESTAMPTZ` | `NULLABLE` | Set while `SENDING`; an expired lease is claimed again |
 | `last_attempt_at` | `TIMESTAMPTZ` | `NULLABLE` | |
-| `error_code` | `VARCHAR(64)` | `NULLABLE` | Machine code of the last failure or skip reason. Skips: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, `USER_INACTIVE`, `NO_EMAIL`, `PREFERENCE_OFF`, `POST_RESOLVED`, `EMERGENCY_TOO_OLD`, `DEADLINE_PASSED` (a reading reminder after `due_date`), `SUBJECT_NOT_FOUND`, `POLL_NOT_OPEN` (a poll closed or cancelled before sending), `BINDING_REVOKED`. Failures: `SMTP_REJECTED`, `SMTP_AUTH_FAILED`, `SMTP_NOT_SUPPORTED`, `EMAIL_INVALID`, `TELEGRAM_BLOCKED`, `TELEGRAM_CHAT_NOT_FOUND`, `WEBPUSH_GONE` (404/410), `WEBPUSH_ENDPOINT_REJECTED`, `WEBPUSH_INVALID_KEYS` (these five also revoke the binding), `TELEGRAM_BAD_REQUEST`, `TELEGRAM_AUTH_FAILED`, `WEBPUSH_AUTH_FAILED`, `WEBPUSH_PAYLOAD_TOO_LARGE`, `WEBPUSH_REJECTED`, `LEASE_EXPIRED`, or the last retryable code (`SMTP_TEMPORARY`, `SMTP_UNAVAILABLE`, `TELEGRAM_RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `WEBPUSH_RATE_LIMITED`, `WEBPUSH_UNAVAILABLE`, `CHANNEL_TIMEOUT`, `CHANNEL_ERROR`, `PREPARE_ERROR`) after 5 attempts. Never provider text |
+| `error_code` | `VARCHAR(64)` | `NULLABLE` | Machine code of the last failure or skip reason. Skips: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, `USER_INACTIVE`, `NO_EMAIL`, `PREFERENCE_OFF`, `POST_RESOLVED`, `EMERGENCY_TOO_OLD`, `DEADLINE_PASSED` (a reading reminder after `due_date`), `SUBJECT_NOT_FOUND`, `POLL_NOT_OPEN` (a poll closed or cancelled before sending), `ISSUE_ENDED` (an issue report that ended before sending), `URGENT_CLEARED` (an urgent issue alert whose flag the board cleared before sending), `STATUS_OUTDATED` (an issue status notice whose status changed again), `BINDING_REVOKED`. Failures: `SMTP_REJECTED`, `SMTP_AUTH_FAILED`, `SMTP_NOT_SUPPORTED`, `EMAIL_INVALID`, `TELEGRAM_BLOCKED`, `TELEGRAM_CHAT_NOT_FOUND`, `WEBPUSH_GONE` (404/410), `WEBPUSH_ENDPOINT_REJECTED`, `WEBPUSH_INVALID_KEYS` (these five also revoke the binding), `TELEGRAM_BAD_REQUEST`, `TELEGRAM_AUTH_FAILED`, `WEBPUSH_AUTH_FAILED`, `WEBPUSH_PAYLOAD_TOO_LARGE`, `WEBPUSH_REJECTED`, `LEASE_EXPIRED`, or the last retryable code (`SMTP_TEMPORARY`, `SMTP_UNAVAILABLE`, `TELEGRAM_RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `WEBPUSH_RATE_LIMITED`, `WEBPUSH_UNAVAILABLE`, `CHANNEL_TIMEOUT`, `CHANNEL_ERROR`, `PREPARE_ERROR`) after 5 attempts. Never provider text |
 | `trace_id` | `VARCHAR(32)` | `NULLABLE` | Trace of the request that caused the event |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 | `sent_at` | `TIMESTAMPTZ` | `NULLABLE` | |
@@ -636,6 +636,9 @@ and per cleared urgent flag.)*
 | `changed_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | Shown to the board only, as a privacy badge (task I2) |
 | `changed_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 
+- Migration 019 (task I3) adds `ISSUE_REPORTED`, `ISSUE_URGENT` and `ISSUE_STATUS_CHANGED` to
+  the `event_type` checks of `notif_preferences` and `notif_deliveries`, and `issue` to
+  `subject_type` (section 5).
 - Seeding (`src/core/seed.py`) adds two demo issues (task I1): an open one with a "+1" and a
   withdrawn one.
 - A status change locks the issue (`FOR UPDATE`); marking a duplicate also locks the original, the

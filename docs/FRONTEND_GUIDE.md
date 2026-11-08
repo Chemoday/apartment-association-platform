@@ -485,7 +485,7 @@ Contract: docs/API.md section 9.
 
 ## 15. Issue tracker (epic E9)
 
-Contract: docs/API.md section 10. Notifications come with task I3.
+Contract: docs/API.md section 10; notifications in docs/API.md section 6.
 
 - **Page:** "Issues" for everyone with an apartment and for the board (an accountant without an
   apartment gets `403`: hide the menu entry, from `GET /property/me`). Open issues first, then
@@ -512,3 +512,11 @@ Contract: docs/API.md section 10. Notifications come with task I3.
   30 days. "Not urgent" clears the flag. Show the action log (`timeline` with `changed_by` and
   `action`) to the board; residents see the timeline with dates only.
 - `409 INVALID_ISSUE_TRANSITION`: reload the issue (someone else changed it meanwhile).
+- **Notifications** (`subject_type` `issue`, open `/issues/{subject_id}`): `ISSUE_REPORTED` "New
+  issue report: {category}, {location}"; `ISSUE_URGENT` "Urgent issue report: ..." (mandatory,
+  show it like an emergency in the feed); `ISSUE_STATUS_CHANGED` "The issue you follow
+  ({category}, {location}) is now: {status}", or with `merged: true` "... was merged into another
+  report of the same problem". `{location}` is "entrance N" or "outside the entrances" for
+  `entrance: null`. Never show an issue title in a notification. The preferences matrix now has 40
+  rows; show `ISSUE_REPORTED` and `ISSUE_URGENT` only to the chairman and the board, and
+  `ISSUE_STATUS_CHANGED` to everyone who can use the tracker.
