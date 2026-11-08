@@ -29,8 +29,10 @@ All AI coding, testing, and on-call agents operating in this repository MUST fol
 - **Single-Command Execution:** All changes must keep `docker compose up --build` and `pytest` passing without manual intervention.
 
 ## 4. Change Workflow
-- One issue, one branch, one pull request per task: branch from `main` and open the pull request
-  into `main`. A merge into `main` deploys to dev (CD); prod is promoted by hand on the owner's
+- One issue per task; one branch and one pull request per large feature (an epic, or a part of
+  one), with at least one commit per task (contract first, then code), so a pull request is one
+  feature that can be read commit by commit. It closes all its task issues. Branch from `main` and
+  open the pull request into `main`. A merge into `main` deploys to dev (CD); prod is promoted by hand on the owner's
   request (docs/DEPLOYMENT.md). To try a change on dev before merging, add the label
   `deploy-dev` to its pull request. (The `main` freeze during the course review ended on
   2026-11-05; `develop` is no longer used.)
