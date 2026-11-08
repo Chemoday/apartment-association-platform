@@ -1,31 +1,20 @@
 <script setup>
-import { computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import AppLayout from '@/layouts/AppLayout.vue'
 import PublicLayout from '@/layouts/PublicLayout.vue'
+import BackendOfflineModal from '@/components/domain/BackendOfflineModal.vue'
 
 const route = useRoute()
-const router = useRouter()
 const session = useSessionStore()
 
 const layoutComponent = computed(() =>
   route.meta?.layout === 'PublicLayout' ? PublicLayout : AppLayout,
 )
 
-watch(
-  () => session.me?.building_role,
-  (newRole) => {
-    const role = newRole || 'USER'
-    const allowedRoles = route.meta?.roles
-    if (allowedRoles && Array.isArray(allowedRoles) && !allowedRoles.includes(role)) {
-      router.push({ name: 'dashboard' })
-    }
-  },
-)
-
 onMounted(async () => {
-  await session.initializeSession()
+  await session.bootstrap()
 })
 </script>
 
@@ -33,4 +22,5 @@ onMounted(async () => {
   <component :is="layoutComponent">
     <RouterView />
   </component>
+  <BackendOfflineModal />
 </template>

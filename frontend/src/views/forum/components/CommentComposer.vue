@@ -14,6 +14,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  omitAuthorApartment: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['added'])
@@ -29,10 +33,13 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
-    const comment = await addComment(props.postId, {
-      body: body.value.trim(),
-      author_apartment_id: session.activeMembership?.apartment_id || null,
-    })
+    const payload = props.omitAuthorApartment
+      ? { body: body.value.trim() }
+      : {
+          body: body.value.trim(),
+          author_apartment_id: session.activeMembership?.apartment_id || null,
+        }
+    const comment = await addComment(props.postId, payload)
     body.value = ''
     emit('added', comment)
   } catch (err) {

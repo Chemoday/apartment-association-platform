@@ -1,0 +1,161 @@
+import { formatDate, formatPeriodLabel, formatShortDate } from './dates.js'
+
+/**
+ * Maps a NotificationView item to a translation key, interpolation parameters, icon, visual variant, and target route.
+ * Never crashes on unknown event types.
+ *
+ * @param {import('../api/schema').NotificationView} item
+ * @param {string} [lang]
+ * @returns {{
+ *   key: string,
+ *   values: Record<string, any>,
+ *   icon: string,
+ *   variant: 'emergency' | 'resolved' | 'deadline' | 'review' | 'neutral',
+ *   route: string | null
+ * }}
+ */
+export function buildNotificationDescriptor(item, lang = 'en') {
+  const eventType = item?.event_type || ''
+  const params = item?.params || {}
+  const subjectId = item?.subject_id || ''
+
+  if (eventType === 'EMERGENCY_PUBLISHED') {
+    return {
+      key: 'notifications.events.EMERGENCY_PUBLISHED',
+      values: {
+        category: String(params.category || 'GENERAL'),
+        target_scope: String(params.target_scope || 'ALL_BUILDING'),
+        target_entrance: params.target_entrance ?? '',
+      },
+      icon: 'warning',
+      variant: 'emergency',
+      route: subjectId ? `/forum/${subjectId}` : '/forum',
+    }
+  }
+
+  if (eventType === 'EMERGENCY_RESOLVED') {
+    return {
+      key: 'notifications.events.EMERGENCY_RESOLVED',
+      values: {
+        category: String(params.category || 'GENERAL'),
+        target_scope: String(params.target_scope || 'ALL_BUILDING'),
+        target_entrance: params.target_entrance ?? '',
+      },
+      icon: 'check_circle',
+      variant: 'resolved',
+      route: subjectId ? `/forum/${subjectId}` : '/forum',
+    }
+  }
+
+  if (eventType === 'READING_DEADLINE') {
+    const periodCode = String(params.period_code || '')
+    return {
+      key: 'notifications.events.READING_DEADLINE',
+      values: {
+        period_code: periodCode,
+        period: formatPeriodLabel(periodCode, lang),
+        due_date: formatShortDate(String(params.due_date || ''), lang),
+      },
+      icon: 'speed',
+      variant: 'deadline',
+      route: periodCode ? `/readings?period=${encodeURIComponent(periodCode)}` : '/readings',
+    }
+  }
+
+  if (eventType === 'PERIOD_REVIEW') {
+    const periodCode = String(params.period_code || '')
+    return {
+      key: 'notifications.events.PERIOD_REVIEW',
+      values: {
+        period_code: periodCode,
+        period: formatPeriodLabel(periodCode, lang),
+      },
+      icon: 'assignment_turned_in',
+      variant: 'review',
+      route: periodCode ? `/readings?period=${encodeURIComponent(periodCode)}` : '/readings',
+    }
+  }
+
+  if (eventType === 'APARTMENT_MESSAGE') {
+    const fromBoard = Boolean(params.from_board)
+    return {
+      key: fromBoard
+        ? 'notifications.events.APARTMENT_MESSAGE_FROM_BOARD'
+        : 'notifications.events.APARTMENT_MESSAGE_PEER',
+      values: {
+        apartment_id: String(params.apartment_id || ''),
+        apartment_number: String(params.apartment_number || ''),
+        from_board: fromBoard,
+      },
+      icon: 'mail',
+      variant: 'neutral',
+      route: subjectId ? `/messages/${subjectId}` : '/messages',
+    }
+  }
+
+  if (eventType === 'APARTMENT_MESSAGE_TO_BOARD') {
+    return {
+      key: 'notifications.events.APARTMENT_MESSAGE_TO_BOARD',
+      values: {
+        apartment_id: String(params.apartment_id || ''),
+        apartment_number: String(params.apartment_number || ''),
+      },
+      icon: 'mark_email_unread',
+      variant: 'neutral',
+      route: subjectId ? `/messages/${subjectId}` : '/messages',
+    }
+  }
+
+  if (eventType === 'POLL_OPENED') {
+    const closesAt = String(params.closes_at || '')
+    return {
+      key: 'notifications.events.POLL_OPENED',
+      values: {
+        closes_at: closesAt,
+        date: formatDate(closesAt, lang),
+      },
+      icon: 'how_to_vote',
+      variant: 'deadline',
+      route: subjectId ? `/polls/${subjectId}` : '/polls',
+    }
+  }
+
+  return {
+    key: 'notifications.events.UNKNOWN',
+    values: {},
+    icon: 'notifications',
+    variant: 'neutral',
+    route: null,
+  }
+}
+
+/**
+ * Formats a notification item into a localized human-readable string using the session translator `t`.
+ * @param {import('../api/schema').NotificationView} item
+ * @param {(key: string, params?: Record<string, any>) => string} t
+ * @param {string} [lang]
+ * @returns {string}
+ */
+export function formatNotificationText(item, t, lang = 'en') {
+  const desc = buildNotificationDescriptor(item, lang)
+  if (
+    desc.key === 'notifications.events.EMERGENCY_PUBLISHED' ||
+    desc.key === 'notifications.events.EMERGENCY_RESOLVED'
+  ) {
+    const catKey = `forum.categories.${desc.values.category}`
+    const categoryLabel = t(catKey) !== catKey ? t(catKey).toLowerCase() : desc.values.category.toLowerCase()
+    let targetLabel = t('notifications.targets.ALL_BUILDING')
+    if (desc.values.target_scope === 'ENTRANCE') {
+      targetLabel = t('notifications.targets.ENTRANCE', {
+        entrance: desc.values.target_entrance,
+      })
+    } else if (desc.values.target_scope === 'APARTMENT_LIST') {
+      targetLabel = t('notifications.targets.APARTMENT_LIST')
+    }
+    return t(desc.key, {
+      category: categoryLabel,
+      target: targetLabel,
+    })
+  }
+  return t(desc.key, desc.values)
+}

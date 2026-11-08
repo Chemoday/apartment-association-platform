@@ -23,7 +23,7 @@ export function useEmergencies() {
   )
 
   async function refresh() {
-    if (!session.actingUserId) {
+    if (!session.actingUserId || session.backendOffline) {
       emergencies.value = []
       return
     }
@@ -53,12 +53,18 @@ export function useEmergencies() {
   }
 
   function handleWindowFocus() {
-    refresh()
+    if (!session.backendOffline && !session.offlineDemoMode) {
+      refresh()
+    }
   }
 
   onMounted(() => {
     refresh()
-    timerId = window.setInterval(refresh, POLL_INTERVAL_MS)
+    timerId = window.setInterval(() => {
+      if (!session.backendOffline && !session.offlineDemoMode) {
+        refresh()
+      }
+    }, POLL_INTERVAL_MS)
     window.addEventListener('focus', handleWindowFocus)
   })
 
@@ -71,7 +77,7 @@ export function useEmergencies() {
   })
 
   watch(
-    () => session.actingUserId,
+    () => [session.actingUserId, session.sessionRevision],
     () => {
       emergencies.value = []
       refresh()

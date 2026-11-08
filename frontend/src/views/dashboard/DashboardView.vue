@@ -403,16 +403,24 @@ const periodLabel = computed(() =>
                 </div>
               </div>
 
-              <div class="mt-space-md pt-space-sm">
+              <div class="mt-space-md pt-space-sm flex flex-col gap-2">
                 <button
                   type="button"
-                  class="w-full py-2 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-label-md text-label-md font-semibold transition-colors flex items-center justify-center gap-1.5"
+                  class="w-full py-2 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-label-md text-label-md font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                   @click="router.push('/readings')"
                 >
                   <span class="material-symbols-outlined text-[16px]">speed</span>
                   <span>
                     {{ session.t('dashboard.manageAptMeters', { number: m.apartment_number }) }}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  class="w-full py-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface font-label-md text-label-md font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                  @click="router.push({ name: 'settings-profile' })"
+                >
+                  <span class="material-symbols-outlined text-[16px]">person</span>
+                  <span>{{ session.t('auth.menu.profile') }}</span>
                 </button>
               </div>
             </div>

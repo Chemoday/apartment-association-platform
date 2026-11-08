@@ -52,8 +52,12 @@ const privacyModes = computed(() => [
   },
 ])
 
+let loadPostsSeq = 0
+let selectPostSeq = 0
+
 async function loadPosts() {
   if (!session.actingUserId) return
+  const seq = ++loadPostsSeq
   loading.value = true
   error.value = null
   try {
@@ -65,7 +69,10 @@ async function loadPosts() {
     }
 
     const data = await listPosts(params)
-    posts.value = Array.isArray(data) ? data : []
+    if (seq !== loadPostsSeq) return
+    posts.value = Array.isArray(data)
+      ? data.filter((p) => p.post_type !== 'BOARD_TOPIC' && p.post_type !== 'APARTMENT_THREAD')
+      : []
     if (posts.value.length > 0) {
       const stillExists =
         selectedPostDetail.value && posts.value.some((p) => p.id === selectedPostDetail.value.id)
@@ -75,17 +82,24 @@ async function loadPosts() {
       selectedPostDetail.value = null
     }
   } catch (err) {
+    if (seq !== loadPostsSeq) return
     error.value = err
   } finally {
-    loading.value = false
+    if (seq === loadPostsSeq) {
+      loading.value = false
+    }
   }
 }
 
 async function selectPost(post) {
   if (!post?.id) return
+  const seq = ++selectPostSeq
   try {
-    selectedPostDetail.value = await getPost(post.id)
+    const detail = await getPost(post.id)
+    if (seq !== selectPostSeq) return
+    selectedPostDetail.value = detail
   } catch {
+    if (seq !== selectPostSeq) return
     selectedPostDetail.value = post
   }
 }

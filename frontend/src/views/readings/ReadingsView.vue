@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { getMyDashboard, listPeriods } from '@/api/endpoints/meters.js'
@@ -18,11 +18,12 @@ import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 import StatusChip from '@/components/domain/StatusChip.vue'
 
+const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 const { canViewMatrix } = useRole()
 
-const periodCode = ref('')
+const periodCode = ref(typeof route.query?.period === 'string' ? route.query.period : '')
 const periodsList = ref([])
 const periods = computed(() =>
   periodsList.value.length > 0
@@ -43,19 +44,32 @@ const submitBannerMessage = ref('')
 const historyReadingId = ref('')
 const historyTitle = ref('')
 
+let loadDashboardSeq = 0
+
 async function loadDashboard() {
   if (!session.actingUserId) return
+  const seq = ++loadDashboardSeq
   loading.value = true
   error.value = null
   submitBannerMessage.value = ''
   try {
     if (!periodsList.value.length) {
       const pList = await listPeriods().catch(() => [])
+      if (seq !== loadDashboardSeq) return
       if (Array.isArray(pList) && pList.length > 0) {
         periodsList.value = pList
       }
     }
+    if (
+      typeof route.query?.period === 'string' &&
+      periods.value.includes(route.query.period)
+    ) {
+      periodCode.value = route.query.period
+    } else if (periodCode.value && !periods.value.includes(periodCode.value)) {
+      periodCode.value = ''
+    }
     const res = await getMyDashboard(periodCode.value || null)
+    if (seq !== loadDashboardSeq) return
     dashboard.value = res
     if (!periodCode.value && res.period?.period_code) {
       periodCode.value = res.period.period_code
@@ -68,9 +82,12 @@ async function loadDashboard() {
       }
     }
   } catch (err) {
+    if (seq !== loadDashboardSeq) return
     error.value = err
   } finally {
-    loading.value = false
+    if (seq === loadDashboardSeq) {
+      loading.value = false
+    }
   }
 }
 
