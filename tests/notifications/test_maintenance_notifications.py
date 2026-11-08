@@ -215,7 +215,7 @@ async def test_a_notice_e_mail_says_only_that_there_is_a_notice(
     await dispatcher.tick(now=daytime_now())  # notices wait for the morning at night
 
     sent = {email["To"]: email for email in smtp_server.messages}
-    email = sent[mailboxes["board_15"]]  # lives in entrance 2; the board sees every notice
+    email = sent[mailboxes["board_15"]]  # a board member: told about every notice
     assert email["Subject"] == "New notice from the board"
     assert "Secret" not in email.get_content()
     moved_out = await email_rows(
@@ -284,3 +284,34 @@ async def test_a_reminder_to_someone_who_left_the_board_or_of_a_moved_date_is_sk
         world.board_15.id: ("SKIPPED", "SUBJECT_NOT_FOUND"),
         world.chairman.id: ("SKIPPED", "TASK_MOVED"),
     }
+
+
+async def test_a_board_member_without_an_apartment_gets_the_notice_e_mail(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],  # noqa: F811
+    dispatcher: Dispatcher,  # noqa: F811
+    db_session: AsyncSession,
+    smtp_server: SmtpServer,
+    email_settings: Settings,  # noqa: F811
+) -> None:
+    world.chairman.locale = Locale.EN
+    await db_session.flush()
+    response = await api_client.post(
+        POSTS,
+        json={
+            "post_type": "OFFICIAL_NOTICE",
+            "title": "Stairs",
+            "body": "Entrance 1.",
+            "target_scope": "ENTRANCE",
+            "target_entrance": 1,
+        },
+        headers=bearer(world.board_15, email_settings),
+    )
+    assert response.status_code == 201, response.text
+
+    await dispatcher.tick(now=daytime_now())
+
+    sent = {email["To"]: email for email in smtp_server.messages}
+    assert sent[mailboxes["chairman"]]["Subject"] == "New notice from the board"
+    assert mailboxes["board_15"] not in sent, "never the author"

@@ -550,7 +550,7 @@ Contract: docs/API.md section 11.
   "Maintenance due on {due_date}" or, with `overdue`, "overdue since {due_date}" (load the task for
   its title); shown to the chairman and the board only in the settings. `NOTICE_PUBLISHED`
   (`subject_type` `post`, open the notice) "New notice from the board"; shown to everyone with an
-  apartment. The preferences matrix now has 48 rows.
+  apartment and to the chairman and the board. The preferences matrix now has 48 rows.
 - In the board room and the feed, a post with `origin`
   `MAINTENANCE` gets a small "automatic reminder" (or "automatic notice") label next to the
   author's badge.
