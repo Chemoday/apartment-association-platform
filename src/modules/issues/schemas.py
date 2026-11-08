@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from src.core.validation import optional_safe_text, safe_text
 from src.modules.property.schemas import AuthorBadgeDTO
@@ -41,6 +41,23 @@ class IssueStatus(StrEnum):
     DUPLICATE = "DUPLICATE"
     DECLINED = "DECLINED"
     WITHDRAWN = "WITHDRAWN"
+
+
+class BoardStatus(StrEnum):
+    """The statuses the board sets (REPORTED and WITHDRAWN belong to the reporter)."""
+
+    IN_PROGRESS = "IN_PROGRESS"
+    WAITING_FOR_CONTRACTOR = "WAITING_FOR_CONTRACTOR"
+    RESOLVED = "RESOLVED"
+    DUPLICATE = "DUPLICATE"
+    DECLINED = "DECLINED"
+
+
+class IssueAction(StrEnum):
+    """What an entry of the action log records."""
+
+    STATUS = "STATUS"
+    URGENT_CLEARED = "URGENT_CLEARED"
 
 
 class StatusFilter(StrEnum):
@@ -86,6 +103,21 @@ class IssueEdit(BaseModel):
     description: DescriptionText = None
 
 
+class StatusChange(BaseModel):
+    """Body of POST /issues/{id}/status (the board)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: BoardStatus
+    duplicate_of: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _original_only_for_duplicates(self) -> "StatusChange":
+        if (self.status == BoardStatus.DUPLICATE) != (self.duplicate_of is not None):
+            raise ValueError("duplicate_of is given exactly when the status is DUPLICATE")
+        return self
+
+
 # --- Responses -----------------------------------------------------------------------------------
 
 
@@ -96,8 +128,12 @@ class IssueForm(BaseModel):
 
 
 class TimelineEntry(BaseModel):
+    """`action` and `changed_by` are the board's action log; others get STATUS and null."""
+
     status: IssueStatus
     at: datetime
+    action: IssueAction = IssueAction.STATUS
+    changed_by: AuthorBadgeDTO | None = None
 
 
 class ReporterView(BaseModel):

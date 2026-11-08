@@ -6106,6 +6106,220 @@
         }
       }
     },
+    "/api/v1/issues/{issue_id}/status": {
+      "post": {
+        "tags": [
+          "issues"
+        ],
+        "summary": "Change Issue Status",
+        "description": "The board moves an issue on, marks a duplicate, declines or reopens it.",
+        "operationId": "change_issue_status_api_v1_issues__issue_id__status_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `ISSUE_NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state. error_code: `INVALID_ISSUE_TRANSITION`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`, `INVALID_DUPLICATE`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/issues/{issue_id}/urgent/clear": {
+      "post": {
+        "tags": [
+          "issues"
+        ],
+        "summary": "Clear Urgent Flag",
+        "description": "The board clears a false urgent flag.",
+        "operationId": "clear_urgent_flag_api_v1_issues__issue_id__urgent_clear_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `ISSUE_NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state. error_code: `ISSUE_ENDED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notifications/feed": {
       "get": {
         "tags": [
@@ -7542,6 +7756,18 @@
         "title": "BindingView",
         "description": "A linked chat or device; the address itself (chat id, endpoint) is never returned."
       },
+      "BoardStatus": {
+        "type": "string",
+        "enum": [
+          "IN_PROGRESS",
+          "WAITING_FOR_CONTRACTOR",
+          "RESOLVED",
+          "DUPLICATE",
+          "DECLINED"
+        ],
+        "title": "BoardStatus",
+        "description": "The statuses the board sets (REPORTED and WITHDRAWN belong to the reporter)."
+      },
       "BuildingResponse": {
         "properties": {
           "building_id": {
@@ -8402,6 +8628,15 @@
           "expires_at"
         ],
         "title": "InvitationView"
+      },
+      "IssueAction": {
+        "type": "string",
+        "enum": [
+          "STATUS",
+          "URGENT_CLEARED"
+        ],
+        "title": "IssueAction",
+        "description": "What an entry of the action log records."
       },
       "IssueCategory": {
         "type": "string",
@@ -11666,6 +11901,32 @@
         "title": "StaffRole",
         "description": "The building roles a STAFF invitation can give (USER is no staff role)."
       },
+      "StatusChange": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/BoardStatus"
+          },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "StatusChange",
+        "description": "Body of POST /issues/{id}/status (the board)."
+      },
       "StatusFilter": {
         "type": "string",
         "enum": [
@@ -11749,6 +12010,20 @@
             "type": "string",
             "format": "date-time",
             "title": "At"
+          },
+          "action": {
+            "$ref": "#/components/schemas/IssueAction",
+            "default": "STATUS"
+          },
+          "changed_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuthorBadgeDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -11756,7 +12031,8 @@
           "status",
           "at"
         ],
-        "title": "TimelineEntry"
+        "title": "TimelineEntry",
+        "description": "`action` and `changed_by` are the board's action log; others get STATUS and null."
       },
       "UnavailableReason": {
         "type": "string",

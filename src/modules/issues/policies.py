@@ -6,8 +6,9 @@ add their rules here.
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from enum import StrEnum
 
-from src.modules.issues.schemas import IssueStatus, StatusFilter
+from src.modules.issues.schemas import BoardStatus, IssueStatus, StatusFilter
 from src.modules.property.schemas import BuildingRole
 
 OPEN_STATUSES = frozenset(
@@ -65,6 +66,53 @@ def visible(
     if board and include_old:
         return True
     return ended_at is not None and now - ended_at < RECENTLY_ENDED
+
+
+class Transition(StrEnum):
+    ALLOWED = "ALLOWED"
+    UNCHANGED = "UNCHANGED"  # the current status again: no change, no log entry
+    REFUSED = "REFUSED"
+
+
+# How long after its end the board may reopen an issue (as long as residents still see it).
+REOPEN_WINDOW = RECENTLY_ENDED
+
+
+def board_transition(
+    current: IssueStatus,
+    target: BoardStatus,
+    *,
+    ended_at: datetime | None,
+    same_original: bool,
+    now: datetime,
+) -> Transition:
+    """Whether the board may move an issue from `current` to `target`.
+
+    From an open status: any board status. From RESOLVED, DUPLICATE or DECLINED: only reopening
+    to IN_PROGRESS within 30 days of the end. WITHDRAWN never changes. A duplicate of another
+    original must be reopened first.
+    """
+    if current.value == target.value:
+        if target != BoardStatus.DUPLICATE or same_original:
+            return Transition.UNCHANGED
+        return Transition.REFUSED
+    if current == IssueStatus.WITHDRAWN:
+        return Transition.REFUSED
+    if is_open(current):
+        return Transition.ALLOWED
+    reopening = target == BoardStatus.IN_PROGRESS
+    recent = ended_at is not None and now - ended_at < REOPEN_WINDOW
+    return Transition.ALLOWED if reopening and recent else Transition.REFUSED
+
+
+def can_be_original(
+    status: IssueStatus, *, ended_at: datetime | None, is_same_issue: bool, now: datetime
+) -> bool:
+    """An original of a duplicate: another issue residents still see (open, or ended within 30
+    days) that is not itself a duplicate or withdrawn."""
+    if is_same_issue or status in {IssueStatus.DUPLICATE, IssueStatus.WITHDRAWN}:
+        return False
+    return is_open(status) or (ended_at is not None and now - ended_at < RECENTLY_ENDED)
 
 
 def retry_after_seconds(window: Sequence[datetime], limit: int, now: datetime) -> int | None:

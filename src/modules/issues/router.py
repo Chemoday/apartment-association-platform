@@ -15,6 +15,7 @@ from src.modules.issues.schemas import (
     IssueReport,
     IssueSummary,
     IssueView,
+    StatusChange,
     StatusFilter,
 )
 from src.modules.issues.service import IssuesService, get_issues_service
@@ -133,3 +134,31 @@ async def follow_issue(issue_id: uuid.UUID, user: Caller, service: Service) -> I
 async def unfollow_issue(issue_id: uuid.UUID, user: Caller, service: Service) -> IssueView:
     """Stop following (idempotent)."""
     return await service.unfollow(user, issue_id)
+
+
+@router.post(
+    "/{issue_id}/status",
+    response_model=IssueView,
+    responses=error_responses(
+        {
+            404: ["ISSUE_NOT_FOUND"],
+            409: ["INVALID_ISSUE_TRANSITION"],
+            422: ["VALIDATION_ERROR", "INVALID_DUPLICATE"],
+        }
+    ),
+)
+async def change_issue_status(
+    issue_id: uuid.UUID, body: StatusChange, user: Caller, service: Service
+) -> IssueView:
+    """The board moves an issue on, marks a duplicate, declines or reopens it."""
+    return await service.change_status(user, issue_id, body)
+
+
+@router.post(
+    "/{issue_id}/urgent/clear",
+    response_model=IssueView,
+    responses=error_responses({**_ONE_ISSUE, 409: ["ISSUE_ENDED"]}),
+)
+async def clear_urgent_flag(issue_id: uuid.UUID, user: Caller, service: Service) -> IssueView:
+    """The board clears a false urgent flag."""
+    return await service.clear_urgent(user, issue_id)

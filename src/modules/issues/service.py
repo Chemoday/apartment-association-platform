@@ -9,8 +9,19 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from fastapi import Depends
-from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select, true
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import (
+    ColumnElement,
+    DateTime,
+    and_,
+    case,
+    delete,
+    func,
+    literal,
+    or_,
+    select,
+    true,
+)
+from sqlalchemy.dialects.postgresql import UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.building_settings import BuildingSettings
@@ -22,6 +33,9 @@ from src.modules.issues.policies import (
     LIMIT_WINDOW,
     OPEN_STATUSES,
     RECENTLY_ENDED,
+    Transition,
+    board_transition,
+    can_be_original,
     is_board,
     is_open,
     retry_after_seconds,
@@ -29,6 +43,8 @@ from src.modules.issues.policies import (
     visible,
 )
 from src.modules.issues.schemas import (
+    BoardStatus,
+    IssueAction,
     IssueCategory,
     IssueEdit,
     IssueForm,
@@ -37,6 +53,7 @@ from src.modules.issues.schemas import (
     IssueSummary,
     IssueView,
     ReporterView,
+    StatusChange,
     StatusFilter,
     TimelineEntry,
 )
@@ -77,6 +94,23 @@ def _ended(status: IssueStatus) -> DomainError:
         error_code="ISSUE_ENDED",
         message="The issue has ended.",
         extra={"status": status.value},
+    )
+
+
+def _invalid_transition(status: IssueStatus) -> DomainError:
+    return DomainError(
+        status_code=409,
+        error_code="INVALID_ISSUE_TRANSITION",
+        message="The issue cannot move to that status now.",
+        extra={"status": status.value},
+    )
+
+
+def _invalid_duplicate() -> DomainError:
+    return DomainError(
+        status_code=422,
+        error_code="INVALID_DUPLICATE",
+        message="The original must be another open or recently ended issue of the building.",
     )
 
 
@@ -123,7 +157,7 @@ class IssuesService:
             user,
             request.apartment_id,
             board=board,
-            without_apartment="apartment_id" in request.model_fields_set,
+            apartment_id_given="apartment_id" in request.model_fields_set,
         )
         await self._check_entrance(user.building_id, request.entrance)
         if request.urgent and not await self.settings.get(user.building_id, URGENT_ENABLED):
@@ -144,6 +178,7 @@ class IssuesService:
             title=request.title,
             description=request.description or "",
             urgent=request.urgent,
+            reported_urgent=request.urgent,
             status=IssueStatus.REPORTED,
             created_at=now,
             updated_at=now,
@@ -227,6 +262,107 @@ class IssuesService:
                 IssueFollower.issue_id == issue.id, IssueFollower.user_id == user.id
             )
         )
+        return await self._view(user, issue)
+
+    # --- The board's work -----------------------------------------------------------------------
+
+    async def change_status(
+        self, user: CurrentUserDTO, issue_id: uuid.UUID, request: StatusChange
+    ) -> IssueView:
+        """Move an issue on (the board). A duplicate's followers join the original.
+
+        The issue and the original are locked in id order, so two board members merging in
+        opposite directions wait for each other instead of making a cycle or a deadlock.
+        """
+        await self._visible_issue(user, issue_id)
+        self._require_board(user)
+        locked = await self._lock(user, {issue_id, *filter(None, [request.duplicate_of])})
+        issue = locked[issue_id]
+        now = _now()
+        # The transition first: a repeated or refused change never depends on the original.
+        verdict = board_transition(
+            issue.status,
+            request.status,
+            ended_at=issue.ended_at,
+            same_original=issue.duplicate_of_id is not None
+            and issue.duplicate_of_id == request.duplicate_of,
+            now=now,
+        )
+        if verdict == Transition.REFUSED:
+            raise _invalid_transition(issue.status)
+        if verdict == Transition.UNCHANGED:
+            return await self._view(user, issue)
+        original = None
+        if request.status == BoardStatus.DUPLICATE:
+            original = locked.get(request.duplicate_of)  # type: ignore[arg-type]
+            if original is None or not can_be_original(
+                original.status,
+                ended_at=original.ended_at,
+                is_same_issue=original.id == issue.id,
+                now=now,
+            ):
+                raise _invalid_duplicate()
+            if original.status == IssueStatus.REPORTED:
+                # Others now follow it: its reporter may no longer rewrite or withdraw it.
+                self.session.add(
+                    IssueStatusChange(
+                        issue_id=original.id,
+                        from_status=IssueStatus.REPORTED,
+                        to_status=IssueStatus.IN_PROGRESS,
+                        changed_by_user_id=user.id,
+                        changed_at=now,
+                    )
+                )
+                original.status, original.updated_at = IssueStatus.IN_PROGRESS, now
+
+        target = IssueStatus(request.status.value)
+        self.session.add(
+            IssueStatusChange(
+                issue_id=issue.id,
+                from_status=issue.status,
+                to_status=target,
+                changed_by_user_id=user.id,
+                changed_at=now,
+            )
+        )
+        issue.status, issue.updated_at = target, now
+        issue.ended_at = None if is_open(target) else now
+        issue.duplicate_of_id = original.id if original is not None else None
+        if original is not None:
+            moved = select(
+                literal(original.id, UUID(as_uuid=True)),
+                IssueFollower.user_id,
+                literal(now, DateTime(timezone=True)),
+            ).where(IssueFollower.issue_id == issue.id)
+            await self.session.execute(
+                insert(IssueFollower)
+                .from_select(["issue_id", "user_id", "created_at"], moved)
+                .on_conflict_do_nothing(index_elements=["issue_id", "user_id"])
+            )
+        await self.session.flush()
+        return await self._view(user, issue)
+
+    async def clear_urgent(self, user: CurrentUserDTO, issue_id: uuid.UUID) -> IssueView:
+        """The board clears a false urgent flag; logged in the action log."""
+        await self._visible_issue(user, issue_id)
+        self._require_board(user)
+        issue = (await self._lock(user, {issue_id}))[issue_id]
+        if not is_open(issue.status):
+            raise _ended(issue.status)
+        if issue.urgent:
+            now = _now()
+            self.session.add(
+                IssueStatusChange(
+                    issue_id=issue.id,
+                    from_status=issue.status,
+                    to_status=issue.status,
+                    action=IssueAction.URGENT_CLEARED,
+                    changed_by_user_id=user.id,
+                    changed_at=now,
+                )
+            )
+            issue.urgent, issue.updated_at = False, now
+            await self.session.flush()
         return await self._view(user, issue)
 
     # --- Reading --------------------------------------------------------------------------------
@@ -313,6 +449,22 @@ class IssuesService:
             raise _not_found()
         return issue
 
+    @staticmethod
+    def _require_board(user: CurrentUserDTO) -> None:
+        if not is_board(user.building_role):
+            raise _forbidden("Only the board changes the status of an issue.")
+
+    async def _lock(self, user: CurrentUserDTO, ids: set[uuid.UUID]) -> dict[uuid.UUID, Issue]:
+        """Lock these issues of the caller's building in id order; unknown ids are left out."""
+        rows = await self.session.scalars(
+            select(Issue)
+            .where(Issue.id.in_(sorted(ids)), Issue.building_id == user.building_id)
+            .order_by(Issue.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return {issue.id: issue for issue in rows}
+
     async def _own_reported_issue(self, user: CurrentUserDTO, issue_id: uuid.UUID) -> Issue:
         issue = await self._visible_issue(user, issue_id, lock="update")
         if issue.reporter_user_id != user.id:
@@ -329,12 +481,12 @@ class IssuesService:
         apartment_id: uuid.UUID | None,
         *,
         board: bool,
-        without_apartment: bool,
+        apartment_id_given: bool,
     ) -> uuid.UUID | None:
         """The apartment a report comes from. An explicit null is "no apartment", for the board
         only; residents who leave the field out report from their one apartment."""
         mine = [membership.apartment_id for membership in user.memberships]
-        if board and without_apartment and apartment_id is None:
+        if board and apartment_id_given and apartment_id is None:
             return None
         if apartment_id is not None:
             if apartment_id not in mine:
@@ -372,17 +524,17 @@ class IssuesService:
         await self.session.execute(
             select(func.pg_advisory_xact_lock(func.hashtextextended(f"issues:{apartment_id}", 0)))
         )
+        if not limited:
+            return  # the board is never limited; holding the lock keeps others' counts right
         now = _now()
         rows = (
             await self.session.execute(
-                select(Issue.created_at, Issue.urgent).where(
+                select(Issue.created_at, Issue.reported_urgent).where(
                     Issue.reporter_apartment_id == apartment_id,
                     Issue.created_at > now - LIMIT_WINDOW,
                 )
             )
         ).all()
-        if not limited:
-            return  # the board is never limited; holding the lock keeps others' counts right
         limit = await self.settings.get(building_id, REPORTS_PER_APARTMENT_PER_DAY)
         if (wait := retry_after_seconds([at for at, _ in rows], limit, now)) is not None:
             raise _rate_limited(wait)
@@ -454,16 +606,40 @@ class IssuesService:
 
     async def _view(self, user: CurrentUserDTO, issue: Issue) -> IssueView:
         [summary] = await self._summaries(user, [issue])
-        timeline = await self.session.scalars(
-            select(IssueStatusChange)
-            .where(IssueStatusChange.issue_id == issue.id)
-            .order_by(IssueStatusChange.changed_at, IssueStatusChange.id)
-        )
         return IssueView(
             **summary.model_dump(),
             description=issue.description,
-            timeline=[TimelineEntry(status=row.to_status, at=row.changed_at) for row in timeline],
+            timeline=await self._timeline(user, issue),
         )
+
+    async def _timeline(self, user: CurrentUserDTO, issue: Issue) -> list[TimelineEntry]:
+        """Residents: the statuses with dates. The board: the action log with who acted (the
+        privacy badge without an apartment context, never a raw name)."""
+        rows = list(
+            await self.session.scalars(
+                select(IssueStatusChange)
+                .where(IssueStatusChange.issue_id == issue.id)
+                .order_by(IssueStatusChange.changed_at, IssueStatusChange.id)
+            )
+        )
+        if not is_board(user.building_role):
+            return [
+                TimelineEntry(status=row.to_status, at=row.changed_at)
+                for row in rows
+                if row.action == IssueAction.STATUS
+            ]
+        badges = await self.property_service.get_masked_author_badges(
+            {(row.changed_by_user_id, None) for row in rows}
+        )
+        return [
+            TimelineEntry(
+                status=row.to_status,
+                at=row.changed_at,
+                action=row.action,
+                changed_by=badges[(row.changed_by_user_id, None)],
+            )
+            for row in rows
+        ]
 
 
 def get_issues_service(

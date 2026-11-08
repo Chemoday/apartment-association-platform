@@ -53,6 +53,7 @@ def upgrade() -> None:
         sa.Column("title", sa.String(120), nullable=False),
         sa.Column("description", sa.Text(), nullable=False, server_default=""),
         sa.Column("urgent", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("reported_urgent", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("status", sa.String(32), nullable=False),
         sa.Column("duplicate_of_id", UUID, sa.ForeignKey("iss_issues.id"), nullable=True),
         _timestamp("created_at"),
@@ -91,12 +92,16 @@ def upgrade() -> None:
         ),
         sa.Column("from_status", sa.String(32), nullable=True),
         sa.Column("to_status", sa.String(32), nullable=False),
+        sa.Column("action", sa.String(32), nullable=False, server_default="STATUS"),
         sa.Column("changed_by_user_id", UUID, sa.ForeignKey("core_users.id"), nullable=False),
         _timestamp("changed_at"),
         sa.CheckConstraint(
             f"from_status IN ({STATUSES})", name="ck_iss_status_changes_from_status"
         ),
         sa.CheckConstraint(f"to_status IN ({STATUSES})", name="ck_iss_status_changes_to_status"),
+        sa.CheckConstraint(
+            "action IN ('STATUS', 'URGENT_CLEARED')", name="ck_iss_status_changes_action"
+        ),
     )
     op.create_index("ix_iss_status_changes_issue_id", "iss_status_changes", ["issue_id"])
 

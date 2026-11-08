@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base, uuid_pk, varchar_enum
-from src.modules.issues.schemas import IssueCategory, IssueStatus
+from src.modules.issues.schemas import IssueAction, IssueCategory, IssueStatus
 
 # Keep these texts identical to alembic/versions/018_issues.py: tests compare the catalogs.
 ENDED_CHECK = (
@@ -79,6 +79,10 @@ class Issue(Base):
     urgent: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    # As reported, never changed: a flag the board cleared still counts for the urgent limit.
+    reported_urgent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     status: Mapped[IssueStatus] = mapped_column(
         varchar_enum(IssueStatus, "ck_iss_issues_status"), nullable=False
     )
@@ -117,6 +121,12 @@ class IssueStatusChange(Base):
     )
     to_status: Mapped[IssueStatus] = mapped_column(
         varchar_enum(IssueStatus, "ck_iss_status_changes_to_status"), nullable=False
+    )
+    action: Mapped[IssueAction] = mapped_column(
+        varchar_enum(IssueAction, "ck_iss_status_changes_action"),
+        nullable=False,
+        default=IssueAction.STATUS,
+        server_default=IssueAction.STATUS.value,
     )
     changed_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("core_users.id"), nullable=False
