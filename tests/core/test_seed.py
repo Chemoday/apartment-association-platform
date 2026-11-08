@@ -377,3 +377,24 @@ async def test_the_building_has_an_open_poll_answered_by_apartment_1(
     day, note = detail.json()["questions"]
     assert day["value_type"] == "DATE" and len(day["options"]) == 2
     assert note["answer_mode"] == "OWN_VALUE"
+
+
+async def test_the_building_has_an_open_issue_and_a_withdrawn_one(
+    seeded: AsyncSession, api_client: AsyncClient
+) -> None:
+    url = "/api/v1/issues"
+    tenant = (await api_client.get(url, headers=as_demo(DemoUserKey.TENANT_2))).json()
+    owner_1 = (await api_client.get(url, headers=as_demo(DemoUserKey.OWNER_1))).json()
+    board = (await api_client.get(url, headers=as_demo(DemoUserKey.CHAIRMAN))).json()
+
+    assert [(i["status"], i["followers"], i["i_follow"]) for i in tenant] == [
+        ("REPORTED", 2, True),
+        ("WITHDRAWN", 1, True),
+    ]
+    (light,) = owner_1
+    assert (light["title"], light["reporter"], light["can_follow"]) == (
+        "No light on the 3rd floor landing",
+        None,
+        True,
+    )
+    assert len(board) == 2 and board[0]["reporter"]["badge"]["display_label"] == "Apt. 14"

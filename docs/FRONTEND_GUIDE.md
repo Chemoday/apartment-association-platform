@@ -80,6 +80,10 @@ Build the navigation from `GET /api/v1/property/me` (`building_role`, `membershi
 | Polls: create, open, close, extend, cancel | no | yes | yes | no |
 | Polls: see | when targeted | all | all | when targeted |
 | Polls: answer | when targeted and eligible | when targeted and eligible | when targeted and eligible | when targeted and eligible |
+| Building settings (`/settings`): see | no | yes | yes | no |
+| Issues: see, report, "+1" | own building | yes | yes | only as a member of an apartment |
+| Issues: see the reporter | no | yes | yes | no |
+| Building settings: change | no | no | yes | no |
 
 A user with no apartment gets `apartments: []` from the dashboard; hide the meter card, do not
 show an error. `GET /property/me` never returns the user's own name or email: greet with the
@@ -461,3 +465,58 @@ Contract: docs/API.md section 8.
   `dates` counts, or for text answers only `answered` (the board also gets `texts`). Render
   numbers and dates in the reader's language. Percentages are of `answered`.
 
+## 14. Building settings (epic E9)
+
+Contract: docs/API.md section 9.
+
+- **Page:** "Association settings" for the chairman (edit) and the board (read only); nobody else
+  sees the menu entry (others get `403 FORBIDDEN`). Load `GET /api/v1/settings`.
+- **One control per setting by `type`:** a number field with `minimum` / `maximum` for `INTEGER`,
+  a switch for `BOOLEAN`. The label and a one-line help text come from the locales by `key`
+  (unknown keys: show the key itself, so a new backend setting is never hidden). Group by the
+  prefix (`issues.` = "Issue reports").
+- Show "default" next to settings with `is_default: true`, and a "Reset to default" action for
+  the others, which sends `null` for that key.
+- **Saving:** one `PUT` with only the changed keys. On `422 VALIDATION_ERROR` mark the fields named
+  in `errors[].loc[2]`; nothing was saved.
+- Changes apply at once to the next request. Residents cannot read this page: a feature that
+  depends on a setting tells its own clients (e.g. the issue tracker of task I1 says whether the
+  urgent flag is offered).
+
+## 15. Issue tracker (epic E9)
+
+Contract: docs/API.md section 10; notifications in docs/API.md section 6.
+
+- **Page:** "Issues" for everyone with an apartment and for the board (an accountant without an
+  apartment gets `403`: hide the menu entry, from `GET /property/me`). Open issues first, then
+  recently ended ones; filters by status, category and entrance.
+- **Before reporting:** show the open issues of the chosen category and entrance first, so people
+  press "+1" instead of reporting again.
+- **The form** (`GET /issues/form`): category, entrance (from `entrances`, or "outside / whole
+  building" = `null`), place, title, description, and the urgent switch only when
+  `urgent_enabled` is true. With several `apartment_ids` ask which apartment reports. Say clearly:
+  "Only common areas. For a problem inside your flat, write to the board" (link to the messages
+  of section 4).
+- **`429 RATE_LIMITED`:** "Your apartment has reached today's limit of reports"; show when it is
+  possible again from `retry_after_seconds`. The chairman sets the limit (section 14).
+- **Issue page:** status with the timeline (dates), category, location, text, the follower count,
+  the "+1 / I see it too" button (`can_follow`; when `i_follow`, "You follow this issue" with
+  "Stop following"), and for the reporter "Edit" / "Withdraw" while `can_edit`.
+- **Board view:** `reporter` shows the badge and a link to the apartment's card and thread
+  (`apartment_id`); nobody else ever sees who reported or who follows.
+- `404 ISSUE_NOT_FOUND`: "This issue is not available" (withdrawn, too old, or not yours to see).
+- **The board's work** (chairman and board): on the issue page a status menu with "In progress",
+  "Waiting for contractor", "Resolved", "Duplicate of..." (pick the original from the open and
+  recently ended issues; offer the ones of the same category and entrance first) and "Declined"
+  (suggest writing to the apartment when it is inside a flat). On an ended issue, "Reopen" within
+  30 days. "Not urgent" clears the flag. Show the action log (`timeline` with `changed_by` and
+  `action`) to the board; residents see the timeline with dates only.
+- `409 INVALID_ISSUE_TRANSITION`: reload the issue (someone else changed it meanwhile).
+- **Notifications** (`subject_type` `issue`, open `/issues/{subject_id}`): `ISSUE_REPORTED` "New
+  issue report: {category}, {location}"; `ISSUE_URGENT` "Urgent issue report: ..." (mandatory,
+  show it like an emergency in the feed); `ISSUE_STATUS_CHANGED` "The issue you follow
+  ({category}, {location}) is now: {status}", or with `merged: true` "... was merged into another
+  report of the same problem". `{location}` is "entrance N" or "outside the entrances" for
+  `entrance: null`. Never show an issue title in a notification. The preferences matrix now has 40
+  rows; show `ISSUE_REPORTED` and `ISSUE_URGENT` only to the chairman and the board, and
+  `ISSUE_STATUS_CHANGED` to everyone who can use the tracker.

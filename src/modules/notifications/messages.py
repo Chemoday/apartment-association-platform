@@ -60,6 +60,12 @@ def _local_date(value: str, timezone: str) -> str:
     return datetime.fromisoformat(value).astimezone(ZoneInfo(timezone)).strftime("%d.%m.%Y")
 
 
+def _issue_location(catalog: MessageCatalog, locale: str, entrance: object) -> str:
+    if entrance is None:
+        return catalog.render("issue.location.OUTSIDE", locale)
+    return catalog.render("target.ENTRANCE", locale, entrance=entrance)
+
+
 def compose(
     event_type: NotificationEventType,
     locale: str,
@@ -109,11 +115,24 @@ def compose(
         number = params["apartment_number"]
         subject = catalog.render(subject_key, locale, apartment_number=number)
         text = catalog.render("text.APARTMENT_MESSAGE_TO_BOARD", locale, apartment_number=number)
-    else:  # POLL_OPENED: no title and no questions, only the local deadline date
+    elif event_type == E.POLL_OPENED:  # no title and no questions, only the local deadline
         subject = catalog.render(subject_key, locale)
         text = catalog.render(
             "text.POLL_OPENED", locale, closes_at=_local_date(params["closes_at"], timezone)
         )
+    else:  # ISSUE_*: the category, the location and the status, never what a resident wrote
+        where = {
+            "category": catalog.render(f"issue.category.{params['category']}", locale),
+            "location": _issue_location(catalog, locale, params.get("entrance")),
+        }
+        subject = catalog.render(subject_key, locale, **where)
+        if event_type != E.ISSUE_STATUS_CHANGED:
+            text = catalog.render(f"text.{event_type.value}", locale, **where)
+        elif params.get("merged"):
+            text = catalog.render("text.ISSUE_STATUS_CHANGED.MERGED", locale, **where)
+        else:
+            status = catalog.render(f"issue.status.{params['status']}", locale)
+            text = catalog.render("text.ISSUE_STATUS_CHANGED", locale, status=status, **where)
     footer = catalog.render("footer", locale, site_url=site_url)
     # A subject is one line: a title may contain line breaks (also U+2028), which a mail header
     # cannot carry, and the mandatory alert must not fail because of them.
@@ -133,5 +152,8 @@ def email_text(
     emergency with the note that alerts cannot be switched off."""
     catalog = catalog or default_catalog()
     if unsubscribe_link is None:
-        return f"{text}\n\n{catalog.render('line.mandatory', locale)}"
+        key = "line.mandatory.ISSUE_URGENT"
+        if event_type != NotificationEventType.ISSUE_URGENT:
+            key = "line.mandatory"
+        return f"{text}\n\n{catalog.render(key, locale)}"
     return f"{text}\n\n{catalog.render('line.unsubscribe', locale, link=unsubscribe_link)}"

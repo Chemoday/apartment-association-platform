@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from src.modules.issues.schemas import BoardStatus, IssueCategory
 from src.modules.notifications.messages import (
     SIGNATURE_SEPARATOR,
     MessageCatalog,
@@ -40,6 +41,21 @@ def test_the_catalog_has_a_column_per_locale_and_english_everywhere() -> None:
         (E.APARTMENT_MESSAGE, {"apartment_number": "14", "from_board": False}),
         (E.APARTMENT_MESSAGE_TO_BOARD, {"apartment_number": "14", "from_board": False}),
         (E.POLL_OPENED, {"closes_at": "2026-11-12T21:59:59+00:00"}),
+        *(
+            (event, {"category": category.value, "entrance": entrance})
+            for event in (E.ISSUE_REPORTED, E.ISSUE_URGENT)
+            for category in IssueCategory
+            for entrance in (2, None)
+        ),
+        *(
+            (E.ISSUE_STATUS_CHANGED, {"category": "LIFT", "entrance": 1, "status": s.value})
+            for s in BoardStatus
+            if s != BoardStatus.DUPLICATE
+        ),
+        (
+            E.ISSUE_STATUS_CHANGED,
+            {"category": "LIFT", "entrance": None, "status": "DUPLICATE", "merged": True},
+        ),
     ],
 )
 def test_every_event_renders_in_every_language_with_the_footer(

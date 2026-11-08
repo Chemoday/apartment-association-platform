@@ -1137,3 +1137,138 @@ async def test_the_e_mail_names_a_deadline_extended_before_sending(
 
     sent = {email["To"]: email for email in smtp_server.messages}
     assert f"Please answer by {later:%d.%m.%Y}" in sent[mailboxes["owner_14"]].get_content()
+
+
+# --- Issues (E9/I3) -------------------------------------------------------------------------------
+
+
+async def report_issue(client: AsyncClient, author: User, settings: Settings, **extra) -> str:
+    body = {"category": "LIGHTING", "entrance": 2, "place": "Landing", "title": "Secret words"}
+    response = await client.post(
+        "/api/v1/issues", json={**body, **extra}, headers=bearer(author, settings)
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def issue_status(
+    client: AsyncClient, user: User, settings: Settings, issue_id: str, status: str
+) -> None:
+    response = await client.post(
+        f"/api/v1/issues/{issue_id}/status", json={"status": status}, headers=bearer(user, settings)
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_an_urgent_issue_e_mail_names_the_place_but_not_the_words(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    db_session: AsyncSession,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    world.board_15.locale = Locale.EN
+    await db_session.flush()
+    await api_client.put(
+        "/api/v1/settings",
+        json={"values": {"issues.urgent_enabled": True}},
+        headers=bearer(world.chairman, email_settings),
+    )
+    await report_issue(api_client, world.owner_14, email_settings, urgent=True)
+
+    await dispatcher.tick()
+
+    sent = {email["To"]: email for email in smtp_server.messages}
+    email = sent[mailboxes["board_15"]]
+    assert email["Subject"] == "Urgent issue report: lighting, entrance 2"
+    text = email.get_content()
+    assert "An urgent issue was reported: lighting, entrance 2" in text
+    assert "Secret words" not in text and "Landing" not in text
+    assert "Urgent issue reports cannot be turned off" in text and "Stop these" not in text
+    assert mailboxes["owner_14"] not in sent, "never the reporter"
+
+
+async def test_a_status_e_mail_names_the_new_status(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    issue_id = await report_issue(api_client, world.owner_14, email_settings, entrance=None)
+    await issue_status(api_client, world.chairman, email_settings, issue_id, "IN_PROGRESS")
+
+    await dispatcher.tick()
+
+    sent = {email["To"]: email for email in smtp_server.messages}
+    email = sent[mailboxes["owner_14"]]
+    assert email["Subject"] == "Issue update: lighting, outside the entrances"
+    assert "The issue you follow (lighting, outside the entrances) is now: in progress." in (
+        email.get_content()
+    )
+
+
+async def test_an_outdated_status_and_an_ended_report_are_skipped(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    db_session: AsyncSession,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    await api_client.put(
+        "/api/v1/settings",
+        json={"values": {"issues.urgent_enabled": True}},
+        headers=bearer(world.chairman, email_settings),
+    )
+    withdrawn = await report_issue(api_client, world.owner_14, email_settings, urgent=True)
+    await api_client.post(
+        f"/api/v1/issues/{withdrawn}/withdraw", headers=bearer(world.owner_14, email_settings)
+    )
+    moved = await report_issue(api_client, world.owner_14, email_settings)
+    await issue_status(api_client, world.chairman, email_settings, moved, "IN_PROGRESS")
+    await issue_status(api_client, world.chairman, email_settings, moved, "RESOLVED")
+
+    await dispatcher.tick()
+
+    urgent = await email_rows(db_session, event_type="ISSUE_URGENT")
+    assert urgent and {(r.status, r.error_code) for r in urgent} == {("SKIPPED", "ISSUE_ENDED")}
+    status_rows = {
+        r.params["status"]: (r.status, r.error_code)
+        for r in await email_rows(db_session, event_type="ISSUE_STATUS_CHANGED")
+    }
+    assert status_rows == {
+        "IN_PROGRESS": ("SKIPPED", "STATUS_OUTDATED"),
+        "RESOLVED": ("SENT", None),
+    }
+
+
+async def test_a_cleared_false_alarm_is_not_sent(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    dispatcher: Dispatcher,
+    db_session: AsyncSession,
+    smtp_server: SmtpServer,
+    email_settings: Settings,
+) -> None:
+    await api_client.put(
+        "/api/v1/settings",
+        json={"values": {"issues.urgent_enabled": True}},
+        headers=bearer(world.chairman, email_settings),
+    )
+    issue_id = await report_issue(api_client, world.owner_14, email_settings, urgent=True)
+    cleared = await api_client.post(
+        f"/api/v1/issues/{issue_id}/urgent/clear", headers=bearer(world.chairman, email_settings)
+    )
+    assert cleared.status_code == 200
+
+    await dispatcher.tick()
+
+    rows = await email_rows(db_session, event_type="ISSUE_URGENT")
+    assert rows and {(r.status, r.error_code) for r in rows} == {("SKIPPED", "URGENT_CLEARED")}
+    assert smtp_server.messages == []

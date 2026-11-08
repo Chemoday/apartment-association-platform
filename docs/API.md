@@ -24,10 +24,10 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 401 | `NOT_AUTHENTICATED` / `INVALID_TOKEN` / `UNKNOWN_USER` | No credentials, a bad or expired token, or an unknown or inactive user (sent with `WWW-Authenticate: Bearer`) |
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
-| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` | The request is valid, but conflicts with the current state |
+| 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
-| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
+| 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION`, `INVALID_DUPLICATE` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
 | other | `HTTP_<status>` | Any other framework-level HTTP error |
 
@@ -591,7 +591,8 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   the system on external channels: the event type, the emergency title and body (written by the
   board), the target (e.g. "entrance 2"), the period code and due date, that a message between the
   board and an apartment exists and the apartment number, that a poll was opened and its deadline
-  date, and a link to the site. Comments, forum posts, thread messages and author names never do.
+  date, the category, entrance and status of an issue, and a link to the site. Comments, forum
+  posts, thread messages, issue titles and descriptions, and author names never do.
 - **Who gets what:**
 
 | `event_type` | Recipients | Mandatory |
@@ -603,6 +604,9 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `APARTMENT_MESSAGE` | a new thread or reply (`APARTMENT_THREAD`, section 4): the active members of the thread's apartment who see the thread, except the author. A board member who is also such a member gets only this one, once | no |
 | `APARTMENT_MESSAGE_TO_BOARD` | a new thread or reply written from the apartment (not by the board): the chairman and the board members, except the author and those who already get `APARTMENT_MESSAGE`. A message written by the board notifies no other board member | no |
 | `POLL_OPENED` | a poll was opened (section 8): everyone who may answer it (the eligible members of the snapshot apartments, or the snapshot people), never the board member who opened it | no |
+| `ISSUE_REPORTED` | an issue was reported (section 10): the chairman and the board members, never the reporter | no |
+| `ISSUE_URGENT` | an urgent issue was reported (instead of `ISSUE_REPORTED`): the chairman and the board members, never the reporter | yes |
+| `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -620,6 +624,21 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
   out, or no longer an owner of a targeted apartment for an owners-only poll) with
   `SUBJECT_NOT_FOUND`. The text names the poll's current deadline, so an extension made before
   sending is in it.
+- **Issues** (epic E9, task I3): the texts name only the category, the location and the status,
+  never the title or the description written by a resident: "New issue report: lighting,
+  entrance 2", "Urgent issue report: lift, entrance 1", "The issue you follow (lighting, entrance
+  2) is now: in progress." A merge tells the followers of the duplicate once: "The issue you
+  follow (lighting, entrance 2) was merged into another report of the same problem; you now follow
+  that one", and links to the original. When the merge also starts a `REPORTED` original
+  (section 10), the original's followers, the moved ones included, get its "now: in progress"
+  notice as well. Right before an external message is sent: an issue the
+  recipient no longer sees is skipped with `SUBJECT_NOT_FOUND`; a report that has ended
+  meanwhile (withdrawn, declined, resolved) with `ISSUE_ENDED`; an urgent alert whose flag the
+  board cleared as a false alarm with `URGENT_CLEARED`; a status notice whose status is no longer
+  the issue's with `STATUS_OUTDATED` (a later notice follows; after a quick round trip such as
+  in progress -> waiting -> in progress, both "in progress" notices go out). `ISSUE_URGENT` is
+  mandatory and goes out first, like an emergency; withdrawing, editing, "+1" and clearing the
+  urgent flag notify nobody.
 
 - Users who join, link a channel or add a device while an emergency is active see it as the banner
   (`GET /api/v1/communication/emergencies/active`); old alerts are not sent to them on any channel.
@@ -645,9 +664,13 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `APARTMENT_MESSAGE` | on | on | on | on |
 | `APARTMENT_MESSAGE_TO_BOARD` | on | off | off | off |
 | `POLL_OPENED` | on | on | on | on |
+| `ISSUE_REPORTED` | on | off | off | off |
+| `ISSUE_URGENT` (mandatory) | on | on | on | on |
+| `ISSUE_STATUS_CHANGED` | on | on | on | on |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
-member can switch on e-mail, Telegram or WebPush in the preferences.
+member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
+reports, but not for urgent ones (epic E9).
 
 *(Planned, N7:)* `mobile_push` takes the same defaults as `webpush`.
 
@@ -665,13 +688,17 @@ member can switch on e-mail, Telegram or WebPush in the preferences.
 ```
 - `subject_type` `post` links to `GET /api/v1/communication/posts/{subject_id}`; `period` links to
   the readings of that period (`params.period_code`); `poll` links to
-  `GET /api/v1/governance/polls/{subject_id}`.
+  `GET /api/v1/governance/polls/{subject_id}`; `issue` links to
+  `GET /api/v1/issues/{subject_id}` (for a merge notice, the original).
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
   `from_board` (`true`: the board wrote; `false`: a resident of the apartment wrote). The subject
   is the thread (`subject_type` `post`), also for a reply; `POLL_OPENED` `closes_at` (the
-  deadline when the poll opened, UTC; the board may extend it later, the poll has the current one).
+  deadline when the poll opened, UTC; the board may extend it later, the poll has the current one);
+  `ISSUE_REPORTED` and `ISSUE_URGENT` `category`, `entrance` (or `null`);
+  `ISSUE_STATUS_CHANGED` `category`, `entrance`, `status` (the new one) and `merged` (`true` for
+  the merge notice, whose `status` is `DUPLICATE`).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -710,7 +737,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 28 combinations of `event_type` and `channel` (35 once
+- `preferences` always has all 40 combinations of `event_type` and `channel` (50 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -726,7 +753,8 @@ Only the listed combinations change. Response: the same body as the `GET`.
 
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
-`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
+`ISSUE_STATUS_CHANGED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -1564,3 +1592,239 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids only:
 | 404 | `POLL_NOT_FOUND` |
 | 409 | `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE` |
 | 422 | `VALIDATION_ERROR`, `INVALID_TARGET`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER` |
+
+## 9. Building settings (`core`), epic E9
+
+Settings of the association that the chairman changes in the app (task I0,
+docs/epics/E9_ISSUE_TRACKER.md section 2a). Each setting belongs to a module, which declares it
+with a type, a default and bounds; until the chairman changes it, its value is the default.
+Every endpoint needs a signed-in user of the building.
+
+### Setting object (`SettingView`)
+```json
+{
+  "key": "issues.reports_per_apartment_per_day",
+  "type": "INTEGER",
+  "value": 3,
+  "default": 3,
+  "minimum": 1,
+  "maximum": 20,
+  "is_default": true,
+  "updated_at": null
+}
+```
+- `type`: `INTEGER` (a JSON integer between `minimum` and `maximum`) or `BOOLEAN` (`true` /
+  `false`; `minimum` and `maximum` are `null`).
+- `is_default`: the chairman never set it (or reset it); `value` equals `default` then.
+  `updated_at`: the last change, `null` while it is the default.
+- The key names the module (`issues.`); the frontend picks the label and the help text by key.
+  Never in a payload: who changed a setting.
+
+| Key | Type | Default | Bounds | What it does |
+| :--- | :--- | :--- | :--- | :--- |
+| `issues.reports_per_apartment_per_day` | `INTEGER` | 3 | 1..20 | Issue reports one apartment may file in 24 hours (epic E9) |
+| `issues.urgent_enabled` | `BOOLEAN` | `false` | | Residents may mark an issue report urgent |
+| `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
+
+### `GET /api/v1/settings` (chairman and board)
+`{"settings": [SettingView, ...]}`, every declared setting, ordered by `key`. Anyone else:
+`403 FORBIDDEN`.
+
+### `PUT /api/v1/settings` (chairman)
+Changes some settings at once and returns the same body as `GET`.
+```json
+{"values": {"issues.urgent_enabled": true, "issues.reports_per_apartment_per_day": null}}
+```
+- `values`: 1..50 keys. A value of the setting's type sets it; `null` resets it to the default.
+- All or nothing: one invalid entry changes nothing. `422 VALIDATION_ERROR` with entries in
+  `errors` whose `loc` starts with `["body", "values", "<key>"]`: a value that is neither an
+  integer, a boolean nor `null` (`"3"`, `3.0`) is refused by the request check first (one or more
+  entries for that key); then an unknown key, a value of the other type (`1` for a `BOOLEAN`,
+  `true` for an `INTEGER`) or a number out of bounds, one entry each.
+- Setting the current value again changes nothing (no log entry); while a setting is not set,
+  its default is its current value.
+- Every change is logged (old value, new value, who, when; docs/SCHEMA.md section 9). The board
+  and everyone else: `403 FORBIDDEN`.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 422 | `VALIDATION_ERROR` |
+
+## 10. Issue tracker (`issues`), epic E9
+
+Problems in common areas (entrance, stairs, basement, roof, yard) reported once and visible to the
+whole building. Design and owner decisions: docs/epics/E9_ISSUE_TRACKER.md. Task I1 (this
+section) covers reporting, the list, "+1" and who sees what; task I2 the board's work (statuses,
+duplicates, the action log), in the same section; task I3 the notifications (section 6).
+Every endpoint needs a signed-in user.
+
+### Who sees the tracker
+- Every active user with an active membership in the building, the chairman and the board. An
+  accountant (or anyone else) without an apartment: `403 FORBIDDEN` on every endpoint.
+- Seen: every open issue, and ended ones (`RESOLVED`, `DUPLICATE`, `DECLINED`) for 30 days after
+  `ended_at`. A `WITHDRAWN` issue only by its reporter and the board, in lists also for 30 days;
+  by its link (`GET /issues/{id}`) they open it at any age. The board also lists older ended
+  issues with `include_old=true`, and opens any issue of the building by its link.
+- Not visible (another building, too old, withdrawn by someone else): `404 ISSUE_NOT_FOUND`.
+
+### Issue object (`IssueView`)
+```json
+{
+  "id": "uuid",
+  "category": "LIGHTING",
+  "entrance": 2,
+  "place": "3rd floor landing",
+  "title": "No light on the stairs",
+  "description": "The lamp flickers and went out yesterday evening.",
+  "status": "REPORTED",
+  "urgent": false,
+  "duplicate_of": null,
+  "followers": 3,
+  "i_reported": false,
+  "i_follow": true,
+  "can_edit": false,
+  "can_follow": true,
+  "created_at": "2026-11-08T18:00:00Z",
+  "updated_at": "2026-11-08T18:00:00Z",
+  "ended_at": null,
+  "timeline": [{"status": "REPORTED", "at": "2026-11-08T18:00:00Z"}],
+  "reporter": null
+}
+```
+- `category`: `LIGHTING`, `DOORS_AND_LOCKS`, `LIFT`, `HEATING`, `WATER_AND_SEWAGE`, `ELECTRICITY`,
+  `CLEANING`, `WASTE`, `YARD`, `ROOF_AND_FACADE`, `OTHER` (more may be added; show an unknown one
+  as "Other").
+- `entrance`: an entrance of the building, or `null` for the yard, the roof or the whole building.
+  `place`: where exactly, 1..200 characters.
+- `status`: `REPORTED`, `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR` (open), `RESOLVED`, `DUPLICATE`,
+  `DECLINED`, `WITHDRAWN` (ended, with `ended_at`). `duplicate_of`: the original's id for
+  `DUPLICATE`, else `null`.
+- `followers`: the reporter plus everyone who pressed "+1"; never who. `i_reported`, `i_follow`:
+  about the caller.
+- `can_edit`: the caller is the reporter and the issue is `REPORTED` (fix the text, withdraw).
+  `can_follow`: the issue is open and the caller does not follow it yet.
+- `timeline`: every status with its time, oldest first: `{"status", "at", "action",
+  "changed_by"}`. For the chairman and the board it is the action log: `action` is `STATUS`, or
+  `URGENT_CLEARED` when the board cleared the urgent flag (such entries keep the current
+  `status`), and `changed_by` the privacy badge of section 0 without an apartment context (a
+  resident who reported shows `role_badge` `RESIDENT`, also an owner). For everyone else
+  `action` is always `STATUS`, `changed_by` is `null`, and `URGENT_CLEARED` entries are left
+  out.
+- `reporter`: `null` for everyone except the chairman and the board, who get
+  `{"badge": AuthorBadge, "apartment_id": "uuid" | null}`. The badge is the privacy badge of
+  section 0 (the reporter's mode in that apartment), never a raw name or contacts;
+  `apartment_id` links to the apartment's card and thread (epic E8).
+- Never in a payload: who reported (except `reporter` for the board), who follows.
+
+### `GET /api/v1/issues/form`
+What the report form needs: `{"urgent_enabled": false, "apartment_ids": ["uuid"], "entrances": [1, 2]}`.
+`urgent_enabled` is the chairman's setting `issues.urgent_enabled` (section 9); `apartment_ids`
+the caller's apartments in the building (choose one when there are several); `entrances` the
+building's entrances.
+
+### `POST /api/v1/issues`
+Reports an issue; `201` with the `IssueView`. The reporter follows it from the start.
+```json
+{
+  "category": "LIGHTING",
+  "entrance": 2,
+  "place": "3rd floor landing",
+  "title": "No light on the stairs",
+  "description": "The lamp flickers and went out yesterday evening.",
+  "urgent": false,
+  "apartment_id": "uuid"
+}
+```
+- `title` 1..120, `description` 0..2000 (optional), `place` 1..200 characters; free-text rules of
+  section 4. `urgent` (default `false`) only while `issues.urgent_enabled` is on, else
+  `422 VALIDATION_ERROR` (`loc` `["body", "urgent"]`).
+- `apartment_id`: the apartment the report comes from. May be omitted (or `null`) when the caller
+  has exactly one apartment; required with several (`422 VALIDATION_ERROR`); must be the caller's
+  own, else `422 INVALID_AUTHOR_APARTMENT`. The chairman and the board report without an
+  apartment when they send `"apartment_id": null` explicitly (or have none); then the report
+  counts for no apartment.
+- `entrance`: one of `GET /issues/form` `entrances`, or `null`. Another number from 1 up:
+  `422 INVALID_LOCATION`; 0 or less: `422 VALIDATION_ERROR` (the field's minimum is 1).
+- **Limits per apartment:** at most `issues.reports_per_apartment_per_day` reports from the same
+  apartment in the last 24 hours (whoever in it filed them; withdrawn ones count), of them at
+  most `issues.urgent_per_apartment_per_day` urgent. Over a limit: `429 RATE_LIMITED` with
+  `retry_after_seconds` and a `Retry-After` header (when the oldest report in the window is 24
+  hours old). The chairman and the board are never limited (their reports still count for the
+  apartment).
+- A problem inside a flat does not belong here: the form says to write to the board instead
+  (section 4, `APARTMENT_THREAD`).
+
+### `GET /api/v1/issues?status=OPEN&category=LIGHTING&entrance=2&include_old=false&limit=50&offset=0`
+The issues the caller sees as `IssueView` without `description` and `timeline`. Open ones first
+(newest first), then ended ones (newest `ended_at` first). Filters (optional): `status` (`OPEN`,
+`ENDED` or one status), `category`, `entrance` (a number; `0` = without an entrance),
+`include_old` (the board only; ended issues of any age and withdrawn ones). `limit` 1..100,
+`offset` 0..100000.
+
+### `GET /api/v1/issues/{issue_id}`
+The full `IssueView`. `404 ISSUE_NOT_FOUND` when not visible.
+
+### `PATCH /api/v1/issues/{issue_id}` (the reporter)
+Fixes the text while the issue is `REPORTED`: any of `category`, `entrance`, `place`, `title`,
+`description` (same rules as the report; `urgent` and the apartment cannot change). Only the
+fields given change; `null` clears `entrance` and `description`, and is refused for `category`,
+`place` and `title` (`422 VALIDATION_ERROR`). An empty body changes nothing. Returns the
+`IssueView`. `409 ISSUE_NOT_EDITABLE` once the board moved it on; anyone but the reporter:
+`403 FORBIDDEN`.
+
+### `POST /api/v1/issues/{issue_id}/withdraw` (the reporter)
+Takes the issue back while it is `REPORTED`: status `WITHDRAWN`, seen from then on by the reporter
+and the board only. Returns the `IssueView`. `409 ISSUE_NOT_EDITABLE` otherwise; anyone but the
+reporter: `403 FORBIDDEN`.
+
+### `PUT /api/v1/issues/{issue_id}/follow` and `DELETE .../follow`
+"+1 / I see it too", and taking it back. Both return the `IssueView` and are idempotent. `PUT`
+on an ended issue: `409 ISSUE_ENDED`; `DELETE` always works (the reporter may stop following
+too, and follow again later).
+
+### `POST /api/v1/issues/{issue_id}/status` (chairman and board)
+The board's work (task I2): `{"status": "IN_PROGRESS"}`, or `{"status": "DUPLICATE",
+"duplicate_of": "uuid"}`. Returns the `IssueView`; every change is a timeline entry with who made
+it.
+- `status`: `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR`, `RESOLVED`, `DUPLICATE` or `DECLINED`.
+  `REPORTED` and `WITHDRAWN` belong to the reporter and are refused (`422 VALIDATION_ERROR`).
+- From an open status: any of them. From `RESOLVED`, `DUPLICATE` or `DECLINED`: only
+  `IN_PROGRESS` (reopen), within 30 days of `ended_at`; reopening clears `ended_at` and
+  `duplicate_of`. A `WITHDRAWN` issue never changes. Otherwise `409 INVALID_ISSUE_TRANSITION`
+  with `status`. The current status again changes nothing (no entry).
+- `DECLINED`: not a common-area issue, or not the association's to fix (e.g. inside a flat: write
+  to the apartment, section 4).
+- `DUPLICATE` needs `duplicate_of` (and nothing else takes it, `422 VALIDATION_ERROR`): another
+  issue of the building that residents still see (open, or ended within 30 days) and that is not
+  itself `DUPLICATE` or `WITHDRAWN`, else `422 INVALID_DUPLICATE`. Every follower of the
+  duplicate becomes a follower of the original (once); they keep following the duplicate too.
+  An original that is still `REPORTED` moves to `IN_PROGRESS` (an entry by the same board
+  member), so its reporter can no longer rewrite or withdraw what others now follow. The
+  transition is checked first: a refused or repeated change never looks at the original.
+- Anyone else: `403 FORBIDDEN` (`404 ISSUE_NOT_FOUND` when they do not see the issue at all).
+
+### `POST /api/v1/issues/{issue_id}/urgent/clear` (chairman and board)
+Clears the urgent flag (a false alarm); returns the `IssueView`. Logged as an `URGENT_CLEARED`
+entry. The report still counts as urgent for the apartment's urgent limit. Already not urgent:
+changes nothing. On an ended issue: `409 ISSUE_ENDED`.
+
+### Domain events
+Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (task I3):
+- `IssueReported`: `issue_id`, `building_id`, `reporter_user_id`, `urgent`; drives
+  `ISSUE_REPORTED` / `ISSUE_URGENT` (section 6).
+- `IssueStatusChanged`: `issue_id`, `building_id`, `change_id` (the timeline entry),
+  `changed_by_user_id`, `status`; drives `ISSUE_STATUS_CHANGED` (not for `DUPLICATE`, see
+  `IssueMerged`).
+- `IssueMerged`: `issue_id` (the duplicate), `original_id`, `building_id`, `change_id`,
+  `changed_by_user_id`; drives the merge notice.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 404 | `ISSUE_NOT_FOUND` |
+| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` |
+| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE` |
+| 429 | `RATE_LIMITED` |

@@ -278,10 +278,10 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `channel` | `VARCHAR(16)` | `NOT NULL` | Enum `channel` |
 | `binding_id` | `UUID` | `FK(notif_channel_bindings.id), NULLABLE` | Set exactly for `telegram` and `webpush` |
 | `event_type` | `VARCHAR(32)` | `NOT NULL` | Enum `event_type` |
-| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}` |
-| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll')` | What the notification is about (`poll` since migration 016) |
-| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id` or `gov_polls.id` (no FK: other modules' tables) |
-| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at` |
+| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}`, `issue_reported:{issue_id}`, `issue_status:{change_id}` (the timeline entry of a status change or a merge) |
+| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue')` | What the notification is about (`poll` since migration 016, `issue` since 019) |
+| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id`, `gov_polls.id` or `iss_issues.id` (no FK: other modules' tables) |
+| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at`; for an issue `category`, `entrance`, and for a status notice `status`, `merged` |
 | `locale` | `VARCHAR(5)` | `NOT NULL, CHECK IN ('et', 'ru', 'en')` | Language for the external text, resolved at insert time (`core_users.locale` or `DEFAULT_LOCALE`) |
 | `priority` | `SMALLINT` | `NOT NULL` | `0` for `EMERGENCY_PUBLISHED` only, `1` for everything else; lower is sent first |
 | `status` | `VARCHAR(16)` | `NOT NULL` | Enum delivery `status` |
@@ -289,7 +289,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `next_attempt_at` | `TIMESTAMPTZ` | `NOT NULL` | When a `PENDING` row is due |
 | `lease_until` | `TIMESTAMPTZ` | `NULLABLE` | Set while `SENDING`; an expired lease is claimed again |
 | `last_attempt_at` | `TIMESTAMPTZ` | `NULLABLE` | |
-| `error_code` | `VARCHAR(64)` | `NULLABLE` | Machine code of the last failure or skip reason. Skips: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, `USER_INACTIVE`, `NO_EMAIL`, `PREFERENCE_OFF`, `POST_RESOLVED`, `EMERGENCY_TOO_OLD`, `DEADLINE_PASSED` (a reading reminder after `due_date`), `SUBJECT_NOT_FOUND`, `POLL_NOT_OPEN` (a poll closed or cancelled before sending), `BINDING_REVOKED`. Failures: `SMTP_REJECTED`, `SMTP_AUTH_FAILED`, `SMTP_NOT_SUPPORTED`, `EMAIL_INVALID`, `TELEGRAM_BLOCKED`, `TELEGRAM_CHAT_NOT_FOUND`, `WEBPUSH_GONE` (404/410), `WEBPUSH_ENDPOINT_REJECTED`, `WEBPUSH_INVALID_KEYS` (these five also revoke the binding), `TELEGRAM_BAD_REQUEST`, `TELEGRAM_AUTH_FAILED`, `WEBPUSH_AUTH_FAILED`, `WEBPUSH_PAYLOAD_TOO_LARGE`, `WEBPUSH_REJECTED`, `LEASE_EXPIRED`, or the last retryable code (`SMTP_TEMPORARY`, `SMTP_UNAVAILABLE`, `TELEGRAM_RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `WEBPUSH_RATE_LIMITED`, `WEBPUSH_UNAVAILABLE`, `CHANNEL_TIMEOUT`, `CHANNEL_ERROR`, `PREPARE_ERROR`) after 5 attempts. Never provider text |
+| `error_code` | `VARCHAR(64)` | `NULLABLE` | Machine code of the last failure or skip reason. Skips: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, `USER_INACTIVE`, `NO_EMAIL`, `PREFERENCE_OFF`, `POST_RESOLVED`, `EMERGENCY_TOO_OLD`, `DEADLINE_PASSED` (a reading reminder after `due_date`), `SUBJECT_NOT_FOUND`, `POLL_NOT_OPEN` (a poll closed or cancelled before sending), `ISSUE_ENDED` (an issue report that ended before sending), `URGENT_CLEARED` (an urgent issue alert whose flag the board cleared before sending), `STATUS_OUTDATED` (an issue status notice whose status changed again), `BINDING_REVOKED`. Failures: `SMTP_REJECTED`, `SMTP_AUTH_FAILED`, `SMTP_NOT_SUPPORTED`, `EMAIL_INVALID`, `TELEGRAM_BLOCKED`, `TELEGRAM_CHAT_NOT_FOUND`, `WEBPUSH_GONE` (404/410), `WEBPUSH_ENDPOINT_REJECTED`, `WEBPUSH_INVALID_KEYS` (these five also revoke the binding), `TELEGRAM_BAD_REQUEST`, `TELEGRAM_AUTH_FAILED`, `WEBPUSH_AUTH_FAILED`, `WEBPUSH_PAYLOAD_TOO_LARGE`, `WEBPUSH_REJECTED`, `LEASE_EXPIRED`, or the last retryable code (`SMTP_TEMPORARY`, `SMTP_UNAVAILABLE`, `TELEGRAM_RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `WEBPUSH_RATE_LIMITED`, `WEBPUSH_UNAVAILABLE`, `CHANNEL_TIMEOUT`, `CHANNEL_ERROR`, `PREPARE_ERROR`) after 5 attempts. Never provider text |
 | `trace_id` | `VARCHAR(32)` | `NULLABLE` | Trace of the request that caused the event |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 | `sent_at` | `TIMESTAMPTZ` | `NULLABLE` | |
@@ -544,3 +544,103 @@ Every version of a ballot, for official decisions later; never returned in part 
 | `cast_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
 | `answers` | `JSONB` | `NOT NULL` | `[{"question_id", "option_ids", "value"}]` after the check (canonical values); the same answers again add no revision |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+---
+
+## 9. Core infrastructure (`src/core`): building settings (epic E9, task I0)
+
+*Settings of the association, changed by the chairman in the app (docs/API.md section 9). Like
+`core_domain_events`, these tables are infrastructure owned by `src/core/building_settings.py`;
+each module declares its own settings in code (key, type, default, bounds), so a new setting
+needs no migration and core never knows a module's rules. Migration 017.*
+
+### Table: `core_building_settings`
+*(Only the settings the chairman changed; a missing row means the default.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `building_id` | `UUID` | `PK`, `FK(property_buildings.id) ON DELETE CASCADE` | |
+| `key` | `VARCHAR(64)` | `PK` | A declared key, e.g. `issues.urgent_enabled`. Rows of a key that is no longer declared are ignored |
+| `value` | `JSONB` | `NOT NULL` | A JSON integer or boolean, checked against the declaration on every write |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `updated_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who set the current value (never returned by the API) |
+
+### Table: `core_building_setting_changes`
+*(The log of changes, kept forever: a few rows a year.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id) ON DELETE CASCADE, NOT NULL` | |
+| `key` | `VARCHAR(64)` | `NOT NULL` | |
+| `old_value` | `JSONB` | `NULLABLE` | `NULL`: it was the default |
+| `new_value` | `JSONB` | `NULLABLE` | `NULL`: reset to the default |
+| `changed_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | |
+| `changed_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- `ix_core_building_setting_changes_building_time`: `(building_id, changed_at)`.
+- A `PUT` writes its rows and their log entries in one transaction, under a transaction-scoped
+  advisory lock on the building (`core:settings:<building_id>`), so two changes of the same
+  setting, also its first ones, are logged in order with their real old values.
+- Seeding (`src/core/seed.py`) writes no settings: the demo uses the defaults.
+
+---
+
+## 10. Module: `issues` (epic E9: the building issue tracker)
+
+*Design: docs/epics/E9_ISSUE_TRACKER.md. API: docs/API.md section 10. Migration 018 (task I1).
+Users and apartments are referenced by id only; names and badges come from `PropertyService`.*
+
+### Table: `iss_issues`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `reporter_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | Never returned except as the board's badge |
+| `reporter_apartment_id` | `UUID` | `FK(property_apartments.id), NULLABLE` | The apartment the report came from (the limits); `NULL` for the board without one |
+| `category` | `VARCHAR(32)` | `NOT NULL, CHECK` | `LIGHTING`, `DOORS_AND_LOCKS`, `LIFT`, `HEATING`, `WATER_AND_SEWAGE`, `ELECTRICITY`, `CLEANING`, `WASTE`, `YARD`, `ROOF_AND_FACADE`, `OTHER` |
+| `entrance` | `INTEGER` | `NULLABLE, CHECK > 0` | `NULL`: yard, roof or the whole building |
+| `place` | `VARCHAR(200)` | `NOT NULL, CHECK not blank` | |
+| `title` | `VARCHAR(120)` | `NOT NULL, CHECK not blank` | |
+| `description` | `TEXT` | `NOT NULL, DEFAULT ''` | Up to 2000 characters (checked by the API) |
+| `urgent` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Cleared by the board for a false alarm (task I2) |
+| `reported_urgent` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | As reported, never changed: a cleared flag still counts for `issues.urgent_per_apartment_per_day` |
+| `status` | `VARCHAR(32)` | `NOT NULL, CHECK` | `REPORTED`, `IN_PROGRESS`, `WAITING_FOR_CONTRACTOR`, `RESOLVED`, `DUPLICATE`, `DECLINED`, `WITHDRAWN` |
+| `duplicate_of_id` | `UUID` | `FK(iss_issues.id), NULLABLE` | Set exactly for `DUPLICATE` (task I2) |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `ended_at` | `TIMESTAMPTZ` | `NULLABLE` | Set exactly for the ended statuses `RESOLVED`, `DUPLICATE`, `DECLINED`, `WITHDRAWN` |
+
+- `ck_iss_issues_ended`: `ended_at` is set if and only if the status is an ended one;
+  `ck_iss_issues_duplicate`: `duplicate_of_id` is set if and only if the status is `DUPLICATE`.
+- `ix_iss_issues_building_status`: `(building_id, status)`, for the list;
+  `ix_iss_issues_apartment_created`: `(reporter_apartment_id, created_at)`, for the limits.
+- The limits are checked under a transaction-scoped advisory lock on the apartment, so two
+  reports at the same moment cannot both pass the last free slot.
+
+### Table: `iss_followers`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `issue_id` | `UUID` | `PK`, `FK(iss_issues.id) ON DELETE CASCADE` | |
+| `user_id` | `UUID` | `PK`, `FK(core_users.id)` | The reporter (from the start) or someone who pressed "+1"; never returned |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+### Table: `iss_status_changes`
+*(The timeline and the board's action log; one row per status change (the first is `REPORTED`)
+and per cleared urgent flag.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `issue_id` | `UUID` | `FK(iss_issues.id) ON DELETE CASCADE, NOT NULL, INDEX` | |
+| `from_status` | `VARCHAR(32)` | `NULLABLE` | `NULL` for the first row |
+| `to_status` | `VARCHAR(32)` | `NOT NULL` | For `URGENT_CLEARED` the status at that moment |
+| `action` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'STATUS', CHECK IN ('STATUS', 'URGENT_CLEARED')` | `URGENT_CLEARED` is shown to the board only (task I2) |
+| `changed_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | Shown to the board only, as a privacy badge (task I2) |
+| `changed_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- Migration 019 (task I3) adds `ISSUE_REPORTED`, `ISSUE_URGENT` and `ISSUE_STATUS_CHANGED` to
+  the `event_type` checks of `notif_preferences` and `notif_deliveries`, and `issue` to
+  `subject_type` (section 5).
+- Seeding (`src/core/seed.py`) adds two demo issues (task I1): an open one with a "+1" and a
+  withdrawn one.
+- A status change locks the issue (`FOR UPDATE`); marking a duplicate also locks the original, the
+  two rows in id order, so two board members merging in opposite directions cannot deadlock or
+  make a cycle.

@@ -126,6 +126,9 @@ System-level methods (no request caller; `can_read_post` and `may_answer` take a
 | `property` | `get_recipients(user_ids)` | `list[RecipientDTO]` of the active users among them (`POLL_OPENED`) |
 | `governance` | `get_poll_audience(poll_id)` | `PollAudienceDTO(poll_id, building_id, is_open, closes_at, user_ids)` or `None`: who may answer the poll now (the eligible members of its snapshot apartments, or its snapshot people) |
 | `governance` | `get_poll_ref(poll_id)` | `PollRefDTO(poll_id, building_id, is_open, closes_at)` or `None`: the poll's state right before a `POLL_OPENED` message is sent (`POLL_NOT_OPEN`, the current deadline in the text) |
+| `issues` | `get_issue_ref(issue_id)` | `IssueRefDTO(issue_id, building_id, status, is_open, urgent, category, entrance)` or `None`: the issue's state for the texts and the send-time checks (`ISSUE_ENDED`, `URGENT_CLEARED`, `STATUS_OUTDATED`) |
+| `issues` | `follower_ids(issue_id)` | `list[UUID]`: who follows the issue (`ISSUE_STATUS_CHANGED`); never returned by the API |
+| `issues` | `can_see(user, issue_id)` | `bool`: whether this user (a `CurrentUserDTO`) sees the issue under the rules of `GET /issues/{id}`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 | `governance` | `may_answer(user, poll_id)` | `bool`: whether this user (a `CurrentUserDTO`) may answer the open poll now, under the rules of `PUT .../ballot`; checked right before sending (`SUBJECT_NOT_FOUND`) |
 
 - `EmergencyRefDTO`: `post_id`, `building_id`, `author_user_id`, `is_active`, `target_scope`, `target_entrance`, `target_apartment_ids`, `title`, `body`, `category`. The body is read only by the dispatcher, right before an emergency message is rendered, and never logged.
@@ -294,3 +297,38 @@ section 8. API: docs/API.md section 8.
 - Who may answer for an apartment is checked from the caller's `CurrentUserDTO.memberships` at
   answer time; the snapshot fixes which units exist.
 
+## 6. Building settings (`src/core/building_settings.py`), epic E9
+
+Design: docs/epics/E9_ISSUE_TRACKER.md section 2a. Tables: docs/SCHEMA.md section 9. API:
+docs/API.md section 9.
+
+- **Why in core:** every module may need a setting of the association (the issue limits now; later
+  the tenant limit, reminder days, the chairman's info header). `property` must not learn other
+  modules' rules, so core owns the store and the API, and each module owns its declarations.
+- **Declaring:** a module lists its settings in its own `settings.py` as `IntSetting(key, default,
+  minimum, maximum)` or `BoolSetting(key, default)` in a tuple `SETTINGS`; the key starts with the
+  module name. Core imports these files lazily from a fixed list (`_MODULE_SETTING_MODULES`), the
+  same way as the event registry, so core never imports a module at import time. Two declarations
+  of one key, or a default out of its own bounds, fail at start-up (`create_app` loads them).
+- **Reading:** `await BuildingSettings(session).get(building_id, SPEC)` returns the typed value
+  (the stored one if valid, else the default). A module reads its value inside the request that
+  needs it; there is no cache, a change applies to the next request.
+- **Writing:** only `PUT /api/v1/settings` (the chairman). A module never writes settings.
+- **Logs and spans:** a change logs `building_setting_changed` with the key (and the request's
+  usual `user_id` and `trace_id`); the values stay in the database.
+
+## 7. Module `issues` (epic E9)
+
+Design: docs/epics/E9_ISSUE_TRACKER.md. Tables: docs/SCHEMA.md section 10. API: docs/API.md
+section 10.
+
+- **Place:** reads users, apartments, memberships and badges only through `PropertyService`
+  (`get_masked_author_badges` for the board's reporter badge, `list_apartments` for the
+  entrances) and its settings through `BuildingSettings` (section 6). Only `notifications`
+  imports it: the durable events `IssueReported`, `IssueStatusChanged` and `IssueMerged` (stored
+  in the same transaction as the change) and the system-level reads of section 3.4.
+- **Rules as pure functions** in `issues/policies.py`: which statuses are open or ended, who sees
+  an issue, the limit check and the retry time, so the board's transitions (task I2) add rules
+  there.
+- **Limits:** counted per apartment from `iss_issues` (no separate counter); a transaction-scoped
+  advisory lock on the apartment serializes concurrent reports.

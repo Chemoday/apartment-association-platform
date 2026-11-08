@@ -34,6 +34,7 @@ from src.core.config import Settings
 from src.core.domain_events import SessionFactory
 from src.modules.communication.service import CommunicationService
 from src.modules.governance.service import GovernanceService
+from src.modules.issues.service import IssuesService
 from src.modules.notifications.messages import compose, default_catalog, email_text
 from src.modules.notifications.models import ChannelBinding, Delivery
 from src.modules.notifications.policies import (
@@ -41,6 +42,7 @@ from src.modules.notifications.policies import (
     CHANNEL_PLUGINS,
     DISPATCH_BATCH_SIZE,
     EMERGENCY_MAX_AGE,
+    ISSUE_REPORT_EVENTS,
     LEASE_DURATION,
     MAX_ATTEMPTS,
     MIN_HASH_SECRET_BYTES,
@@ -341,6 +343,24 @@ class Dispatcher:
             if user is None or not await governance.may_answer(user, row.subject_id):
                 return skip("SUBJECT_NOT_FOUND")
             params = {**row.params, "closes_at": poll.closes_at.isoformat()}
+        elif row.subject_type == SubjectType.ISSUE:
+            # Who no longer sees the issue is skipped; so is a report that ended meanwhile and a
+            # status notice that a later change made outdated (that change sends its own).
+            issues = IssuesService(session, properties)
+            issue = await issues.get_issue_ref(row.subject_id)
+            user = await properties.get_current_user(row.user_id)
+            if issue is None or user is None or not await issues.can_see(user, row.subject_id):
+                return skip("SUBJECT_NOT_FOUND")
+            if row.event_type in ISSUE_REPORT_EVENTS and not issue.is_open:
+                return skip("ISSUE_ENDED")
+            if row.event_type == NotificationEventType.ISSUE_URGENT and not issue.urgent:
+                return skip("URGENT_CLEARED")  # a false alarm: the mandatory alert is withdrawn
+            if (
+                row.event_type == NotificationEventType.ISSUE_STATUS_CHANGED
+                and not row.params.get("merged")
+                and issue.status.value != row.params.get("status")
+            ):
+                return skip("STATUS_OUTDATED")
         elif row.subject_type == SubjectType.POST:
             ref = await CommunicationService(session, properties).get_emergency_ref(row.subject_id)
             if ref is None:

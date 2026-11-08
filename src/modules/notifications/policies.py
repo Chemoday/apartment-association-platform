@@ -16,7 +16,9 @@ from datetime import UTC, datetime, time, timedelta, tzinfo
 from src.modules.notifications.schemas import Channel, NotificationEventType, UnavailableReason
 
 # Only this event cannot be switched off.
-MANDATORY_EVENTS = frozenset({NotificationEventType.EMERGENCY_PUBLISHED})
+MANDATORY_EVENTS = frozenset(
+    {NotificationEventType.EMERGENCY_PUBLISHED, NotificationEventType.ISSUE_URGENT}
+)
 
 _E = NotificationEventType
 _C = Channel
@@ -50,7 +52,24 @@ DEFAULT_PREFERENCES: Mapping[tuple[NotificationEventType, Channel], bool] = {
     (_E.POLL_OPENED, _C.EMAIL): True,
     (_E.POLL_OPENED, _C.TELEGRAM): True,
     (_E.POLL_OPENED, _C.WEBPUSH): True,
+    # A new issue report reaches the board quietly, like apartment messages (E9).
+    (_E.ISSUE_REPORTED, _C.IN_APP): True,
+    (_E.ISSUE_REPORTED, _C.EMAIL): False,
+    (_E.ISSUE_REPORTED, _C.TELEGRAM): False,
+    (_E.ISSUE_REPORTED, _C.WEBPUSH): False,
+    (_E.ISSUE_URGENT, _C.IN_APP): True,
+    (_E.ISSUE_URGENT, _C.EMAIL): True,
+    (_E.ISSUE_URGENT, _C.TELEGRAM): True,
+    (_E.ISSUE_URGENT, _C.WEBPUSH): True,
+    (_E.ISSUE_STATUS_CHANGED, _C.IN_APP): True,
+    (_E.ISSUE_STATUS_CHANGED, _C.EMAIL): True,
+    (_E.ISSUE_STATUS_CHANGED, _C.TELEGRAM): True,
+    (_E.ISSUE_STATUS_CHANGED, _C.WEBPUSH): True,
 }
+
+ISSUE_REPORT_EVENTS = frozenset(
+    {NotificationEventType.ISSUE_REPORTED, NotificationEventType.ISSUE_URGENT}
+)
 
 APARTMENT_MESSAGE_EVENTS = frozenset(
     {NotificationEventType.APARTMENT_MESSAGE, NotificationEventType.APARTMENT_MESSAGE_TO_BOARD}
@@ -152,8 +171,8 @@ def is_enabled(
 
 
 def priority_for(event_type: NotificationEventType) -> int:
-    """0 is sent first: only the emergency itself jumps the queue."""
-    return 0 if event_type == NotificationEventType.EMERGENCY_PUBLISHED else 1
+    """0 is sent first: the emergency itself and an urgent issue report jump the queue."""
+    return 0 if event_type in MANDATORY_EVENTS else 1
 
 
 def emergency_key(post_id: uuid.UUID) -> str:
@@ -182,6 +201,15 @@ def apartment_message_key(post_id: uuid.UUID, comment_id: uuid.UUID | None) -> s
 
 def poll_opened_key(poll_id: uuid.UUID) -> str:
     return f"poll_opened:{poll_id}"
+
+
+def issue_reported_key(issue_id: uuid.UUID) -> str:
+    return f"issue_reported:{issue_id}"
+
+
+def issue_status_key(change_id: uuid.UUID) -> str:
+    """One notice per timeline entry (a status change, or a merge)."""
+    return f"issue_status:{change_id}"
 
 
 def split_message_recipients(
