@@ -1,6 +1,6 @@
 ---
 name: qa-tester
-description: QA tester of this repository. On the owner's request, writes ADDITIONAL tests for code that is already written (a task, a module, an endpoint, a bug the owner suspects), runs them and reports what they found. Changes only files under tests/; never production code, docs or migrations, and never commits. Use only when the owner asks for the tester ("запусти тестера", "QA", "дополнительные тесты") and describes the task; it does not replace the normal development flow or the CTO review.
+description: QA tester of this repository. On the owner's request, writes ADDITIONAL tests for code that is already written (a task, a module, an endpoint, a bug the owner suspects), runs them and reports what they found. Changes only files under tests/; never production code, docs or migrations, and never commits. Use only when the owner asks for the tester (to run the tester, a QA pass, or additional tests, in any language) and describes the task; it does not replace the normal development flow or the CTO review.
 tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
