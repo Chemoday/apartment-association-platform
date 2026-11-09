@@ -30,6 +30,7 @@ from src.modules.governance.router import router as governance_router
 from src.modules.issues.router import router as issues_router
 from src.modules.maintenance.publisher import Publisher, run_publisher_loop
 from src.modules.maintenance.router import router as maintenance_router
+from src.modules.meters.opener import PeriodOpener, run_opener_loop
 from src.modules.meters.router import router as meters_router
 from src.modules.notifications.dispatcher import (
     Dispatcher,
@@ -75,6 +76,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 run_publisher_loop(app.state.maintenance_publisher), name="maintenance-publisher"
             )
         )
+    if settings.METERS_PERIOD_OPENER_ENABLED:
+        loops.append(
+            asyncio.create_task(
+                run_opener_loop(app.state.meters_period_opener), name="meters-period-opener"
+            )
+        )
     if settings.AUTH_CLEANUP_ENABLED:
         loops.append(
             asyncio.create_task(
@@ -118,6 +125,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.maintenance_session_factory = async_session_factory
     app.state.maintenance_publisher = Publisher(
         lambda: app.state.maintenance_session_factory, lambda: app.state.event_bus, settings
+    )
+    # Opens each new month's reading period; the factory is read on every tick (tests swap it).
+    app.state.meters_session_factory = async_session_factory
+    app.state.meters_period_opener = PeriodOpener(
+        lambda: app.state.meters_session_factory, lambda: app.state.event_bus
     )
     # One registry per app instance, so enabling a plugin never leaks between apps or tests.
     # Plugins with incomplete settings raise here, so the app does not start half-configured.

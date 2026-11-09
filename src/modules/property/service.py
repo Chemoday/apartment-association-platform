@@ -595,6 +595,13 @@ class PropertyService:
         command of the first chairman needs it)."""
         return list(await self.session.scalars(select(Building.id).order_by(Building.id)))
 
+    async def reading_deadlines(self) -> dict[uuid.UUID, int]:
+        """Every building's `reading_deadline_day`, for the meters period opener (system-level)."""
+        rows = await self.session.execute(
+            select(Building.id, Building.reading_deadline_day).order_by(Building.id)
+        )
+        return {building_id: day for building_id, day in rows}
+
     async def user_ref(self, user_id: uuid.UUID) -> UserRefDTO | None:
         """An active user, or None (closed or unknown)."""
         row = (

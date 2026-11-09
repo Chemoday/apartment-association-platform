@@ -208,6 +208,19 @@ class ApartmentReadingsResponse(BaseModel):
     meters: list[ApartmentMeterHistory]
 
 
+class NextSubmission(BaseModel):
+    """Where a meter's next resident reading goes (docs/API.md section 2)."""
+
+    period_code: str
+    due_date: datetime
+    # A late reading for the previous month: the resident cannot change it afterwards.
+    final: bool
+    # The form's floor and hints, against this period (the shown period may be another one).
+    previous_value: MeterAmount
+    average_delta: MeterAmount | None
+    reading: ReadingSummary | None  # what the user already submitted for this period
+
+
 class DashboardMeter(BaseModel):
     meter_id: uuid.UUID
     resource_type: ResourceType
@@ -219,6 +232,8 @@ class DashboardMeter(BaseModel):
     average_delta: MeterAmount | None
     previous_delta: MeterAmount | None
     reading: ReadingSummary | None
+    # None when nothing can be submitted: no right to, or the target period is missing or closed.
+    next_submission: NextSubmission | None
 
 
 class DashboardApartment(BaseModel):

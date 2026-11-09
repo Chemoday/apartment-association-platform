@@ -66,6 +66,7 @@ async def my_dashboard(
                 "PERIOD_LOCKED",
                 "READING_SET_BY_BOARD",
                 "LATER_READING_EXISTS",
+                "WRONG_PERIOD",
             ],
             422: ["VALIDATION_ERROR", "READING_BELOW_PREVIOUS", "REASON_REQUIRED"],
         }

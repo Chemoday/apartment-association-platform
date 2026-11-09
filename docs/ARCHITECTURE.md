@@ -361,3 +361,22 @@ docs/API.md section 11.
   would drop the stored event row while the in-memory event would still be published.
 - **Events:** `MaintenanceTaskDue` (`task_id`, `occurrence_id`, `building_id`, `due_date`,
   `overdue`, `reminder_number`) after each publication and reminder, for task M3.
+
+## 9. Module `meters`: monthly periods
+
+API: docs/API.md section 2 ("Monthly periods and which month a reading belongs to").
+
+- **The period opener** (`meters/opener.py`) is a background loop like the maintenance
+  publisher: `PeriodOpener.tick(now=None)` every 10 minutes and once at start-up, switched by
+  `METERS_PERIOD_OPENER_ENABLED`. For every building (`PropertyService.reading_deadlines`, a
+  system-level read without `CurrentUserDTO`) it opens the period of the current local month in
+  its own transaction: `INSERT … ON CONFLICT (building_id, period_code) DO NOTHING`, so two
+  processes or two ticks open it once, and only the one that inserted it stores the event
+  `ReadingPeriodOpened` (`period_id`, `building_id`, `period_code`, `due_date`; nobody
+  subscribes, it is the record). It never fills in missed months.
+- **The month of a resident's reading** is a pure function, `policies.submission_target`, of
+  now, the previous month's period (status and `due_date`) and whether the meter already has a
+  reading for it or later. `MetersService` evaluates it after taking the period and meter locks,
+  so a concurrent status change or a second submission sees the result of the first.
+- **Time:** months are local months of `INSTANCE_TIMEZONE`; "now" comes from `service._now()`,
+  which tests replace.

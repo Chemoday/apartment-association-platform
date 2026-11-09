@@ -25,8 +25,9 @@ configure_metrics(get_settings(), extra_readers=[SESSION_METRIC_READER])
 import asyncio
 import io
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import pytest
 from alembic import command
@@ -48,6 +49,23 @@ from src.core.telemetry import (
 from src.main import create_app
 
 # --- Database (integration tests) --------------------------------------------------------------
+
+
+# The month a resident's reading belongs to depends on today (docs/API.md section 2). Tests are
+# written in October 2026, the demo's open month, so the meters clock stands still on
+# 15 October 2026 unless a test moves it with `meters_now`.
+METERS_TEST_NOW = datetime(2026, 10, 15, 9, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def meters_now(monkeypatch: pytest.MonkeyPatch) -> Callable[[datetime], None]:
+    """Sets the meters clock (`src.modules.meters.service._now`) for the rest of the test."""
+
+    def set_now(now: datetime) -> None:
+        monkeypatch.setattr("src.modules.meters.service._now", lambda: now)
+
+    set_now(METERS_TEST_NOW)
+    return set_now
 
 
 @pytest.fixture(scope="session")
@@ -131,6 +149,7 @@ def db_app(app: FastAPI, db_session: AsyncSession) -> Iterator[FastAPI]:
     app.state.notifications_session_factory = subscriber_session
     app.state.auth_session_factory = subscriber_session  # background work of module auth
     app.state.maintenance_session_factory = subscriber_session  # the publisher's ticks
+    app.state.meters_session_factory = subscriber_session  # the period opener's ticks
     yield app
     app.dependency_overrides.pop(get_db_session, None)
 

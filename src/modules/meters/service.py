@@ -5,27 +5,40 @@ Apartments and author badges come from PropertyService; property models are neve
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends
 from opentelemetry import trace
-from sqlalchemy import exists, select
+from sqlalchemy import and_, exists, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import get_settings
 from src.core.database import DbSession, get_event_outbox
 from src.core.event_bus import EventOutbox
 from src.core.exceptions import DomainError
-from src.modules.meters.events import MeterReadingSubmitted, ReadingPeriodStatusChanged
+from src.modules.meters.events import (
+    MeterReadingSubmitted,
+    ReadingPeriodOpened,
+    ReadingPeriodStatusChanged,
+)
 from src.modules.meters.models import MeterDevice, MeterReading, MeterReadingLog, ReadingPeriod
 from src.modules.meters.policies import (
     PERIOD_TRANSITIONS,
+    PreviousPeriod,
     ReadingCheckStatus,
+    SubmissionTarget,
     apartment_submission_status,
     calculate_rolling_average_delta,
     can_transition_period,
     meter_submission_status,
+    period_code_of,
+    period_due_date,
+    previous_period_code,
     rolling_average_delta,
+    submission_target,
     validate_reading_delta,
 )
 from src.modules.meters.schemas import (
@@ -46,6 +59,7 @@ from src.modules.meters.schemas import (
     MatrixMeter,
     MatrixResponse,
     MeterUnit,
+    NextSubmission,
     PeriodDTO,
     PeriodListResponse,
     PeriodStatus,
@@ -72,6 +86,11 @@ ESTIMATE_REASON = "3-month avg estimate"
 
 
 tracer = trace.get_tracer(__name__)
+
+
+def _now() -> datetime:
+    """The current time; tests replace it (the month of a reading depends on it)."""
+    return datetime.now(UTC)
 
 
 def _not_found(error_code: str, message: str) -> DomainError:
@@ -104,6 +123,7 @@ class MetersService:
         # Events go out only after the request's transaction commits (docs/BACKEND_CONVENTIONS.md).
         # None only for system-level readers (e.g. notifications), which never write.
         self.outbox = outbox
+        self.timezone = ZoneInfo(get_settings().INSTANCE_TIMEZONE)
 
     # --- System-level reads (no caller; used by the notifications module) -----------------------
 
@@ -129,6 +149,36 @@ class MetersService:
             )
             for period in rows
         ]
+
+    async def open_current_period(
+        self, building_id: uuid.UUID, deadline_day: int, now: datetime
+    ) -> uuid.UUID | None:
+        """Opens the period of the local month of `now` (the period opener). Returns its id when
+        this call inserted it, None when it already existed (another tick or process)."""
+        period_code = period_code_of(now.astimezone(self.timezone).date())
+        due_date = period_due_date(period_code, deadline_day, self.timezone.key)
+        period_id = await self.session.scalar(
+            insert(ReadingPeriod)
+            .values(
+                id=uuid.uuid4(),
+                building_id=building_id,
+                period_code=period_code,
+                status=PeriodStatus.OPEN_FOR_RESIDENTS,
+                due_date=due_date,
+            )
+            .on_conflict_do_nothing(index_elements=["building_id", "period_code"])
+            .returning(ReadingPeriod.id)
+        )
+        if period_id is not None:
+            self._writer_outbox().add(
+                ReadingPeriodOpened(
+                    period_id=period_id,
+                    building_id=building_id,
+                    period_code=period_code,
+                    due_date=due_date,
+                )
+            )
+        return period_id
 
     async def apartments_missing_readings(self, period_id: uuid.UUID) -> list[uuid.UUID]:
         """Apartments of the period's building with an active meter that has no reading in it."""
@@ -227,8 +277,28 @@ class MetersService:
             # A replaced meter only accepts board corrections of readings it already has.
             raise _not_found("METER_NOT_FOUND", "Meter not found.")
 
-        # 3. Business rules.
-        source = self._authorize_submission(user, membership, period)
+        # 3. Business rules. The month is decided under the locks: a second submission of this
+        # meter or a status change of the requested period waits for this one.
+        target = (
+            (await self._targets(user.building_id, [meter.id], _now()))[meter.id]
+            if membership is not None and membership.can_submit_readings
+            else None
+        )
+        if (
+            target is not None
+            and target.period_code != period.period_code
+            and period.status == PeriodStatus.OPEN_FOR_RESIDENTS
+            and existing is not None
+            and existing.source == ReadingSource.RESIDENT
+            and existing.submitted_by_user_id == user.id
+            and existing.value == request.value
+            and request.reason is None
+        ):
+            # A retry (double click, timeout) of the resident's own reading, e.g. the final one
+            # for last month after which the target moved on: nothing to change.
+            span.set_attribute("meters.reading_source", ReadingSource.RESIDENT.value)
+            return self._reading_response(existing, period), "unchanged"
+        source = self._authorize_submission(user, membership, period, target)
         span.set_attribute("meters.reading_source", source.value)
         if (
             source == ReadingSource.RESIDENT
@@ -330,14 +400,14 @@ class MetersService:
 
     @staticmethod
     def _authorize_submission(
-        user: CurrentUserDTO, membership, period: ReadingPeriod
+        user: CurrentUserDTO, membership, period: ReadingPeriod, target: SubmissionTarget | None
     ) -> ReadingSource:
-        """Who may write in which period status (docs/API.md, POST /readings)."""
-        if (
-            membership is not None
-            and membership.can_submit_readings
-            and period.status == PeriodStatus.OPEN_FOR_RESIDENTS
-        ):
+        """Who may write in which period and status (docs/API.md, POST /readings).
+
+        `target` is the meter's next resident period, given when the user may submit for the
+        apartment. The chairman and the accountant write as the board outside it."""
+        on_target = target is not None and target.period_code == period.period_code
+        if on_target and period.status == PeriodStatus.OPEN_FOR_RESIDENTS:
             return ReadingSource.RESIDENT
         if user.building_role in OVERRIDE_ROLES:
             if period.status == PeriodStatus.LOCKED:
@@ -352,6 +422,13 @@ class MetersService:
                 status_code=403,
                 error_code="FORBIDDEN",
                 message="You are not allowed to submit readings for this apartment.",
+            )
+        if target is not None and not on_target:
+            raise DomainError(
+                status_code=409,
+                error_code="WRONG_PERIOD",
+                message=f"This reading belongs to period {target.period_code}.",
+                extra={"target_period_code": target.period_code},
             )
         raise DomainError(
             status_code=409,
@@ -409,19 +486,6 @@ class MetersService:
     async def get_dashboard(
         self, user: CurrentUserDTO, period_code: str | None
     ) -> DashboardResponse:
-        if period_code is not None:
-            period = await self._period(user.building_id, period_code)
-        else:
-            # The latest period residents can submit to; else the latest period at all.
-            period = await self.session.scalar(
-                select(ReadingPeriod)
-                .where(ReadingPeriod.building_id == user.building_id)
-                .order_by(
-                    (ReadingPeriod.status == PeriodStatus.OPEN_FOR_RESIDENTS).desc(),
-                    ReadingPeriod.period_code.desc(),
-                )
-                .limit(1)
-            )
         apartment_ids = [m.apartment_id for m in user.memberships]
         meters = list(
             await self.session.scalars(
@@ -434,7 +498,49 @@ class MetersService:
                 .order_by(MeterDevice.resource_type, MeterDevice.location_label)
             )
         )
+        # Where each meter's next reading goes, for the apartments the user may submit for.
+        now = _now()
+        submitters = {m.apartment_id for m in user.memberships if m.can_submit_readings}
+        targets = await self._targets(
+            user.building_id, [m.id for m in meters if m.apartment_id in submitters], now
+        )
+        target_periods = {
+            period.period_code: period
+            for period in await self.session.scalars(
+                select(ReadingPeriod).where(
+                    ReadingPeriod.building_id == user.building_id,
+                    ReadingPeriod.period_code.in_({t.period_code for t in targets.values()}),
+                )
+            )
+        }
+
+        if period_code is not None:
+            period = await self._period(user.building_id, period_code)
+        else:
+            # The previous month while something is still to be submitted for it, else the
+            # current month; else the latest period residents can submit to, else the latest.
+            final = next((t for t in targets.values() if t.final), None)
+            current = period_code_of(now.astimezone(self.timezone).date())
+            period = target_periods.get(final.period_code if final else current)
+            if period is None:
+                period = await self.session.scalar(
+                    select(ReadingPeriod)
+                    .where(ReadingPeriod.building_id == user.building_id)
+                    .order_by(
+                        (ReadingPeriod.status == PeriodStatus.OPEN_FOR_RESIDENTS).desc(),
+                        ReadingPeriod.period_code.desc(),
+                    )
+                    .limit(1)
+                )
         readings = await self._readings_by_meter(period) if period else {}
+        # The form of each meter works against its own target period, which may differ from the
+        # period shown (one meter still due for last month, another already for this one).
+        target_readings = {
+            code: readings
+            if period is not None and code == period.period_code
+            else await self._readings_by_meter(target_period)
+            for code, target_period in target_periods.items()
+        }
 
         apartments = []
         for membership in user.memberships:
@@ -455,6 +561,9 @@ class MetersService:
                         ),
                         **(await self._consumption_hints(meter, period)),
                         reading=_summary(reading) if reading is not None else None,
+                        next_submission=await self._next_submission(
+                            meter, targets.get(meter.id), target_periods, target_readings
+                        ),
                     )
                 )
             apartments.append(
@@ -467,6 +576,32 @@ class MetersService:
             )
         return DashboardResponse(
             period=_period_dto(period) if period else None, apartments=apartments
+        )
+
+    async def _next_submission(
+        self,
+        meter: MeterDevice,
+        target: SubmissionTarget | None,
+        periods: dict[str, ReadingPeriod],
+        readings: dict[str, dict[uuid.UUID, MeterReading]],
+    ) -> NextSubmission | None:
+        """What the meter's form needs, computed against its target period; None when nothing
+        can be submitted (no right, the period does not exist yet or is not open)."""
+        period = periods.get(target.period_code) if target is not None else None
+        if period is None or period.status != PeriodStatus.OPEN_FOR_RESIDENTS:
+            return None
+        reading = readings[period.period_code].get(meter.id)
+        return NextSubmission(
+            period_code=period.period_code,
+            due_date=period.due_date,
+            final=target.final,
+            previous_value=(
+                reading.previous_value
+                if reading is not None
+                else await self._previous_value(meter, period)
+            ),
+            average_delta=rolling_average_delta(await self._history_deltas(meter.id, period)),
+            reading=_summary(reading) if reading is not None else None,
         )
 
     async def _consumption_hints(
@@ -723,9 +858,21 @@ class MetersService:
                 select(MeterReading.meter_id).where(MeterReading.period_id == period.id)
             )
         )
+        # A later reading's consumption already covers this month (its previous_value is the
+        # reading before this period): an estimate here would count the month twice.
+        with_later_reading = set(
+            await self.session.scalars(
+                select(MeterReading.meter_id)
+                .join(ReadingPeriod, ReadingPeriod.id == MeterReading.period_id)
+                .where(
+                    MeterReading.building_id == user.building_id,
+                    ReadingPeriod.period_code > period.period_code,
+                )
+            )
+        )
 
         estimated = []
-        for meter in (m for m in meters if m.id not in with_reading):
+        for meter in (m for m in meters if m.id not in with_reading | with_later_reading):
             previous_value = await self._previous_value(meter, period)
             average = calculate_rolling_average_delta(
                 await self._history_deltas(meter.id, period), NO_HISTORY_AVERAGE
@@ -940,6 +1087,47 @@ class MetersService:
         if period is None:
             raise _not_found("PERIOD_NOT_FOUND", f"Reading period {period_code} not found.")
         return period
+
+    async def _targets(
+        self, building_id: uuid.UUID, meter_ids: list[uuid.UUID], now: datetime
+    ) -> dict[uuid.UUID, SubmissionTarget]:
+        """The period each meter's next resident reading goes to (docs/API.md section 2)."""
+        if not meter_ids:
+            return {}
+        current = period_code_of(now.astimezone(self.timezone).date())
+        previous_code = previous_period_code(current)
+        previous = await self.session.scalar(
+            select(ReadingPeriod).where(
+                ReadingPeriod.building_id == building_id,
+                ReadingPeriod.period_code == previous_code,
+            )
+        )
+        if previous is None:
+            no_previous = submission_target(now, self.timezone, None, has_previous_reading=False)
+            return dict.fromkeys(meter_ids, no_previous)
+        # Meters with a reading for the previous month (an estimate does not count) or later.
+        counted = set(
+            await self.session.scalars(
+                select(MeterReading.meter_id)
+                .join(ReadingPeriod, ReadingPeriod.id == MeterReading.period_id)
+                .where(
+                    MeterReading.meter_id.in_(meter_ids),
+                    or_(
+                        ReadingPeriod.period_code > previous_code,
+                        and_(
+                            ReadingPeriod.period_code == previous_code,
+                            MeterReading.source != ReadingSource.AUTO_ESTIMATED,
+                        ),
+                    ),
+                )
+                .distinct()
+            )
+        )
+        state = PreviousPeriod(status=PeriodStatus(previous.status), due_date=previous.due_date)
+        return {
+            meter_id: submission_target(now, self.timezone, state, meter_id in counted)
+            for meter_id in meter_ids
+        }
 
     async def _has_later_reading(self, meter_id: uuid.UUID, period: ReadingPeriod) -> bool:
         """Changing a reading would silently break the next period's previous_value snapshot."""

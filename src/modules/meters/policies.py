@@ -3,9 +3,10 @@
 Rules: docs/ROADMAP_MVP.md, section C "Two-Step Anomaly Confirmation".
 """
 
+import calendar
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from zoneinfo import ZoneInfo
@@ -172,7 +173,63 @@ def period_due_date(period_code: str, deadline_day: int, timezone: str) -> datet
     "2026-10" with day 4 in Europe/Tallinn is 2026-11-04 23:59:59 local = 21:59:59 UTC
     (docs/SCHEMA.md, meters_periods.due_date).
     """
-    year, month = (int(part) for part in period_code.split("-"))
-    year, month = (year + 1, 1) if month == 12 else (year, month + 1)
-    local = datetime(year, month, deadline_day, 23, 59, 59, tzinfo=ZoneInfo(timezone))
+    year, month = (int(part) for part in next_period_code(period_code).split("-"))
+    # A day past the month's end is its last day (the column has no range check).
+    day = min(deadline_day, calendar.monthrange(year, month)[1])
+    local = datetime(year, month, day, 23, 59, 59, tzinfo=ZoneInfo(timezone))
     return local.astimezone(UTC)
+
+
+# --- Which month a resident's reading belongs to (docs/API.md section 2) ------------------------
+
+
+def period_code_of(day: date) -> str:
+    return f"{day.year:04d}-{day.month:02d}"
+
+
+def next_period_code(period_code: str) -> str:
+    year, month = (int(part) for part in period_code.split("-"))
+    return f"{year + 1:04d}-01" if month == 12 else f"{year:04d}-{month + 1:02d}"
+
+
+def previous_period_code(period_code: str) -> str:
+    year, month = (int(part) for part in period_code.split("-"))
+    return f"{year - 1:04d}-12" if month == 1 else f"{year:04d}-{month - 1:02d}"
+
+
+@dataclass(frozen=True)
+class PreviousPeriod:
+    """The state of the month before the current one, as the rule needs it."""
+
+    status: PeriodStatus
+    due_date: datetime
+
+
+@dataclass(frozen=True)
+class SubmissionTarget:
+    period_code: str
+    final: bool  # a late reading for the previous month; the resident cannot change it afterwards
+
+
+def submission_target(
+    now: datetime,
+    timezone: ZoneInfo,
+    previous: PreviousPeriod | None,
+    has_previous_reading: bool,
+) -> SubmissionTarget:
+    """The period a resident's next reading of one meter goes to.
+
+    `previous` is the period of the month before the current local month (None if it does not
+    exist); `has_previous_reading` is true when the meter has a reading for it (an estimate does
+    not count) or for any later period. Until the previous month's due date, a meter without
+    such a reading submits for the previous month, and that reading is final for the resident.
+    """
+    current = period_code_of(now.astimezone(timezone).date())
+    if (
+        previous is not None
+        and previous.status == PeriodStatus.OPEN_FOR_RESIDENTS
+        and now <= previous.due_date
+        and not has_previous_reading
+    ):
+        return SubmissionTarget(previous_period_code(current), final=True)
+    return SubmissionTarget(current, final=False)

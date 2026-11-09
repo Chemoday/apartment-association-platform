@@ -5,6 +5,7 @@ Payloads carry ids, codes and Decimal values only: never names, emails or phones
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from src.core.event_bus import DomainEvent
@@ -37,3 +38,13 @@ class ReadingPeriodStatusChanged(DomainEvent):
     old_status: PeriodStatus
     new_status: PeriodStatus
     changed_by_user_id: uuid.UUID | None  # None for an automatic change (e.g. the deadline)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReadingPeriodOpened(DomainEvent):
+    """The period opener opened the period of a new month (nobody subscribes; the record)."""
+
+    period_id: uuid.UUID
+    building_id: uuid.UUID
+    period_code: str
+    due_date: datetime
