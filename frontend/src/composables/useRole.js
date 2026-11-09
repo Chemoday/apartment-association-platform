@@ -8,7 +8,9 @@ import { useSessionStore } from '@/stores/session.js'
 export function useRole() {
   const session = useSessionStore()
 
-  const buildingRole = computed(() => session.me?.building_role || 'USER')
+  const buildingRole = computed(
+    () => session.buildingRole || session.me?.building_role || 'USER',
+  )
 
   const isChairman = computed(() => buildingRole.value === 'CHAIRMAN')
   const isBoard = computed(() => buildingRole.value === 'BOARD')
@@ -38,6 +40,12 @@ export function useRole() {
   // Delete a forum topic: CHAIRMAN only
   const canDeleteForumTopic = computed(() => buildingRole.value === 'CHAIRMAN')
 
+  // Association settings: CHAIRMAN (edit) and BOARD (read-only)
+  const canViewAssociationSettings = computed(() =>
+    ['BOARD', 'CHAIRMAN'].includes(buildingRole.value),
+  )
+  const canEditAssociationSettings = computed(() => buildingRole.value === 'CHAIRMAN')
+
   // Whether the user has at least one apartment with can_submit_readings
   const canSubmitOwnReadings = computed(() =>
     (session.me?.memberships || []).some((m) => m.can_submit_readings),
@@ -62,6 +70,8 @@ export function useRole() {
     canSubmitAnyMeter,
     canPublishOfficial,
     canDeleteForumTopic,
+    canViewAssociationSettings,
+    canEditAssociationSettings,
     canSubmitOwnReadings,
     greetingName,
   }

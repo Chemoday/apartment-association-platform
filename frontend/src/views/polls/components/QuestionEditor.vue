@@ -110,16 +110,16 @@ function resolveQuestionError(code) {
 <template>
   <div
     :data-testid="`question-editor-${index}`"
-    class="rounded-xl border p-5 transition-colors"
+    class="rounded-2xl border p-5 transition-colors"
     :class="
       Object.keys(errors || {}).length > 0
-        ? 'border-rose-300 bg-rose-50/20 dark:border-rose-800 dark:bg-rose-950/10'
-        : 'border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/40'
+        ? 'border-error/40 bg-error-container/15'
+        : 'border-surface-container-high bg-surface-container-low/60'
     "
   >
     <!-- Question Header Bar -->
-    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-3 dark:border-slate-700/80">
-      <span class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-surface-container pb-3">
+      <span class="text-xs font-bold uppercase tracking-wider text-on-surface-variant">
         {{ session.t('polls.editor.questionNumber', { n: index + 1, number: index + 1 }) }}
       </span>
 
@@ -127,7 +127,7 @@ function resolveQuestionError(code) {
         <button
           v-if="canMoveUp"
           type="button"
-          class="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+          class="rounded-md border border-surface-container-high bg-surface-container-lowest px-2 py-1 text-xs font-medium text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors"
           :title="session.t('polls.editor.moveUp')"
           @click="emit('move-up')"
         >
@@ -136,7 +136,7 @@ function resolveQuestionError(code) {
         <button
           v-if="canMoveDown"
           type="button"
-          class="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+          class="rounded-md border border-surface-container-high bg-surface-container-lowest px-2 py-1 text-xs font-medium text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors"
           :title="session.t('polls.editor.moveDown')"
           @click="emit('move-down')"
         >
@@ -146,7 +146,7 @@ function resolveQuestionError(code) {
           v-if="canRemove"
           type="button"
           :data-testid="`question-remove-${index}`"
-          class="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-800/70 dark:bg-slate-900 dark:text-rose-300"
+          class="inline-flex items-center gap-1 rounded-md border border-error/30 bg-surface-container-lowest px-2.5 py-1 text-xs font-medium text-error hover:bg-error-container/30 transition-colors"
           @click="emit('remove')"
         >
           <span class="material-symbols-outlined text-[14px]">delete</span>
@@ -157,7 +157,7 @@ function resolveQuestionError(code) {
 
     <!-- Question Prompt / Text -->
     <div class="mt-4">
-      <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+      <label class="block text-xs font-semibold text-on-surface">
         {{ session.t('polls.editor.questionTextLabel') }}
       </label>
       <input
@@ -166,12 +166,12 @@ function resolveQuestionError(code) {
         :data-testid="`question-text-${index}`"
         :value="question.text"
         :placeholder="session.t('polls.editor.questionTextPlaceholder')"
-        class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+        class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3.5 py-2 text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:border-primary focus:outline-none"
         @input="patchQuestion({ text: $event.target.value })"
       />
       <p
         v-if="errors?.text"
-        class="mt-1 text-xs font-semibold text-rose-600 dark:text-rose-400"
+        class="mt-1 text-xs font-semibold text-error"
       >
         {{ resolveQuestionError(errors.text) }}
       </p>
@@ -180,13 +180,13 @@ function resolveQuestionError(code) {
     <!-- Mode, Value Type & Required Row -->
     <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+        <label class="block text-xs font-semibold text-on-surface">
           {{ session.t('polls.editor.answerModeLabel') }}
         </label>
         <select
           :data-testid="`question-mode-${index}`"
           :value="question.answer_mode"
-          class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
           @change="patchQuestion({ answer_mode: $event.target.value })"
         >
           <option value="SINGLE_CHOICE">
@@ -202,13 +202,13 @@ function resolveQuestionError(code) {
       </div>
 
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+        <label class="block text-xs font-semibold text-on-surface">
           {{ session.t('polls.editor.valueTypeLabel') }}
         </label>
         <select
           :data-testid="`question-value-type-${index}`"
           :value="question.value_type"
-          class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
           @change="patchQuestion({ value_type: $event.target.value })"
         >
           <option value="TEXT">
@@ -224,12 +224,12 @@ function resolveQuestionError(code) {
       </div>
 
       <div class="flex items-end pb-1.5">
-        <label class="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-800 dark:text-slate-200">
+        <label class="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-on-surface">
           <input
             type="checkbox"
             :data-testid="`question-required-${index}`"
             :checked="question.required !== false"
-            class="h-4 w-4 rounded text-teal-600 focus:ring-teal-500"
+            class="h-4 w-4 rounded accent-primary focus:ring-primary"
             @change="patchQuestion({ required: $event.target.checked })"
           />
           <span>{{ session.t('polls.editor.requiredSwitch') }}</span>
@@ -240,17 +240,17 @@ function resolveQuestionError(code) {
     <!-- Choice Options (SINGLE_CHOICE / MULTIPLE_CHOICE) -->
     <div
       v-if="question.answer_mode === 'SINGLE_CHOICE' || question.answer_mode === 'MULTIPLE_CHOICE'"
-      class="mt-4 space-y-3 border-t border-slate-200/70 pt-4 dark:border-slate-700/70"
+      class="mt-4 space-y-3 border-t border-surface-container pt-4"
     >
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-700 dark:text-slate-300">
+        <span class="text-xs font-semibold text-on-surface">
           {{ session.t('polls.editor.optionsLabel') }}
         </span>
         <button
           v-if="(question.options || []).length < 20"
           type="button"
           :data-testid="`question-add-option-${index}`"
-          class="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          class="inline-flex items-center gap-1 rounded-md border border-surface-container-high bg-surface-container-lowest px-2.5 py-1 text-xs font-semibold text-on-surface hover:bg-surface-container transition-colors"
           @click="addOption"
         >
           <span class="material-symbols-outlined text-[14px]">add</span>
@@ -264,7 +264,7 @@ function resolveQuestionError(code) {
           :key="optIdx"
           class="flex items-center gap-2"
         >
-          <span class="w-6 text-right font-mono text-xs text-slate-400">
+          <span class="w-6 text-right font-mono text-xs text-on-surface-variant">
             {{ optIdx + 1 }}.
           </span>
 
@@ -274,7 +274,7 @@ function resolveQuestionError(code) {
             type="date"
             :data-testid="`question-${index}-option-${optIdx}`"
             :value="optVal"
-            class="block flex-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            class="block flex-1 rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface focus:border-primary focus:outline-none"
             @input="updateOption(optIdx, $event.target.value)"
           />
 
@@ -286,7 +286,7 @@ function resolveQuestionError(code) {
             :data-testid="`question-${index}-option-${optIdx}`"
             :value="optVal"
             :placeholder="session.t('polls.numberPlaceholder')"
-            class="block flex-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            class="block flex-1 rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:border-primary focus:outline-none"
             @input="updateOption(optIdx, $event.target.value)"
           />
 
@@ -298,14 +298,14 @@ function resolveQuestionError(code) {
             :data-testid="`question-${index}-option-${optIdx}`"
             :value="optVal"
             :placeholder="session.t('polls.editor.optionPlaceholder', { n: optIdx + 1, number: optIdx + 1 })"
-            class="block flex-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            class="block flex-1 rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:border-primary focus:outline-none"
             @input="updateOption(optIdx, $event.target.value)"
           />
 
           <button
             v-if="(question.options || []).length > 2"
             type="button"
-            class="rounded-md p-1.5 text-slate-400 hover:bg-slate-200/60 hover:text-rose-600 dark:hover:bg-slate-800"
+            class="rounded-md p-1.5 text-on-surface-variant hover:bg-surface-container hover:text-error transition-colors"
             :title="session.t('common.delete')"
             @click="removeOption(optIdx)"
           >
@@ -316,7 +316,7 @@ function resolveQuestionError(code) {
 
       <p
         v-if="errors?.options"
-        class="text-xs font-semibold text-rose-600 dark:text-rose-400"
+        class="text-xs font-semibold text-error"
       >
         {{ resolveQuestionError(errors.options) }}
       </p>
@@ -327,7 +327,7 @@ function resolveQuestionError(code) {
         class="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-2"
       >
         <div>
-          <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <label class="block text-xs font-semibold text-on-surface">
             {{ session.t('polls.editor.minChoicesLabel') }}
           </label>
           <input
@@ -335,13 +335,13 @@ function resolveQuestionError(code) {
             min="1"
             :max="(question.options || []).length || 20"
             :value="question.min_choices ?? 1"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface focus:border-primary focus:outline-none"
             @input="patchQuestion({ min_choices: Number($event.target.value) })"
           />
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <label class="block text-xs font-semibold text-on-surface">
             {{ session.t('polls.editor.maxChoicesLabel') }}
           </label>
           <input
@@ -349,14 +349,14 @@ function resolveQuestionError(code) {
             min="1"
             :max="(question.options || []).length || 20"
             :value="question.max_choices ?? ((question.options || []).length || 2)"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface focus:border-primary focus:outline-none"
             @input="patchQuestion({ max_choices: Number($event.target.value) })"
           />
         </div>
 
         <p
           v-if="errors?.choices"
-          class="col-span-full text-xs font-semibold text-rose-600 dark:text-rose-400"
+          class="col-span-full text-xs font-semibold text-error"
         >
           {{ resolveQuestionError(errors.choices) }}
         </p>
@@ -369,17 +369,17 @@ function resolveQuestionError(code) {
         question.answer_mode === 'OWN_VALUE' &&
         (question.value_type === 'NUMBER' || question.value_type === 'DATE')
       "
-      class="mt-4 grid grid-cols-1 gap-3 border-t border-slate-200/70 pt-4 sm:grid-cols-2 dark:border-slate-700/70"
+      class="mt-4 grid grid-cols-1 gap-3 border-t border-surface-container pt-4 sm:grid-cols-2"
     >
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+        <label class="block text-xs font-semibold text-on-surface">
           {{ session.t('polls.editor.minValueLabel') }}
         </label>
         <input
           v-if="question.value_type === 'DATE'"
           type="date"
           :value="question.min_value || ''"
-          class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface focus:border-primary focus:outline-none"
           @input="patchQuestion({ min_value: $event.target.value })"
         />
         <input
@@ -388,20 +388,20 @@ function resolveQuestionError(code) {
           inputmode="decimal"
           :value="question.min_value || ''"
           :placeholder="session.t('polls.editor.optionalBoundPlaceholder')"
-          class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:border-primary focus:outline-none"
           @input="patchQuestion({ min_value: $event.target.value })"
         />
       </div>
 
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+        <label class="block text-xs font-semibold text-on-surface">
           {{ session.t('polls.editor.maxValueLabel') }}
         </label>
         <input
           v-if="question.value_type === 'DATE'"
           type="date"
           :value="question.max_value || ''"
-          class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface focus:border-primary focus:outline-none"
           @input="patchQuestion({ max_value: $event.target.value })"
         />
         <input
@@ -410,14 +410,14 @@ function resolveQuestionError(code) {
           inputmode="decimal"
           :value="question.max_value || ''"
           :placeholder="session.t('polls.editor.optionalBoundPlaceholder')"
-          class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-lowest px-3 py-1.5 font-mono text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:border-primary focus:outline-none"
           @input="patchQuestion({ max_value: $event.target.value })"
         />
       </div>
 
       <p
         v-if="errors?.bounds"
-        class="col-span-full text-xs font-semibold text-rose-600 dark:text-rose-400"
+        class="col-span-full text-xs font-semibold text-error"
       >
         {{ resolveQuestionError(errors.bounds) }}
       </p>

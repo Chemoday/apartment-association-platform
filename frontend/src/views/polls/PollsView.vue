@@ -94,17 +94,17 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+  <div class="w-full max-w-[1280px] mx-auto px-gutter py-space-lg space-y-6">
     <!-- Page Header -->
-    <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-5">
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b border-surface-container pb-5">
       <div>
-        <p class="text-xs font-semibold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+        <p class="font-label-md text-xs font-semibold uppercase tracking-wider text-secondary">
           {{ session.t('polls.eyebrow') }}
         </p>
-        <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-3xl">
+        <h1 class="mt-1 font-headline-xl text-2xl font-bold tracking-tight text-on-surface sm:text-3xl">
           {{ session.t('polls.title') }}
         </h1>
-        <p class="mt-1.5 text-sm text-slate-600 dark:text-slate-400">
+        <p class="mt-1.5 text-sm text-on-surface-variant">
           {{ session.t('polls.subtitle') }}
         </p>
       </div>
@@ -113,7 +113,7 @@ onMounted(() => {
         v-if="isBoardOrChairman"
         :to="{ name: 'poll-new' }"
         data-testid="polls-new-poll-btn"
-        class="inline-flex items-center gap-2 self-start rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800 sm:self-auto dark:bg-teal-600 dark:hover:bg-teal-500"
+        class="inline-flex items-center gap-2 self-start rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary-container sm:self-auto"
       >
         <span class="material-symbols-outlined text-[18px]">add</span>
         <span>{{ session.t('polls.board.newPollBtn') }}</span>
@@ -122,7 +122,7 @@ onMounted(() => {
 
     <!-- Status Filter Bar -->
     <div
-      class="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3"
+      class="flex flex-wrap items-center gap-2 border-b border-surface-container pb-3"
       role="tablist"
       :aria-label="session.t('polls.filters.ariaLabel')"
     >
@@ -133,11 +133,11 @@ onMounted(() => {
         role="tab"
         :aria-selected="statusFilter === tab.key"
         :data-testid="`polls-filter-${tab.key.toLowerCase()}`"
-        class="rounded-md px-3.5 py-2 text-sm font-medium transition-colors"
+        class="rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors cursor-pointer"
         :class="
           statusFilter === tab.key
-            ? 'bg-slate-900 text-white dark:bg-teal-600 dark:text-white shadow-xs'
-            : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-800 dark:hover:bg-slate-800'
+            ? 'bg-primary text-on-primary shadow-2xs'
+            : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container hover:text-on-surface border border-surface-container'
         "
         @click="statusFilter = tab.key"
       >
@@ -155,7 +155,7 @@ onMounted(() => {
     <!-- Loading State -->
     <div
       v-else-if="loading"
-      class="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"
+      class="rounded-xl border border-surface-container bg-surface-container-lowest p-8 text-center text-sm text-on-surface-variant"
     >
       {{ session.t('polls.loading') }}
     </div>
@@ -164,15 +164,15 @@ onMounted(() => {
     <div
       v-else-if="polls.length === 0"
       data-testid="polls-empty-state"
-      class="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-800 dark:bg-slate-900"
+      class="rounded-xl border border-dashed border-surface-container-high bg-surface-container-lowest p-10 text-center"
     >
-      <span class="material-symbols-outlined text-3xl text-slate-400 dark:text-slate-500">
+      <span class="material-symbols-outlined text-3xl text-on-surface-variant/60">
         how_to_vote
       </span>
-      <h2 class="mt-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+      <h2 class="mt-2 text-base font-semibold text-on-surface">
         {{ session.t('polls.emptyTitle') }}
       </h2>
-      <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+      <p class="mt-1 text-sm text-on-surface-variant">
         {{ session.t('polls.emptySubtitle') }}
       </p>
     </div>
@@ -183,7 +183,7 @@ onMounted(() => {
         v-for="poll in polls"
         :key="poll.id"
         :data-testid="`poll-card-${poll.id}`"
-        class="group cursor-pointer rounded-xl border border-slate-200 bg-white p-5 transition-all hover:border-teal-600/60 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-teal-500/60"
+        class="group cursor-pointer rounded-xl border border-surface-container bg-surface-container-lowest p-5 transition-all hover:border-primary/40 hover:shadow-xs"
         @click="router.push({ name: 'poll-detail', params: { pollId: poll.id } })"
       >
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -210,7 +210,7 @@ onMounted(() => {
               <span
                 v-else-if="poll.answered && poll.status !== 'CANCELLED'"
                 data-testid="poll-answered-badge"
-                class="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2.5 py-0.5 text-xs font-semibold text-teal-800 dark:border-teal-800 dark:bg-teal-950/50 dark:text-teal-300"
+                class="inline-flex items-center gap-1 rounded-md bg-secondary-container/70 px-2.5 py-0.5 text-xs font-semibold text-on-secondary-container"
               >
                 <span class="material-symbols-outlined text-[14px]">check_circle</span>
                 {{
@@ -221,7 +221,7 @@ onMounted(() => {
               </span>
             </div>
 
-            <h2 class="text-lg font-semibold text-slate-900 group-hover:text-teal-700 dark:text-slate-100 dark:group-hover:text-teal-400">
+            <h2 class="text-lg font-semibold text-on-surface group-hover:text-primary transition-colors">
               <RouterLink
                 :to="{ name: 'poll-detail', params: { pollId: poll.id } }"
                 @click.stop
@@ -232,7 +232,7 @@ onMounted(() => {
 
             <p
               v-if="poll.description"
-              class="line-clamp-2 text-sm text-slate-600 dark:text-slate-400"
+              class="line-clamp-2 text-sm text-on-surface-variant"
             >
               {{ poll.description }}
             </p>
@@ -243,7 +243,7 @@ onMounted(() => {
               v-if="poll.results_available"
               :to="{ name: 'poll-results', params: { pollId: poll.id } }"
               data-testid="poll-results-link"
-              class="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-3 py-1.5 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 dark:border-teal-800 dark:bg-teal-950/50 dark:text-teal-300 dark:hover:bg-teal-900/60"
+              class="inline-flex items-center gap-1 rounded-lg bg-secondary-container/60 px-3 py-1.5 text-xs font-semibold text-on-secondary-container transition-colors hover:bg-secondary-container"
               @click.stop
             >
               <span class="material-symbols-outlined text-[15px]">bar_chart</span>
@@ -252,7 +252,7 @@ onMounted(() => {
 
             <RouterLink
               :to="{ name: 'poll-detail', params: { pollId: poll.id } }"
-              class="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 dark:text-teal-400"
+              class="inline-flex items-center gap-1.5 text-xs font-semibold text-primary"
               @click.stop
             >
               <span>{{ session.t('polls.openPollLink') }}</span>
@@ -264,9 +264,9 @@ onMounted(() => {
         </div>
 
         <!-- Metadata Footer -->
-        <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-100 pt-3 text-xs text-slate-600 dark:border-slate-800/80 dark:text-slate-400">
+        <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-surface-container pt-3 text-xs text-on-surface-variant">
           <span class="inline-flex items-center gap-1.5 font-mono">
-            <span class="material-symbols-outlined text-[15px] text-slate-400">event</span>
+            <span class="material-symbols-outlined text-[15px] text-on-surface-variant/80">event</span>
             <template v-if="poll.status === 'OPEN'">
               {{ session.t('polls.closesAtLabel', { date: formatPollDateTime(poll.closes_at, session.lang) }) }}
             </template>
@@ -282,17 +282,17 @@ onMounted(() => {
           </span>
 
           <span class="inline-flex items-center gap-1">
-            <span class="material-symbols-outlined text-[15px] text-slate-400">group</span>
+            <span class="material-symbols-outlined text-[15px] text-on-surface-variant/80">group</span>
             {{ session.t(`polls.eligibility.${poll.eligibility}`) }}
           </span>
 
           <span class="inline-flex items-center gap-1">
-            <span class="material-symbols-outlined text-[15px] text-slate-400">ballot</span>
+            <span class="material-symbols-outlined text-[15px] text-on-surface-variant/80">ballot</span>
             {{ session.t(`polls.unit.${poll.unit}`) }}
           </span>
 
           <span class="inline-flex items-center gap-1">
-            <span class="material-symbols-outlined text-[15px] text-slate-400">domain</span>
+            <span class="material-symbols-outlined text-[15px] text-on-surface-variant/80">domain</span>
             {{ formatTargetScope(poll) }}
           </span>
         </div>

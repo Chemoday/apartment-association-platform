@@ -1,10 +1,11 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { listApartments } from '@/api/endpoints/property.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
+const router = useRouter()
 const session = useSessionStore()
 
 const apartments = ref([])
@@ -13,6 +14,19 @@ const loadError = ref(null)
 const selectedEntrance = ref('ALL')
 const occupancyFilter = ref('ALL') // 'ALL' | 'OCCUPIED' | 'EMPTY'
 const searchQuery = ref('')
+
+const hasActiveFilters = computed(
+  () =>
+    selectedEntrance.value !== 'ALL' ||
+    occupancyFilter.value !== 'ALL' ||
+    searchQuery.value.trim().length > 0,
+)
+
+function resetFilters() {
+  selectedEntrance.value = 'ALL'
+  occupancyFilter.value = 'ALL'
+  searchQuery.value = ''
+}
 
 const isBoardOrChairman = computed(() =>
   ['CHAIRMAN', 'BOARD'].includes(session.me?.building_role || ''),
@@ -233,17 +247,30 @@ watch(
           </div>
         </div>
 
-        <!-- Search by apartment number -->
-        <div class="relative w-full sm:w-56">
-          <span class="material-symbols-outlined text-[18px] text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2">
-            search
-          </span>
-          <input
-            v-model="searchQuery"
-            type="search"
-            :placeholder="session.t('apartments.searchPlaceholder')"
-            class="w-full pl-9 pr-3 py-1.5 rounded-lg bg-surface-container-low border border-surface-container-high text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary"
-          />
+        <!-- Search by apartment number & Reset Filters -->
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <div class="relative flex-1 sm:w-56">
+            <span class="material-symbols-outlined text-[18px] text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2">
+              search
+            </span>
+            <input
+              v-model="searchQuery"
+              type="search"
+              :placeholder="session.t('apartments.searchPlaceholder')"
+              class="w-full pl-9 pr-3 py-1.5 rounded-lg bg-surface-container-low border border-surface-container-high text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary"
+            />
+          </div>
+
+          <button
+            v-if="hasActiveFilters"
+            type="button"
+            data-testid="apartments-reset-filters-btn"
+            class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-surface-container text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high text-xs font-label-md font-semibold transition-colors shrink-0 cursor-pointer"
+            @click="resetFilters"
+          >
+            <span class="material-symbols-outlined text-[15px]">filter_alt_off</span>
+            <span>{{ session.t('apartments.filterAll') }}</span>
+          </button>
         </div>
       </div>
 
@@ -265,9 +292,18 @@ watch(
       <!-- Empty Filter Result -->
       <div
         v-else-if="filteredApartments.length === 0"
-        class="bg-surface-container-lowest border border-surface-container rounded-2xl p-space-xl text-center text-on-surface-variant text-sm"
+        class="bg-surface-container-lowest border border-surface-container rounded-2xl p-space-xl text-center text-on-surface-variant text-sm space-y-3"
       >
-        {{ session.t('apartments.emptyList') }}
+        <p>{{ session.t('apartments.emptyList') }}</p>
+        <button
+          v-if="hasActiveFilters"
+          type="button"
+          class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-primary text-on-primary text-xs font-semibold hover:bg-primary/90 transition-colors cursor-pointer"
+          @click="resetFilters"
+        >
+          <span class="material-symbols-outlined text-[15px]">filter_alt_off</span>
+          <span>{{ session.t('apartments.filterAll') }}</span>
+        </button>
       </div>
 
       <!-- Apartments Grid -->
@@ -342,12 +378,30 @@ watch(
             </div>
           </div>
 
-          <!-- Footer Link Prompt -->
-          <div class="flex items-center justify-between text-xs font-semibold text-primary pt-1">
-            <span>{{ session.t('apartments.openCard') }}</span>
-            <span class="material-symbols-outlined text-[16px] group-hover:translate-x-0.5 transition-transform">
-              arrow_forward
-            </span>
+          <!-- Footer Actions: Quick Message + Open Card -->
+          <div class="flex items-center justify-between gap-2 pt-1">
+            <button
+              type="button"
+              :data-testid="`apartment-quick-write-${apt.apartment_id}`"
+              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-surface-container-low hover:bg-primary/10 text-on-surface-variant hover:text-primary text-xs font-semibold transition-colors cursor-pointer"
+              @click.stop.prevent="
+                router.push({
+                  name: 'apartment-card',
+                  params: { apartmentId: apt.apartment_id },
+                  query: { write: '1' },
+                })
+              "
+            >
+              <span class="material-symbols-outlined text-[15px]">edit_square</span>
+              <span>{{ session.t('messages.writeToApartmentBtn') }}</span>
+            </button>
+
+            <div class="inline-flex items-center gap-1 text-xs font-semibold text-primary">
+              <span>{{ session.t('apartments.openCard') }}</span>
+              <span class="material-symbols-outlined text-[16px] group-hover:translate-x-0.5 transition-transform">
+                arrow_forward
+              </span>
+            </div>
           </div>
         </RouterLink>
       </div>

@@ -29,6 +29,7 @@ import { localizeError } from '@/locales/index.js'
 import { formatShortDate } from '@/utils/dates.js'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import SettingsShellTabs from './components/SettingsShellTabs.vue'
 
 const session = useSessionStore()
 const { buildingRole } = useRole()
@@ -424,23 +425,27 @@ onUnmounted(() => {
 <template>
   <div class="w-full max-w-[960px] mx-auto px-gutter py-space-lg space-y-6">
     <!-- Page Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div class="space-y-1">
-        <span class="font-label-md text-xs uppercase tracking-wider text-secondary font-semibold">
-          {{ session.t('notificationSettings.kicker') }}
-        </span>
-        <h1 class="font-headline-xl text-2xl sm:text-3xl font-bold text-on-surface tracking-tight">
-          {{ session.t('notificationSettings.title') }}
-        </h1>
-        <p class="text-sm text-on-surface-variant">
-          {{ session.t('notificationSettings.subtitle') }}
-        </p>
+    <div class="flex flex-col gap-4">
+      <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div class="space-y-1">
+          <span class="font-label-md text-xs uppercase tracking-wider text-secondary font-semibold">
+            {{ session.t('notificationSettings.kicker') }}
+          </span>
+          <h1 class="font-headline-xl text-2xl sm:text-3xl font-bold text-on-surface tracking-tight">
+            {{ session.t('notificationSettings.title') }}
+          </h1>
+          <p class="text-sm text-on-surface-variant">
+            {{ session.t('notificationSettings.subtitle') }}
+          </p>
+        </div>
+
+        <SettingsShellTabs />
       </div>
 
       <!-- Demo Preview Toggle for NOT_LINKED cards -->
       <div
         v-if="isDemoChannelMode"
-        class="flex items-center gap-2.5 px-3.5 py-2 rounded-lg border border-outline-variant/40 bg-surface-container-low text-on-surface text-xs"
+        class="self-start flex items-center gap-2.5 px-3.5 py-2 rounded-lg border border-outline-variant/40 bg-surface-container-low text-on-surface text-xs"
       >
         <span class="material-symbols-outlined text-[18px] text-primary shrink-0" aria-hidden="true">
           visibility

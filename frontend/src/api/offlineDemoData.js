@@ -6,16 +6,39 @@ import {
   isValidCanonicalNumber,
   normalizeCanonicalNumber,
 } from '../utils/pollValidation.js'
+import {
+  cloneDefaultAssociationSettings,
+  validateAndApplySettingsUpdate,
+} from '../utils/associationSettings.js'
+import {
+  buildIssueReportedNotification,
+  canUserAccessIssues,
+  changeIssueStatusInStore,
+  clearIssueUrgentInStore,
+  createDefaultIssuesSeed,
+  createIssueInStore,
+  editIssueInStore,
+  isIssueVisibleToUser,
+  queryIssuesStore,
+  readSettingFromStore,
+  toIssueView,
+  updateIssueFollowInStore,
+  withdrawIssueInStore,
+} from '../utils/issues.js'
 
 export const isOfflineDemoMode = ref(false)
 
 let offlineNotificationsByUser = {}
 let offlinePreferencesByUser = {}
+let offlineSettings = cloneDefaultAssociationSettings()
+let offlineIssues = createDefaultIssuesSeed()
 
 export function enableOfflineDemo() {
   isOfflineDemoMode.value = true
   offlineNotificationsByUser = {}
   offlinePreferencesByUser = {}
+  offlineSettings = cloneDefaultAssociationSettings()
+  offlineIssues = createDefaultIssuesSeed()
 }
 
 export function disableOfflineDemo() {
@@ -682,6 +705,7 @@ function makeOfflineError(status, errorCode, message, extra = {}) {
   err.status = status
   err.errorCode = errorCode
   err.payload = { error_code: errorCode, message, ...extra }
+  err.fieldErrors = extra.errors || []
   return err
 }
 
@@ -1462,6 +1486,13 @@ export async function resolveOfflineDemoRequest(
     if (method === 'PUT') {
       const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
       const changes = Array.isArray(reqBody.preferences) ? reqBody.preferences : []
+      if (changes.length < 1 || changes.length > 40) {
+        throw makeOfflineError(
+          422,
+          'VALIDATION_ERROR',
+          'Provide between 1 and 40 preference changes.',
+        )
+      }
       for (const chg of changes) {
         const match = preferences.find(
           (p) => p.event_type === chg.event_type && p.channel === chg.channel,
@@ -1470,7 +1501,7 @@ export async function resolveOfflineDemoRequest(
           throw makeOfflineError(
             422,
             'PREFERENCE_MANDATORY',
-            'Emergencies cannot be switched off.',
+            'Mandatory notifications cannot be switched off.',
           )
         }
       }
@@ -1511,11 +1542,15 @@ export async function resolveOfflineDemoRequest(
           ? 'PERIOD_REVIEW'
           : lower.includes('poll')
             ? 'POLL_OPENED'
-            : lower.includes('board')
-              ? 'APARTMENT_MESSAGE_TO_BOARD'
-              : lower.includes('message')
-                ? 'APARTMENT_MESSAGE'
-                : 'READING_DEADLINE'
+            : lower.includes('issue-reported')
+              ? 'ISSUE_REPORTED'
+              : lower.includes('issue')
+                ? 'ISSUE_STATUS_CHANGED'
+                : lower.includes('board')
+                  ? 'APARTMENT_MESSAGE_TO_BOARD'
+                  : lower.includes('message')
+                    ? 'APARTMENT_MESSAGE'
+                    : 'READING_DEADLINE'
       const prefs = getOfflineUserPreferences(user.user_id)
       const match = prefs.find((p) => p.event_type === eventType && p.channel === 'email')
       if (match && !match.mandatory) {
@@ -2162,6 +2197,232 @@ export async function resolveOfflineDemoRequest(
       )
     }
     return computeOfflinePollResults(found, isBoardUser)
+  }
+
+  if (pathname === '/settings' && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only board members and the chairman can view association settings.',
+      )
+    }
+    const ordered = [...offlineSettings]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((s) => ({ ...s }))
+    return { settings: ordered }
+  }
+
+  if (pathname === '/settings' && method === 'PUT') {
+    if (user.building_role !== 'CHAIRMAN') {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only the chairman can update association settings.',
+      )
+    }
+    const outcome = validateAndApplySettingsUpdate(offlineSettings, body)
+    if (!outcome.ok) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid association settings update.', {
+        errors: outcome.errors,
+      })
+    }
+    offlineSettings = outcome.settings
+    return { settings: offlineSettings.map((s) => ({ ...s })) }
+  }
+
+  // =========================================================================
+  // Issue Tracker (/issues) - #012 (E9/I1)
+  // =========================================================================
+  if (pathname === '/issues' || pathname.startsWith('/issues/')) {
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    if (!canUserAccessIssues(user, userMems)) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only residents with an apartment and board members can access the issue tracker.',
+      )
+    }
+
+    if (pathname === '/issues/form' && method === 'GET') {
+      const urgentEnabled = Boolean(
+        readSettingFromStore(offlineSettings, 'issues.urgent_enabled', false),
+      )
+      const apartmentIds = userMems
+        .slice()
+        .sort((a, b) => a.apartment_number.localeCompare(b.apartment_number))
+        .map((m) => m.apartment_id)
+      return {
+        urgent_enabled: urgentEnabled,
+        apartment_ids: apartmentIds,
+        entrances: [1, 2],
+      }
+    }
+
+    if (pathname === '/issues' && method === 'GET') {
+      const result = queryIssuesStore(offlineIssues, user, {
+        status: urlObj.searchParams.get('status'),
+        category: urlObj.searchParams.get('category'),
+        entrance: urlObj.searchParams.get('entrance'),
+        include_old: urlObj.searchParams.get('include_old'),
+        limit: urlObj.searchParams.get('limit'),
+        offset: urlObj.searchParams.get('offset'),
+      })
+      if (!result.ok) {
+        throw makeOfflineError(result.status, result.errorCode, result.message)
+      }
+      return result.items
+    }
+
+    if (pathname === '/issues' && method === 'POST') {
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const requestedAptId =
+        reqBody?.apartment_id != null && reqBody?.apartment_id !== ''
+          ? String(reqBody.apartment_id)
+          : userMems[0]?.apartment_id
+      const matchedMem =
+        userMems.find((m) => m.apartment_id === requestedAptId) || userMems[0]
+      const reporterBadge = matchedMem?.preview_badge || {
+        display_label: user.label || 'Resident',
+        role_badge:
+          user.building_role === 'CHAIRMAN' || user.building_role === 'BOARD'
+            ? 'BOARD'
+            : 'OWNER',
+      }
+
+      const outcome = createIssueInStore({
+        issuesStore: offlineIssues,
+        settingsStore: offlineSettings,
+        user,
+        userMemberships: userMems,
+        reporterBadge,
+        body: reqBody,
+        buildingEntrances: [1, 2],
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(
+          outcome.status,
+          outcome.errorCode,
+          outcome.message,
+          outcome.extra || {},
+        )
+      }
+      if (outcome.rawIssue) {
+        const notifBatch = buildIssueReportedNotification(
+          outcome.rawIssue,
+          OFFLINE_DEMO_USERS,
+          user,
+        )
+        emitOfflineIssueNotificationBatch(notifBatch)
+      }
+      return outcome.issue
+    }
+
+    const offlineIssueStatusMatch = pathname.match(/^\/issues\/([^/]+)\/status$/)
+    if (offlineIssueStatusMatch && method === 'POST') {
+      const issueId = offlineIssueStatusMatch[1]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const outcome = changeIssueStatusInStore({
+        issuesStore: offlineIssues,
+        issue: found,
+        user,
+        body: reqBody,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(
+          outcome.status,
+          outcome.errorCode,
+          outcome.message,
+          outcome.extra || {},
+        )
+      }
+      for (const notifBatch of outcome.notifications || []) {
+        emitOfflineIssueNotificationBatch(notifBatch)
+      }
+      return outcome.issue
+    }
+
+    const offlineIssueUrgentClearMatch = pathname.match(/^\/issues\/([^/]+)\/urgent\/clear$/)
+    if (offlineIssueUrgentClearMatch && method === 'POST') {
+      const issueId = offlineIssueUrgentClearMatch[1]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      const outcome = clearIssueUrgentInStore({
+        issue: found,
+        user,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      return outcome.issue
+    }
+
+    const offlineIssueWithdrawMatch = pathname.match(/^\/issues\/([^/]+)\/withdraw$/)
+    if (offlineIssueWithdrawMatch && method === 'POST') {
+      const issueId = offlineIssueWithdrawMatch[1]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      const outcome = withdrawIssueInStore({ issue: found, user })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      return outcome.issue
+    }
+
+    const offlineIssueFollowMatch = pathname.match(/^\/issues\/([^/]+)\/follow$/)
+    if (offlineIssueFollowMatch && (method === 'PUT' || method === 'DELETE')) {
+      const issueId = offlineIssueFollowMatch[1]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      const outcome = updateIssueFollowInStore({
+        issue: found,
+        user,
+        follow: method === 'PUT',
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      return outcome.issue
+    }
+
+    const offlineIssueDetailMatch = pathname.match(/^\/issues\/([^/]+)$/)
+    if (offlineIssueDetailMatch && method === 'GET') {
+      const issueId = offlineIssueDetailMatch[1]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      return toIssueView(found, user)
+    }
+
+    if (offlineIssueDetailMatch && method === 'PATCH') {
+      const issueId = offlineIssueDetailMatch[1]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const outcome = editIssueInStore({
+        issue: found,
+        user,
+        body: reqBody,
+        buildingEntrances: [1, 2],
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      return outcome.issue
+    }
   }
 
   return null
@@ -2906,6 +3167,9 @@ const OFFLINE_NOTIFICATION_EVENTS = [
   'APARTMENT_MESSAGE',
   'APARTMENT_MESSAGE_TO_BOARD',
   'POLL_OPENED',
+  'ISSUE_REPORTED',
+  'ISSUE_URGENT',
+  'ISSUE_STATUS_CHANGED',
 ]
 const OFFLINE_NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
 
@@ -2914,11 +3178,16 @@ function getOfflineUserPreferences(userId) {
     const list = []
     for (const event_type of OFFLINE_NOTIFICATION_EVENTS) {
       for (const channel of OFFLINE_NOTIFICATION_CHANNELS) {
+        const mandatory = event_type === 'EMERGENCY_PUBLISHED' || event_type === 'ISSUE_URGENT'
+        const enabled =
+          event_type === 'APARTMENT_MESSAGE_TO_BOARD' || event_type === 'ISSUE_REPORTED'
+            ? channel === 'in_app'
+            : true
         list.push({
           event_type,
           channel,
-          enabled: event_type === 'APARTMENT_MESSAGE_TO_BOARD' ? channel === 'in_app' : true,
-          mandatory: event_type === 'EMERGENCY_PUBLISHED',
+          enabled,
+          mandatory,
         })
       }
     }
@@ -3016,9 +3285,59 @@ function getOfflineUserNotifications(userId) {
       })
     }
 
+    if (isBoardUser) {
+      base.splice(1, 0, {
+        id: '018f0000-0000-7000-8000-000000009107',
+        event_type: 'ISSUE_REPORTED',
+        subject_type: 'issue',
+        subject_id: '018f0000-0000-7000-8000-000000000901',
+        params: {
+          category: 'LIGHTING',
+          entrance: 1,
+        },
+        created_at: '2026-10-25T08:15:00Z',
+        read_at: null,
+      })
+    } else if (userId !== '018f0000-0000-7000-8000-000000000103') {
+      base.splice(1, 0, {
+        id: '018f0000-0000-7000-8000-000000009108',
+        event_type: 'ISSUE_STATUS_CHANGED',
+        subject_type: 'issue',
+        subject_id: '018f0000-0000-7000-8000-000000000902',
+        params: {
+          category: 'DOORS_AND_LOCKS',
+          entrance: 2,
+          status: 'IN_PROGRESS',
+          merged: false,
+        },
+        created_at: '2026-10-25T09:30:00Z',
+        read_at: null,
+      })
+    }
+
     offlineNotificationsByUser[userId] = base
   }
   return offlineNotificationsByUser[userId]
+}
+
+function emitOfflineIssueNotificationBatch(batch) {
+  for (const uid of batch.recipientUserIds || []) {
+    const prefs = getOfflineUserPreferences(uid)
+    const inAppPref = prefs.find(
+      (p) => p.event_type === batch.event_type && p.channel === 'in_app',
+    )
+    if (batch.event_type === 'ISSUE_URGENT' || !inAppPref || inAppPref.enabled) {
+      getOfflineUserNotifications(uid).unshift({
+        id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+        event_type: batch.event_type,
+        subject_type: batch.subject_type,
+        subject_id: batch.subject_id,
+        params: { ...batch.params },
+        created_at: batch.created_at,
+        read_at: null,
+      })
+    }
+  }
 }
 
 function emitOfflinePollOpenedNotifications(poll, openerUser, createdAtIso) {

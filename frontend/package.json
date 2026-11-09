@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/utils/meterValue.test.ts src/utils/anomalyFlow.test.ts src/locales/i18n.test.ts src/utils/theme.test.ts src/api/offlineDemoData.test.ts src/utils/preferences.test.ts src/utils/base64url.test.ts src/utils/linkToken.test.ts src/utils/notificationText.test.ts src/api/client.test.ts src/utils/privacyAudit.test.ts src/utils/pollValidation.test.ts src/stores/session.test.ts"
+    "test": "tsx --test src/utils/meterValue.test.ts src/utils/anomalyFlow.test.ts src/locales/i18n.test.ts src/utils/theme.test.ts src/api/offlineDemoData.test.ts src/utils/preferences.test.ts src/utils/base64url.test.ts src/utils/linkToken.test.ts src/utils/notificationText.test.ts src/api/client.test.ts src/utils/privacyAudit.test.ts src/utils/pollValidation.test.ts src/stores/session.test.ts src/utils/associationSettings.test.ts src/utils/issues.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

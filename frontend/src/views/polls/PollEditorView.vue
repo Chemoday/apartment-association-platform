@@ -231,12 +231,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+  <div class="w-full max-w-4xl mx-auto px-gutter py-space-lg space-y-6">
     <!-- Back Link -->
     <div>
       <RouterLink
         :to="isEditMode ? { name: 'poll-detail', params: { pollId } } : { name: 'polls' }"
-        class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+        class="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant hover:text-primary transition-colors"
       >
         <span class="material-symbols-outlined text-[18px]">arrow_back</span>
         {{ isEditMode ? session.t('polls.editor.backToPoll') : session.t('polls.backToPolls') }}
@@ -247,10 +247,10 @@ onMounted(() => {
     <div
       v-if="!isBoardOrChairman"
       data-testid="poll-editor-no-access"
-      class="rounded-xl border border-slate-200 bg-white p-8 text-center dark:border-slate-800 dark:bg-slate-900"
+      class="rounded-2xl border border-surface-container bg-surface-container-lowest p-8 text-center"
     >
-      <span class="material-symbols-outlined text-3xl text-slate-400">lock</span>
-      <h1 class="mt-2 text-lg font-semibold text-slate-900 dark:text-slate-100">
+      <span class="material-symbols-outlined text-3xl text-on-surface-variant">lock</span>
+      <h1 class="mt-2 text-lg font-semibold text-on-surface">
         {{ session.t('common.noAccessTitle') }}
       </h1>
     </div>
@@ -258,7 +258,7 @@ onMounted(() => {
     <!-- Not Draft Error -->
     <div
       v-else-if="notEditableError"
-      class="rounded-xl border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
+      class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6 text-sm text-amber-900 dark:text-amber-200"
     >
       <p class="font-semibold">{{ session.t('errors.POLL_NOT_EDITABLE') }}</p>
     </div>
@@ -273,7 +273,7 @@ onMounted(() => {
     <!-- Loading -->
     <div
       v-else-if="loading"
-      class="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"
+      class="rounded-2xl border border-surface-container bg-surface-container-lowest p-8 text-center text-sm text-on-surface-variant"
     >
       {{ session.t('common.loading') }}
     </div>
@@ -282,17 +282,17 @@ onMounted(() => {
     <form
       v-else
       data-testid="poll-editor-form"
-      class="space-y-6 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900"
+      class="space-y-6 rounded-2xl border border-surface-container bg-surface-container-lowest p-6"
       @submit.prevent="handleSaveDraft"
     >
-      <header class="border-b border-slate-200 pb-4 dark:border-slate-800">
-        <p class="text-xs font-semibold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+      <header class="border-b border-surface-container pb-4">
+        <p class="text-xs font-semibold uppercase tracking-wider text-primary">
           {{ session.t('polls.eyebrow') }}
         </p>
-        <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+        <h1 class="mt-1 font-headline-md text-2xl font-bold tracking-tight text-on-surface">
           {{ isEditMode ? session.t('polls.editor.editTitle') : session.t('polls.editor.createTitle') }}
         </h1>
-        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        <p class="mt-1 text-sm text-on-surface-variant">
           {{ session.t('polls.editor.subtitle') }}
         </p>
       </header>
@@ -302,7 +302,7 @@ onMounted(() => {
         <div>
           <label
             for="poll-draft-title"
-            class="block text-sm font-semibold text-slate-800 dark:text-slate-200"
+            class="block text-sm font-semibold text-on-surface"
           >
             {{ session.t('polls.editor.titleLabel') }} *
           </label>
@@ -313,12 +313,12 @@ onMounted(() => {
             maxlength="255"
             data-testid="poll-draft-title-input"
             :placeholder="session.t('polls.editor.titlePlaceholder')"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2.5 text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:border-primary focus:outline-none"
             @input="delete fieldErrors.title"
           />
           <p
             v-if="fieldErrors.title"
-            class="mt-1 text-xs font-semibold text-rose-600 dark:text-rose-400"
+            class="mt-1 text-xs font-semibold text-error"
           >
             {{ resolveFieldError(fieldErrors.title) }}
           </p>
@@ -327,7 +327,7 @@ onMounted(() => {
         <div>
           <label
             for="poll-draft-desc"
-            class="block text-sm font-semibold text-slate-800 dark:text-slate-200"
+            class="block text-sm font-semibold text-on-surface"
           >
             {{ session.t('polls.editor.descriptionLabel') }}
           </label>
@@ -338,12 +338,12 @@ onMounted(() => {
             maxlength="5000"
             data-testid="poll-draft-description-input"
             :placeholder="session.t('polls.editor.descriptionPlaceholder')"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2.5 text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:border-primary focus:outline-none"
             @input="delete fieldErrors.description"
           />
           <p
             v-if="fieldErrors.description"
-            class="mt-1 text-xs font-semibold text-rose-600 dark:text-rose-400"
+            class="mt-1 text-xs font-semibold text-error"
           >
             {{ resolveFieldError(fieldErrors.description) }}
           </p>
@@ -351,16 +351,16 @@ onMounted(() => {
       </div>
 
       <!-- Audience, Eligibility, Unit & Deadline -->
-      <div class="grid grid-cols-1 gap-4 border-t border-slate-100 pt-5 sm:grid-cols-2 dark:border-slate-800">
+      <div class="grid grid-cols-1 gap-4 border-t border-surface-container pt-5 sm:grid-cols-2">
         <!-- Target Scope -->
         <div>
-          <label class="block text-sm font-semibold text-slate-800 dark:text-slate-200">
+          <label class="block text-sm font-semibold text-on-surface">
             {{ session.t('polls.editor.targetScopeLabel') }}
           </label>
           <select
             v-model="form.target_scope"
             data-testid="poll-draft-target-scope"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
             @change="delete fieldErrors.target"
           >
             <option value="ALL_BUILDING">{{ session.t('polls.target.allBuilding') }}</option>
@@ -373,7 +373,7 @@ onMounted(() => {
         <div>
           <label
             for="poll-draft-deadline"
-            class="block text-sm font-semibold text-slate-800 dark:text-slate-200"
+            class="block text-sm font-semibold text-on-surface"
           >
             {{ session.t('polls.editor.deadlineDateLabel') }} *
           </label>
@@ -382,15 +382,15 @@ onMounted(() => {
             v-model="form.closes_date"
             type="date"
             data-testid="poll-draft-deadline-input"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2 font-mono text-sm text-on-surface focus:border-primary focus:outline-none"
             @input="delete fieldErrors.closes_at"
           />
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p class="mt-1 text-xs text-on-surface-variant">
             {{ session.t('polls.editor.deadlineEndOfDayHint') }}
           </p>
           <p
             v-if="fieldErrors.closes_at"
-            class="mt-1 text-xs font-semibold text-rose-600 dark:text-rose-400"
+            class="mt-1 text-xs font-semibold text-error"
           >
             {{ resolveFieldError(fieldErrors.closes_at) }}
           </p>
@@ -398,13 +398,13 @@ onMounted(() => {
 
         <!-- Entrance Selector when target_scope === 'ENTRANCE' -->
         <div v-if="form.target_scope === 'ENTRANCE'" class="sm:col-span-2">
-          <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <label class="block text-xs font-semibold text-on-surface">
             {{ session.t('polls.editor.selectEntranceLabel') }}
           </label>
           <select
             v-model.number="form.target_entrance"
             data-testid="poll-draft-entrance-select"
-            class="mt-1 block w-48 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="mt-1 block w-48 rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
           >
             <option v-for="ent in availableEntrances" :key="ent" :value="ent">
               {{ session.t('polls.target.entrance', { entrance: ent }) }}
@@ -414,19 +414,19 @@ onMounted(() => {
 
         <!-- Apartments Multi-Select when target_scope === 'APARTMENT_LIST' -->
         <div v-if="form.target_scope === 'APARTMENT_LIST'" class="sm:col-span-2">
-          <span class="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <span class="block text-xs font-semibold text-on-surface">
             {{ session.t('polls.editor.selectApartmentsLabel') }}
           </span>
           <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-6">
             <label
               v-for="apt in apartments"
               :key="apt.apartment_id"
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              class="flex cursor-pointer items-center gap-2 rounded-lg border border-surface-container-high bg-surface-container-low px-3 py-2 text-xs font-medium text-on-surface"
             >
               <input
                 type="checkbox"
                 :checked="form.target_apartment_ids.includes(apt.apartment_id)"
-                class="h-4 w-4 rounded text-teal-600"
+                class="h-4 w-4 rounded accent-primary"
                 @change="toggleTargetApartment(apt.apartment_id, $event.target.checked)"
               />
               <span>{{ session.t('common.aptShort', { number: apt.apartment_number }) }}</span>
@@ -436,25 +436,25 @@ onMounted(() => {
 
         <p
           v-if="fieldErrors.target"
-          class="sm:col-span-2 text-xs font-semibold text-rose-600 dark:text-rose-400"
+          class="sm:col-span-2 text-xs font-semibold text-error"
         >
           {{ resolveFieldError(fieldErrors.target) }}
         </p>
 
         <!-- Eligibility -->
         <div>
-          <label class="block text-sm font-semibold text-slate-800 dark:text-slate-200">
+          <label class="block text-sm font-semibold text-on-surface">
             {{ session.t('polls.meta.whoAnswers') }}
           </label>
           <select
             v-model="form.eligibility"
             data-testid="poll-draft-eligibility"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
           >
             <option value="RESIDENTS">{{ session.t('polls.eligibility.RESIDENTS') }}</option>
             <option value="OWNERS">{{ session.t('polls.eligibility.OWNERS') }}</option>
           </select>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p class="mt-1 text-xs text-on-surface-variant">
             {{
               form.eligibility === 'OWNERS'
                 ? session.t('polls.editor.eligibilityOwnersExplain')
@@ -465,18 +465,18 @@ onMounted(() => {
 
         <!-- Counting Unit -->
         <div>
-          <label class="block text-sm font-semibold text-slate-800 dark:text-slate-200">
+          <label class="block text-sm font-semibold text-on-surface">
             {{ session.t('polls.meta.countingUnit') }}
           </label>
           <select
             v-model="form.unit"
             data-testid="poll-draft-unit"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
           >
             <option value="APARTMENT">{{ session.t('polls.unit.APARTMENT') }}</option>
             <option value="PERSON">{{ session.t('polls.unit.PERSON') }}</option>
           </select>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p class="mt-1 text-xs text-on-surface-variant">
             {{
               form.unit === 'APARTMENT'
                 ? session.t('polls.editor.unitApartmentExplain')
@@ -492,8 +492,8 @@ onMounted(() => {
         class="flex items-start gap-2.5 rounded-xl border px-4 py-3 text-xs"
         :class="
           form.target_scope !== 'ALL_BUILDING'
-            ? 'border-amber-300 bg-amber-50/80 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200'
-            : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400'
+            ? 'border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200'
+            : 'border-surface-container bg-surface-container-low text-on-surface-variant'
         "
       >
         <span class="material-symbols-outlined text-[18px] shrink-0">privacy_tip</span>
@@ -501,13 +501,13 @@ onMounted(() => {
       </div>
 
       <!-- Questions Editor Section -->
-      <section class="space-y-4 border-t border-slate-200 pt-5 dark:border-slate-800">
+      <section class="space-y-4 border-t border-surface-container pt-5">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">
+            <h2 class="text-base font-semibold text-on-surface">
               {{ session.t('polls.editor.questionsSectionTitle') }}
             </h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400">
+            <p class="text-xs text-on-surface-variant">
               {{ session.t('polls.editor.questionsSectionSubtitle') }}
             </p>
           </div>
@@ -516,7 +516,7 @@ onMounted(() => {
             v-if="form.questions.length < 20"
             type="button"
             data-testid="poll-editor-add-question-btn"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-surface-container-high bg-surface-container-low px-3.5 py-2 text-xs font-semibold text-on-surface hover:bg-surface-container transition-colors"
             @click="addQuestion"
           >
             <span class="material-symbols-outlined text-[16px]">add</span>
@@ -546,7 +546,7 @@ onMounted(() => {
       <div
         v-if="submitError || serverValidationDetails.length > 0"
         role="alert"
-        class="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/50 dark:text-rose-200"
+        class="rounded-xl border border-error/30 bg-error-container/30 p-4 text-sm text-on-error-container"
       >
         <p v-if="submitError" class="font-semibold">{{ submitError }}</p>
         <ul v-if="serverValidationDetails.length > 0" class="mt-1 list-disc pl-5 text-xs">
@@ -555,10 +555,10 @@ onMounted(() => {
       </div>
 
       <!-- Form Actions -->
-      <div class="flex items-center justify-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+      <div class="flex items-center justify-end gap-3 border-t border-surface-container pt-4">
         <RouterLink
           :to="isEditMode ? { name: 'poll-detail', params: { pollId } } : { name: 'polls' }"
-          class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+          class="rounded-xl border border-surface-container-high bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface hover:bg-surface-container transition-colors"
         >
           {{ session.t('common.cancel') }}
         </RouterLink>
@@ -567,7 +567,7 @@ onMounted(() => {
           type="submit"
           data-testid="poll-draft-save-btn"
           :disabled="saving"
-          class="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-teal-600 dark:hover:bg-teal-500"
+          class="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary hover:bg-primary-container transition-colors disabled:opacity-50"
         >
           <span class="material-symbols-outlined text-[18px]">save</span>
           <span>

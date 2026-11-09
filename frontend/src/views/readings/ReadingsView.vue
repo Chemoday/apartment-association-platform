@@ -113,27 +113,37 @@ const activeApartment = computed(() => {
 
 const period = computed(() => dashboard.value?.period || null)
 
-// Group meters into Kitchen, Bathroom, and Auxiliary sections matching Stitch mockup
+function isKitchenLabel(label = '') {
+  const l = label.toLowerCase()
+  return l.includes('kitchen') || l.includes('köök') || l.includes('кухн')
+}
+
+function isBathroomLabel(label = '') {
+  const l = label.toLowerCase()
+  return (
+    l.includes('bath') ||
+    l.includes('laundry') ||
+    l.includes('vann') ||
+    l.includes('pesu') ||
+    l.includes('ванн') ||
+    l.includes('сануз')
+  )
+}
+
+// Group meters into Kitchen, Bathroom, and Auxiliary sections with multilingual support
 const kitchenMeters = computed(() =>
-  (activeApartment.value?.meters || []).filter((m) =>
-    m.location_label.toLowerCase().includes('kitchen'),
-  ),
+  (activeApartment.value?.meters || []).filter((m) => isKitchenLabel(m.location_label)),
 )
 
 const bathroomMeters = computed(() =>
   (activeApartment.value?.meters || []).filter(
-    (m) =>
-      m.location_label.toLowerCase().includes('bath') ||
-      m.location_label.toLowerCase().includes('laundry'),
+    (m) => !isKitchenLabel(m.location_label) && isBathroomLabel(m.location_label),
   ),
 )
 
 const auxiliaryMeters = computed(() =>
   (activeApartment.value?.meters || []).filter(
-    (m) =>
-      !m.location_label.toLowerCase().includes('kitchen') &&
-      !m.location_label.toLowerCase().includes('bath') &&
-      !m.location_label.toLowerCase().includes('laundry'),
+    (m) => !isKitchenLabel(m.location_label) && !isBathroomLabel(m.location_label),
   ),
 )
 
@@ -258,82 +268,6 @@ function openHistory(readingId, label) {
 
 <template>
   <div class="w-full flex flex-col">
-    <!-- Sub-navigation Tabs Bar matching resident_view_unified_meter_submission -->
-    <div class="w-full bg-surface-container-lowest border-b border-surface-container-high">
-      <div class="max-w-[1280px] mx-auto px-gutter">
-        <div class="flex flex-wrap items-center justify-between gap-space-md py-2.5">
-          <div class="flex items-center gap-2 overflow-x-auto">
-            <span class="flex items-center gap-2 px-space-md py-2 rounded-lg bg-surface-container-high text-on-surface font-label-lg text-label-lg font-semibold">
-              <span class="material-symbols-outlined text-[20px] text-primary">speed</span>
-              <span>{{ session.t('readings.submitReadingsTab') }}</span>
-              <span
-                v-if="period"
-                class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-secondary-fixed text-on-secondary-fixed"
-              >
-                {{ formatPeriodLabel(period.period_code, session.lang) }}
-              </span>
-            </span>
-
-            <button
-              v-if="canViewMatrix"
-              type="button"
-              class="flex items-center gap-2 px-space-md py-2 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors font-label-lg text-label-lg"
-              @click="router.push('/accounting')"
-            >
-              <span class="material-symbols-outlined text-[20px]">table_view</span>
-              <span>
-                {{ session.t('readings.buildingMatrixTab', { count: session.buildingApartmentsCount }) }}
-              </span>
-            </button>
-          </div>
-
-          <!-- Period & Apartment Switcher -->
-          <div class="flex items-center gap-2">
-            <label for="readings-period-select" class="sr-only">Billing Period</label>
-            <select
-              id="readings-period-select"
-              v-model="periodCode"
-              class="h-9 px-3 rounded-full bg-surface-container-low text-on-surface font-label-md text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              <option v-for="code in periods" :key="code" :value="code">
-                {{ formatPeriodLabel(code, session.lang) }} ({{ code }})
-              </option>
-            </select>
-
-            <div
-              v-if="apartments.length > 1"
-              class="inline-flex items-center gap-1 p-1 rounded-full bg-surface-container-low"
-            >
-              <button
-                v-for="apt in apartments"
-                :key="apt.apartment_id"
-                type="button"
-                class="px-3 py-1 rounded-full font-label-md text-xs transition-colors"
-                :class="
-                  apt.apartment_id === activeApartment?.apartment_id
-                    ? 'bg-primary text-on-primary font-semibold'
-                    : 'text-on-surface-variant hover:text-on-surface'
-                "
-                @click="session.selectApartment(apt.apartment_id)"
-              >
-                Apt {{ apt.apartment_number }}
-              </button>
-            </div>
-
-            <div
-              v-else-if="activeApartment"
-              class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-low text-on-surface font-label-md text-label-md shrink-0"
-            >
-              <span class="material-symbols-outlined text-[16px] text-on-surface-variant">home</span>
-              <span class="font-medium">
-                {{ session.t('common.apartmentNumber', { number: activeApartment.apartment_number }) }}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Main Content Container -->
     <div class="w-full max-w-[1280px] mx-auto px-gutter py-space-xl flex-1">
       <ErrorCard v-if="error" :error="error" @retry="loadDashboard" />
@@ -362,8 +296,8 @@ function openHistory(readingId, label) {
       </div>
 
       <template v-else>
-        <!-- Title & Period Status Bar -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-lg border-b border-surface-container-high/70">
+        <!-- Title, Period & Apartment Controls Bar -->
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md pb-space-lg border-b border-surface-container-high/70">
           <div>
             <h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">
               {{ session.t('readings.aptMeterSubmissionTitle', { number: activeApartment.apartment_number }) }}
@@ -377,7 +311,38 @@ function openHistory(readingId, label) {
             </p>
           </div>
 
-          <div class="flex items-center gap-3">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <label for="readings-period-select" class="sr-only">Billing Period</label>
+            <select
+              id="readings-period-select"
+              v-model="periodCode"
+              class="h-9 px-3.5 rounded-full bg-surface-container-lowest border border-surface-container-high text-on-surface font-label-md text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option v-for="code in periods" :key="code" :value="code">
+                {{ formatPeriodLabel(code, session.lang) }} ({{ code }})
+              </option>
+            </select>
+
+            <div
+              v-if="apartments.length > 1"
+              class="inline-flex items-center gap-1 p-1 rounded-full bg-surface-container-low border border-surface-container-high"
+            >
+              <button
+                v-for="apt in apartments"
+                :key="apt.apartment_id"
+                type="button"
+                class="px-3 py-1 rounded-full font-label-md text-xs transition-colors"
+                :class="
+                  apt.apartment_id === activeApartment?.apartment_id
+                    ? 'bg-primary text-on-primary font-semibold'
+                    : 'text-on-surface-variant hover:text-on-surface'
+                "
+                @click="session.selectApartment(apt.apartment_id)"
+              >
+                {{ session.t('common.apartmentNumber', { number: apt.apartment_number }) }}
+              </button>
+            </div>
+
             <StatusChip v-if="period" :status="period.status" />
             <span
               v-if="!activeApartment.can_submit_readings"
@@ -669,6 +634,30 @@ function openHistory(readingId, label) {
               </div>
             </div>
           </div>
+        </div>
+        <!-- Mobile Sticky Consumption Summary & Quick Submit Bar (< lg) -->
+        <div
+          v-if="activeApartment.can_submit_readings && period?.status !== 'LOCKED'"
+          data-testid="readings-mobile-sticky-bar"
+          class="lg:hidden sticky bottom-16 z-20 mt-space-md rounded-2xl bg-surface-container-lowest/95 backdrop-blur-md border border-surface-container-high p-3 shadow-lg flex items-center justify-between gap-3"
+        >
+          <div class="min-w-0">
+            <span class="block text-[10px] uppercase tracking-wider font-bold text-on-surface-variant">
+              {{ session.t('readings.totalWaterCombined') }}
+            </span>
+            <span class="font-mono tabular-nums font-bold text-sm text-on-surface">
+              {{ totalCombinedWaterM3 }} m³
+            </span>
+          </div>
+
+          <button
+            type="button"
+            class="px-4 py-2.5 bg-primary text-on-primary font-label-md text-xs font-semibold rounded-xl shadow-xs hover:bg-primary-container transition-all inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+            @click="submitAllMeters"
+          >
+            <span>{{ session.t('readings.confirmAndSubmitBtn') }}</span>
+            <span class="material-symbols-outlined text-[16px]">send</span>
+          </button>
         </div>
       </template>
     </div>

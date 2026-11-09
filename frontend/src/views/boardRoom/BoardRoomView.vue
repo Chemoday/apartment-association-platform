@@ -116,7 +116,7 @@ watch(
 </script>
 
 <template>
-  <div class="w-full max-w-[1024px] mx-auto px-3 sm:px-gutter py-space-md sm:py-space-lg space-y-space-lg">
+  <div class="w-full max-w-[1280px] mx-auto px-3 sm:px-gutter py-space-md sm:py-space-lg space-y-space-lg">
     <!-- Header -->
     <header class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-surface-container pb-space-md">
       <div>
