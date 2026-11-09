@@ -7,10 +7,14 @@ import { useRole } from '@/composables/useRole.js'
 const router = useRouter()
 const route = useRoute()
 const session = useSessionStore()
-const { buildingRole, isChairman } = useRole()
+const { buildingRole } = useRole()
 
 const menuOpen = ref(false)
+const savingPrivacy = ref(false)
 const rootRef = ref(null)
+
+const membership = computed(() => session.activeMembership)
+const privacyModes = ['APARTMENT_ONLY', 'INITIALS', 'FULL_NAME']
 
 const apartmentLabel = computed(() => {
   if (session.activeMembership?.apartment_number) {
@@ -25,6 +29,16 @@ const roleChipLabel = computed(() => {
   }
   return buildingRole.value
 })
+
+async function selectPrivacyMode(mode) {
+  if (!membership.value || savingPrivacy.value) return
+  savingPrivacy.value = true
+  try {
+    await session.changePrivacyMode(membership.value.membership_id, mode)
+  } finally {
+    savingPrivacy.value = false
+  }
+}
 
 function navigateTo(routeName) {
   menuOpen.value = false
@@ -80,8 +94,59 @@ onBeforeUnmount(() => {
 
     <div
       v-if="menuOpen"
-      class="absolute right-0 mt-1.5 w-56 rounded-xl bg-surface-container-lowest shadow-lg border border-surface-container py-1.5 z-50"
+      class="absolute right-0 mt-1.5 w-64 rounded-xl bg-surface-container-lowest shadow-lg border border-surface-container py-1.5 z-50"
     >
+      <!-- Mobile & Tablet (< lg) Active Apartment & Privacy Switcher (since AppNavbarPrivacySelector is hidden < lg) -->
+      <div
+        v-if="membership"
+        class="lg:hidden px-3.5 py-2.5 mb-1 border-b border-surface-container bg-surface-container-low/50 space-y-2"
+      >
+        <div v-if="session.memberships.length > 1">
+          <span class="block text-[10px] uppercase tracking-wider font-bold text-on-surface-variant mb-1">
+            {{ session.t('header.activeApartment') }}
+          </span>
+          <div class="flex flex-wrap gap-1">
+            <button
+              v-for="m in session.memberships"
+              :key="m.membership_id"
+              type="button"
+              class="px-2 py-1 rounded text-xs font-semibold transition-colors cursor-pointer"
+              :class="
+                m.apartment_id === membership.apartment_id
+                  ? 'bg-primary text-on-primary'
+                  : 'bg-surface-container text-on-surface-variant hover:text-on-surface'
+              "
+              @click="session.selectApartment(m.apartment_id)"
+            >
+              {{ session.t('common.aptShort', { number: m.apartment_number }) }}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <span class="block text-[10px] uppercase tracking-wider font-bold text-on-surface-variant mb-1">
+            {{ session.t('header.neighborDisplayBadge') }}
+          </span>
+          <div class="grid grid-cols-3 gap-1">
+            <button
+              v-for="mode in privacyModes"
+              :key="mode"
+              type="button"
+              :disabled="savingPrivacy"
+              class="px-1.5 py-1 rounded text-[10px] font-semibold truncate transition-colors cursor-pointer"
+              :class="
+                membership.privacy_display_mode === mode
+                  ? 'bg-secondary-fixed text-on-secondary-fixed'
+                  : 'bg-surface-container text-on-surface-variant hover:text-on-surface'
+              "
+              @click="selectPrivacyMode(mode)"
+            >
+              {{ session.t(`privacy.${mode}`) }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <button
         type="button"
         class="w-full px-3.5 py-2 text-left text-xs text-on-surface hover:bg-surface-container-low flex items-center gap-2.5 transition-colors cursor-pointer"
@@ -91,23 +156,6 @@ onBeforeUnmount(() => {
           person
         </span>
         <span>{{ session.t('auth.menu.profile') }}</span>
-      </button>
-
-      <button
-        v-if="isChairman"
-        type="button"
-        class="w-full px-3.5 py-2 text-left text-xs text-on-surface hover:bg-surface-container-low flex items-center justify-between gap-2 transition-colors cursor-pointer"
-        @click="navigateTo('people')"
-      >
-        <span class="flex items-center gap-2.5">
-          <span class="material-symbols-outlined text-[17px] text-on-surface-variant" aria-hidden="true">
-            group
-          </span>
-          <span>{{ session.t('nav.people') }}</span>
-        </span>
-        <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[9px] font-bold uppercase">
-          DEMO
-        </span>
       </button>
 
       <button

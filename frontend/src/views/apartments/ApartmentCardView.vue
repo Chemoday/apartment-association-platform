@@ -142,7 +142,21 @@ async function handleWriteToApartment() {
   }
 }
 
-onMounted(fetchCardData)
+onMounted(() => {
+  if (route.query.write === '1') {
+    showWriteForm.value = true
+  }
+  fetchCardData()
+})
+
+watch(
+  () => route.query.write,
+  (val) => {
+    if (val === '1') {
+      showWriteForm.value = true
+    }
+  },
+)
 
 watch(
   () => [apartmentId.value, session.actingUserId, session.me?.building_role, session.sessionRevision],

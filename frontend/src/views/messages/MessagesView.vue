@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { createApartmentThread, listApartmentThreads } from '@/api/endpoints/communication.js'
 import { listApartments } from '@/api/endpoints/property.js'
@@ -9,6 +9,7 @@ import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
+const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 
@@ -150,12 +151,24 @@ async function handleCreateThread() {
 }
 
 onMounted(() => {
+  if (route.query.write === '1') {
+    showComposer.value = true
+  }
   if (userMemberships.value.length > 0) {
     selectedApartmentId.value =
       session.activeMembership?.apartment_id || userMemberships.value[0].apartment_id
   }
   fetchInbox()
 })
+
+watch(
+  () => route.query.write,
+  (val) => {
+    if (val === '1') {
+      showComposer.value = true
+    }
+  },
+)
 
 watch(
   () => [session.actingUserId, session.me?.building_role, session.sessionRevision, userMemberships.value.length],
@@ -170,7 +183,7 @@ watch(
 </script>
 
 <template>
-  <div class="w-full max-w-[1024px] mx-auto px-3 sm:px-gutter py-space-md sm:py-space-lg space-y-space-lg">
+  <div class="w-full max-w-[1280px] mx-auto px-3 sm:px-gutter py-space-md sm:py-space-lg space-y-space-lg">
     <!-- Header -->
     <header class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-surface-container pb-space-md">
       <div>

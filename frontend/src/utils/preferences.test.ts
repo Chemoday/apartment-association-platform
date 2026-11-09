@@ -36,7 +36,7 @@ test('changedPreferences returns empty array when nothing changed', () => {
   assert.deepEqual(changedPreferences(original, edited), [])
 })
 
-test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTMENT_MESSAGE_TO_BOARD, and POLL_OPENED by role and apartment membership', () => {
+test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTMENT_MESSAGE_TO_BOARD, POLL_OPENED, and ISSUE_* by role and apartment membership', () => {
   // Resident with an apartment
   assert.deepEqual(visibleNotificationEvents('USER', true), [
     'EMERGENCY_PUBLISHED',
@@ -44,6 +44,7 @@ test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTM
     'READING_DEADLINE',
     'APARTMENT_MESSAGE',
     'POLL_OPENED',
+    'ISSUE_STATUS_CHANGED',
   ])
   // Board member with an apartment
   assert.deepEqual(visibleNotificationEvents('BOARD', true), [
@@ -53,6 +54,9 @@ test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTM
     'APARTMENT_MESSAGE',
     'APARTMENT_MESSAGE_TO_BOARD',
     'POLL_OPENED',
+    'ISSUE_REPORTED',
+    'ISSUE_URGENT',
+    'ISSUE_STATUS_CHANGED',
   ])
   // Chairman without an apartment
   assert.deepEqual(visibleNotificationEvents('CHAIRMAN', false), [
@@ -60,6 +64,9 @@ test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTM
     'EMERGENCY_RESOLVED',
     'READING_DEADLINE',
     'APARTMENT_MESSAGE_TO_BOARD',
+    'ISSUE_REPORTED',
+    'ISSUE_URGENT',
+    'ISSUE_STATUS_CHANGED',
   ])
   // Accountant without an apartment
   assert.deepEqual(visibleNotificationEvents('ACCOUNTANT', false), [
@@ -77,6 +84,9 @@ test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTM
     'APARTMENT_MESSAGE',
     'APARTMENT_MESSAGE_TO_BOARD',
     'POLL_OPENED',
+    'ISSUE_REPORTED',
+    'ISSUE_URGENT',
+    'ISSUE_STATUS_CHANGED',
   ])
 })
 
@@ -91,6 +101,13 @@ test('canTogglePreference respects mandatory and channel availability reasons', 
   assert.equal(
     canTogglePreference(
       { event_type: 'EMERGENCY_PUBLISHED', channel: 'in_app', enabled: true, mandatory: true },
+      channels,
+    ),
+    false,
+  )
+  assert.equal(
+    canTogglePreference(
+      { event_type: 'ISSUE_URGENT', channel: 'in_app', enabled: true, mandatory: true },
       channels,
     ),
     false,

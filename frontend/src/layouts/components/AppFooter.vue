@@ -1,13 +1,18 @@
 <script setup>
-import { RouterLink } from 'vue-router'
+import { computed } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 
+const route = useRoute()
 const session = useSessionStore()
+
+const isDashboardRoute = computed(() => route.path === '/')
 </script>
 
 <template>
-  <footer class="w-full bg-surface-container-lowest border-t border-outline-variant/30 py-space-xl mt-space-xl pb-24 md:pb-space-xl">
-    <div class="w-full max-w-[1280px] mx-auto px-gutter">
+  <footer class="w-full bg-surface-container-lowest border-t border-outline-variant/30 mt-space-xl pb-20 md:pb-0">
+    <!-- Full 4-Column Association Footer on Dashboard (/) -->
+    <div v-if="isDashboardRoute" class="w-full max-w-[1280px] mx-auto px-gutter py-space-xl">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-space-lg mb-space-lg">
         <div class="flex flex-col gap-space-xs">
           <span class="font-headline-md text-headline-md font-bold text-on-surface">{{ session.buildingName }}</span>
@@ -104,6 +109,34 @@ const session = useSessionStore()
             <span>{{ session.t('footer.themeLab') }}</span>
           </RouterLink>
         </div>
+      </div>
+    </div>
+
+    <!-- Compact Single-Line Operational Footer on Internal Workspace Screens -->
+    <div v-else class="w-full max-w-[1280px] mx-auto px-gutter py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-on-surface-variant">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span class="font-semibold text-on-surface">{{ session.buildingName }}</span>
+        <span aria-hidden="true">·</span>
+        <span>{{ session.t('footer.registryCode', { code: session.buildingRegistryCode }) }}</span>
+        <span aria-hidden="true">·</span>
+        <span>
+          {{ session.t('footer.emergencyDispatch') }}
+          <a href="tel:+3726543210" class="font-semibold text-on-surface hover:text-primary">+372 654 3210</a>
+        </span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <RouterLink to="/documents" class="hover:text-on-surface transition-colors">
+          {{ session.t('nav.documents') }}
+        </RouterLink>
+        <span class="text-outline-variant/40" aria-hidden="true">·</span>
+        <RouterLink
+          to="/theme-lab"
+          :title="session.t('footer.themeLab')"
+          class="inline-flex items-center gap-1 text-on-surface-variant/70 hover:text-on-surface transition-colors"
+        >
+          <span>{{ session.t('footer.themeLab') }}</span>
+        </RouterLink>
       </div>
     </div>
   </footer>

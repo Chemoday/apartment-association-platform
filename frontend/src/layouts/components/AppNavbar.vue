@@ -5,6 +5,7 @@ import AppNavbarRoleSwitcher from './AppNavbarRoleSwitcher.vue'
 import AppNavbarPrivacySelector from './AppNavbarPrivacySelector.vue'
 import AppNotificationBell from './AppNotificationBell.vue'
 import AppNavbarUserMenu from './AppNavbarUserMenu.vue'
+import AppNavbarLanguageDropdown from './AppNavbarLanguageDropdown.vue'
 
 const session = useSessionStore()
 </script>
@@ -46,23 +47,8 @@ const session = useSessionStore()
       <!-- Notification Bell (sits left of user menu in both modes) -->
       <AppNotificationBell />
 
-      <!-- EN / ET / RU Language Switcher -->
-      <div class="inline-flex items-center rounded-lg bg-surface-container-low p-0.5 shrink-0">
-        <button
-          v-for="loc in session.supportedLocales"
-          :key="loc.code"
-          type="button"
-          class="px-2 py-1 rounded-md font-label-md text-[11px] font-semibold transition-colors uppercase cursor-pointer"
-          :class="
-            session.lang === loc.code
-              ? 'bg-primary text-on-primary shadow-2xs'
-              : 'text-on-surface-variant hover:text-on-surface'
-          "
-          @click="session.setLang(loc.code)"
-        >
-          {{ loc.label }}
-        </button>
-      </div>
+      <!-- Language Switcher Dropdown (EN / ET / RU) -->
+      <AppNavbarLanguageDropdown />
 
       <!-- User Menu (Role chip + Apt label + Settings / Sign out dropdown) -->
       <AppNavbarUserMenu />

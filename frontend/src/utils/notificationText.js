@@ -120,6 +120,51 @@ export function buildNotificationDescriptor(item, lang = 'en') {
     }
   }
 
+  if (eventType === 'ISSUE_REPORTED' || eventType === 'ISSUE_URGENT') {
+    const rawCategory = String(params.category || 'OTHER')
+    const rawEntrance =
+      params.entrance !== undefined && params.entrance !== null && params.entrance !== ''
+        ? Number(params.entrance)
+        : null
+    const isUrgent = eventType === 'ISSUE_URGENT'
+    return {
+      key: isUrgent
+        ? 'notifications.events.ISSUE_URGENT'
+        : 'notifications.events.ISSUE_REPORTED',
+      values: {
+        category: rawCategory,
+        entrance: Number.isInteger(rawEntrance) ? rawEntrance : null,
+      },
+      icon: isUrgent ? 'warning' : 'report_problem',
+      variant: isUrgent ? 'emergency' : 'neutral',
+      route: subjectId ? `/issues/${subjectId}` : '/issues',
+    }
+  }
+
+  if (eventType === 'ISSUE_STATUS_CHANGED') {
+    const rawCategory = String(params.category || 'OTHER')
+    const rawEntrance =
+      params.entrance !== undefined && params.entrance !== null && params.entrance !== ''
+        ? Number(params.entrance)
+        : null
+    const rawStatus = String(params.status || 'IN_PROGRESS')
+    const merged = Boolean(params.merged)
+    return {
+      key: merged
+        ? 'notifications.events.ISSUE_STATUS_MERGED'
+        : 'notifications.events.ISSUE_STATUS_CHANGED',
+      values: {
+        category: rawCategory,
+        entrance: Number.isInteger(rawEntrance) ? rawEntrance : null,
+        status: rawStatus,
+        merged,
+      },
+      icon: merged ? 'merge_type' : rawStatus === 'RESOLVED' ? 'task_alt' : 'sync_saved_locally',
+      variant: rawStatus === 'RESOLVED' ? 'resolved' : 'neutral',
+      route: subjectId ? `/issues/${subjectId}` : '/issues',
+    }
+  }
+
   return {
     key: 'notifications.events.UNKNOWN',
     values: {},
@@ -143,7 +188,8 @@ export function formatNotificationText(item, t, lang = 'en') {
     desc.key === 'notifications.events.EMERGENCY_RESOLVED'
   ) {
     const catKey = `forum.categories.${desc.values.category}`
-    const categoryLabel = t(catKey) !== catKey ? t(catKey).toLowerCase() : desc.values.category.toLowerCase()
+    const categoryLabel =
+      t(catKey) !== catKey ? t(catKey).toLowerCase() : desc.values.category.toLowerCase()
     let targetLabel = t('notifications.targets.ALL_BUILDING')
     if (desc.values.target_scope === 'ENTRANCE') {
       targetLabel = t('notifications.targets.ENTRANCE', {
@@ -157,5 +203,40 @@ export function formatNotificationText(item, t, lang = 'en') {
       target: targetLabel,
     })
   }
+
+  if (
+    desc.key === 'notifications.events.ISSUE_REPORTED' ||
+    desc.key === 'notifications.events.ISSUE_URGENT' ||
+    desc.key === 'notifications.events.ISSUE_STATUS_CHANGED' ||
+    desc.key === 'notifications.events.ISSUE_STATUS_MERGED'
+  ) {
+    const catKey = `issues.categories.${desc.values.category}`
+    const categoryLabel =
+      t(catKey) !== catKey ? t(catKey).toLowerCase() : desc.values.category.toLowerCase()
+
+    const locationLabel =
+      desc.values.entrance !== null && desc.values.entrance !== undefined
+        ? t('notifications.issueLocations.entrance', { entrance: desc.values.entrance })
+        : t('notifications.issueLocations.outside')
+
+    if (desc.key === 'notifications.events.ISSUE_STATUS_CHANGED') {
+      const statusKey = `issues.statuses.${desc.values.status}`
+      const statusLabel =
+        t(statusKey) !== statusKey
+          ? t(statusKey).toLowerCase()
+          : desc.values.status.toLowerCase()
+      return t(desc.key, {
+        category: categoryLabel,
+        location: locationLabel,
+        status: statusLabel,
+      })
+    }
+
+    return t(desc.key, {
+      category: categoryLabel,
+      location: locationLabel,
+    })
+  }
+
   return t(desc.key, desc.values)
 }

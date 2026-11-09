@@ -6,6 +6,9 @@ export const NOTIFICATION_EVENTS = [
   'APARTMENT_MESSAGE',
   'APARTMENT_MESSAGE_TO_BOARD',
   'POLL_OPENED',
+  'ISSUE_REPORTED',
+  'ISSUE_URGENT',
+  'ISSUE_STATUS_CHANGED',
 ]
 
 export const NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
@@ -16,6 +19,8 @@ export const NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
  * - APARTMENT_MESSAGE is shown to everyone with an apartment.
  * - APARTMENT_MESSAGE_TO_BOARD is shown only to CHAIRMAN and BOARD (and ADMIN).
  * - POLL_OPENED is shown to everyone with an apartment (including board members who live in the building).
+ * - ISSUE_REPORTED and ISSUE_URGENT are shown only to CHAIRMAN and BOARD (and ADMIN).
+ * - ISSUE_STATUS_CHANGED is shown to everyone who can use the issue tracker (residents with an apartment, CHAIRMAN, BOARD, and ADMIN).
  * @param {string} [buildingRole]
  * @param {boolean} [hasApartment]
  * @returns {import('../api/schema').NotificationEventType[]}
@@ -32,6 +37,8 @@ export function visibleNotificationEvents(buildingRole, hasApartment) {
     if (ev === 'APARTMENT_MESSAGE') return effectiveHasApartment
     if (ev === 'APARTMENT_MESSAGE_TO_BOARD') return isBoardOrChairman
     if (ev === 'POLL_OPENED') return effectiveHasApartment
+    if (ev === 'ISSUE_REPORTED' || ev === 'ISSUE_URGENT') return isBoardOrChairman
+    if (ev === 'ISSUE_STATUS_CHANGED') return isBoardOrChairman || effectiveHasApartment
     return true
   })
 }

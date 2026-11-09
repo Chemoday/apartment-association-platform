@@ -337,21 +337,25 @@ watch(
 <template>
   <div class="w-full max-w-[960px] mx-auto px-gutter py-space-lg space-y-6">
     <!-- Page Header -->
-    <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-      <div class="flex flex-col gap-1">
-        <span class="font-label-md text-xs uppercase tracking-wider text-secondary font-semibold">
-          {{ session.t('security.kicker') }}
-        </span>
-        <h1 class="font-headline-xl text-2xl sm:text-3xl font-bold text-on-surface tracking-tight">
-          {{ session.t('security.title') }}
-        </h1>
+    <div class="flex flex-col gap-4">
+      <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div class="flex flex-col gap-1">
+          <span class="font-label-md text-xs uppercase tracking-wider text-secondary font-semibold">
+            {{ session.t('security.kicker') }}
+          </span>
+          <h1 class="font-headline-xl text-2xl sm:text-3xl font-bold text-on-surface tracking-tight">
+            {{ session.t('security.title') }}
+          </h1>
+        </div>
+
+        <SettingsShellTabs />
       </div>
 
       <!-- Demo Preview Toggle for Active Sessions -->
       <button
         v-if="!session.isSignedIn"
         type="button"
-        class="self-start sm:self-auto px-3.5 py-2 rounded-lg border text-xs font-semibold transition-colors inline-flex items-center gap-2 cursor-pointer"
+        class="self-start px-3.5 py-2 rounded-lg border text-xs font-semibold transition-colors inline-flex items-center gap-2 cursor-pointer"
         :class="
           demoPreviewSessions
             ? 'border-secondary bg-secondary-container/40 text-on-secondary-container'

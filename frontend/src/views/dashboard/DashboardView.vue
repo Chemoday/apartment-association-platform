@@ -5,9 +5,15 @@ import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { getMyDashboard } from '@/api/endpoints/meters.js'
 import { listPosts } from '@/api/endpoints/communication.js'
-import { formatDate, formatPeriodLabel } from '@/utils/dates.js'
+import { listIssues } from '@/api/endpoints/issues.js'
+import { listPolls } from '@/api/endpoints/governance.js'
+import { formatPeriodLabel } from '@/utils/dates.js'
 import DashboardMetersSummary from './components/DashboardMetersSummary.vue'
 import DashboardLatestNotices from './components/DashboardLatestNotices.vue'
+import DashboardQuickActions from './components/DashboardQuickActions.vue'
+import DashboardCommunityPulse from './components/DashboardCommunityPulse.vue'
+import DashboardHouseCalendar from './components/DashboardHouseCalendar.vue'
+import DashboardHouseDirectory from './components/DashboardHouseDirectory.vue'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
@@ -17,7 +23,11 @@ const { greetingName, canViewMatrix } = useRole()
 
 const dashboardData = ref(null)
 const officialNotices = ref([])
+const forumTopics = ref([])
 const forumTopicsCount = ref(0)
+const openIssues = ref([])
+const openPolls = ref([])
+const pendingVotePolls = ref([])
 const loading = ref(true)
 const loadError = ref(null)
 
@@ -26,14 +36,32 @@ async function loadScreenData() {
   loading.value = true
   loadError.value = null
   try {
-    const [dashRes, noticesRes, topicsRes] = await Promise.all([
+    const [dashRes, noticesRes, topicsRes, issuesRes, pollsRes] = await Promise.all([
       getMyDashboard(),
       listPosts({ post_type: 'OFFICIAL_NOTICE', limit: 5 }),
       listPosts({ post_type: 'FORUM_TOPIC', limit: 20 }),
+      listIssues().catch(() => []),
+      listPolls().catch(() => []),
     ])
     dashboardData.value = dashRes
     officialNotices.value = Array.isArray(noticesRes) ? noticesRes.slice(0, 3) : []
+    forumTopics.value = Array.isArray(topicsRes) ? topicsRes.slice(0, 4) : []
     forumTopicsCount.value = Array.isArray(topicsRes) ? topicsRes.length : 0
+
+    const rawIssues = Array.isArray(issuesRes?.issues)
+      ? issuesRes.issues
+      : Array.isArray(issuesRes)
+        ? issuesRes
+        : []
+    openIssues.value = rawIssues.filter((i) => ['REPORTED', 'IN_PROGRESS'].includes(i.status))
+
+    const rawPolls = Array.isArray(pollsRes?.polls)
+      ? pollsRes.polls
+      : Array.isArray(pollsRes)
+        ? pollsRes
+        : []
+    openPolls.value = rawPolls.filter((p) => p.status === 'OPEN')
+    pendingVotePolls.value = openPolls.value.filter((p) => p.can_answer && !p.answered)
   } catch (err) {
     loadError.value = err
   } finally {
@@ -48,6 +76,10 @@ watch(
   () => {
     dashboardData.value = null
     officialNotices.value = []
+    forumTopics.value = []
+    openIssues.value = []
+    openPolls.value = []
+    pendingVotePolls.value = []
     loadScreenData()
   },
 )
@@ -152,6 +184,12 @@ const periodLabel = computed(() =>
     </div>
 
     <template v-else>
+      <!-- Quick Action Shortcuts Bar -->
+      <DashboardQuickActions
+        :all-meters-submitted="allMetersSubmitted"
+        :period-label="periodLabel"
+      />
+
       <!-- 4 Focused Metric KPI Cards -->
       <DashboardMetersSummary
         :period="period"
@@ -159,85 +197,164 @@ const periodLabel = computed(() =>
         :forum-count="forumTopicsCount"
       />
 
+      <!-- Action Needed Banner: Pending Polls awaiting Resident's Vote -->
+      <div
+        v-if="pendingVotePolls.length > 0"
+        data-testid="dashboard-pending-polls-banner"
+        class="mb-space-lg rounded-xl border border-amber-300 dark:border-amber-700/80 bg-amber-50/90 dark:bg-amber-950/40 p-space-md flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
+      >
+        <div class="flex items-start sm:items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-amber-200/80 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 flex items-center justify-center shrink-0">
+            <span class="material-symbols-outlined text-[20px]">how_to_vote</span>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                {{ session.t('polls.pleaseAnswerBadge') }}
+              </span>
+              <span class="px-2 py-0.5 rounded-full bg-amber-200 dark:bg-amber-900 text-amber-950 dark:text-amber-100 text-[11px] font-bold">
+                {{ pendingVotePolls.length }}
+              </span>
+            </div>
+            <p class="text-sm font-semibold text-on-surface mt-0.5">
+              {{ pendingVotePolls[0].title }}
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="self-start sm:self-auto px-4 py-2 rounded-lg bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container transition-colors inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+          @click="router.push({ name: 'poll-detail', params: { pollId: pendingVotePolls[0].id } })"
+        >
+          <span>{{ session.t('polls.openPollLink') }}</span>
+          <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+        </button>
+      </div>
+
       <!-- Two-Column Nordic Core Layout -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-space-lg items-start">
         <!-- LEFT MAIN COLUMN (8 cols) -->
         <div class="lg:col-span-8 flex flex-col gap-space-lg">
           <DashboardLatestNotices :notices="officialNotices" />
 
-          <!-- Quick Building Shortcuts & Tools -->
-          <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container">
-            <h2 class="font-headline-md text-headline-md font-bold text-on-surface mb-space-md">
-              {{ session.t('dashboard.quickServicesTitle') }}
-            </h2>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-space-md">
-              <!-- Tool 1: Submit Readings / Matrix -->
-              <div class="p-space-md rounded-lg bg-surface-container-low flex flex-col justify-between hover:bg-surface-container transition-colors">
-                <div class="flex flex-col gap-space-xs">
-                  <div class="w-10 h-10 rounded-lg bg-surface-container-lowest flex items-center justify-center text-primary shadow-xs">
-                    <span class="material-symbols-outlined text-[20px]">speed</span>
+          <!-- Community Pulse (Recent Neighbor Forum Topics) -->
+          <DashboardCommunityPulse :topics="forumTopics" />
+
+          <!-- Live Active Building Issues & Open Polls Grid -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-space-lg">
+            <!-- Widget A: Active Building Issues -->
+            <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container flex flex-col justify-between gap-space-md">
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-space-sm">
+                  <div class="flex items-center gap-2">
+                    <span class="material-symbols-outlined text-[20px] text-primary">report_problem</span>
+                    <h2 class="font-headline-sm text-base font-bold text-on-surface">
+                      {{ session.t('nav.issues') }}
+                    </h2>
                   </div>
-                  <h4 class="font-label-lg text-label-lg font-bold text-on-surface mt-space-xs">
-                    {{ session.t('dashboard.utilityPortalTitle') }}
-                  </h4>
-                  <p class="font-body-sm text-body-sm text-on-surface-variant">
-                    {{ session.t('dashboard.utilityPortalDesc') }}
-                  </p>
+                  <span class="px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant text-xs font-bold">
+                    {{ openIssues.length }}
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  class="mt-space-md w-full py-2 px-space-sm rounded bg-surface-container-lowest font-label-md text-label-md font-semibold text-on-surface hover:bg-primary hover:text-on-primary transition-colors text-center"
-                  @click="router.push('/readings')"
-                >
-                  {{ session.t('dashboard.goToReadings') }}
-                </button>
+
+                <div v-if="openIssues.length > 0" class="space-y-2">
+                  <button
+                    v-for="iss in openIssues.slice(0, 3)"
+                    :key="iss.id"
+                    type="button"
+                    class="w-full p-2.5 rounded-lg bg-surface-container-low hover:bg-surface-container text-left transition-colors flex items-start justify-between gap-2 cursor-pointer"
+                    @click="router.push({ name: 'issue-detail', params: { issueId: iss.id } })"
+                  >
+                    <div class="min-w-0">
+                      <p class="text-xs font-semibold text-on-surface truncate">
+                        {{ iss.title }}
+                      </p>
+                      <span class="text-[11px] text-on-surface-variant">
+                        {{ session.t(`issues.categories.${iss.category}`) }} • {{ session.t(`issues.statuses.${iss.status}`) }}
+                      </span>
+                    </div>
+                    <span class="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0 mt-0.5">
+                      chevron_right
+                    </span>
+                  </button>
+                </div>
+                <p v-else class="text-xs text-on-surface-variant py-4">
+                  {{ session.t('issues.emptyTitle') }}
+                </p>
               </div>
 
-              <!-- Tool 2: Documents & Reports -->
-              <div class="p-space-md rounded-lg bg-surface-container-low flex flex-col justify-between hover:bg-surface-container transition-colors">
-                <div class="flex flex-col gap-space-xs">
-                  <div class="w-10 h-10 rounded-lg bg-surface-container-lowest flex items-center justify-center text-primary shadow-xs">
-                    <span class="material-symbols-outlined text-[20px]">folder_open</span>
+              <button
+                type="button"
+                class="w-full py-2 px-3 rounded-lg bg-surface-container-low hover:bg-surface-container text-xs font-semibold text-primary transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                @click="router.push('/issues')"
+              >
+                <span>{{ session.t('nav.issues') }}</span>
+                <span class="material-symbols-outlined text-[15px]">arrow_forward</span>
+              </button>
+            </div>
+
+            <!-- Widget B: Open Association Polls -->
+            <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container flex flex-col justify-between gap-space-md">
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-space-sm">
+                  <div class="flex items-center gap-2">
+                    <span class="material-symbols-outlined text-[20px] text-primary">how_to_vote</span>
+                    <h2 class="font-headline-sm text-base font-bold text-on-surface">
+                      {{ session.t('nav.polls') }}
+                    </h2>
                   </div>
-                  <h4 class="font-label-lg text-label-lg font-bold text-on-surface mt-space-xs">
-                    {{ session.t('dashboard.docsReportsTitle') }}
-                  </h4>
-                  <p class="font-body-sm text-body-sm text-on-surface-variant">
-                    {{ session.t('dashboard.docsReportsDesc') }}
-                  </p>
+                  <span class="px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant text-xs font-bold">
+                    {{ openPolls.length }}
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  class="mt-space-md w-full py-2 px-space-sm rounded bg-surface-container-lowest font-label-md text-label-md font-semibold text-on-surface hover:bg-primary hover:text-on-primary transition-colors text-center flex items-center justify-center gap-1"
-                  @click="router.push('/documents')"
-                >
-                  <span class="material-symbols-outlined text-[16px]">description</span>
-                  <span>{{ session.t('dashboard.viewDocuments') }}</span>
-                </button>
+
+                <div v-if="openPolls.length > 0" class="space-y-2">
+                  <button
+                    v-for="p in openPolls.slice(0, 3)"
+                    :key="p.id"
+                    type="button"
+                    class="w-full p-2.5 rounded-lg bg-surface-container-low hover:bg-surface-container text-left transition-colors flex items-start justify-between gap-2 cursor-pointer"
+                    @click="router.push({ name: 'poll-detail', params: { pollId: p.id } })"
+                  >
+                    <div class="min-w-0">
+                      <p class="text-xs font-semibold text-on-surface truncate">
+                        {{ p.title }}
+                      </p>
+                      <span
+                        class="text-[11px] font-medium"
+                        :class="p.can_answer && !p.answered ? 'text-amber-600 dark:text-amber-400' : 'text-secondary'"
+                      >
+                        {{
+                          p.can_answer && !p.answered
+                            ? session.t('polls.pleaseAnswerBadge')
+                            : session.t(`polls.status.${p.status}`)
+                        }}
+                      </span>
+                    </div>
+                    <span class="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0 mt-0.5">
+                      chevron_right
+                    </span>
+                  </button>
+                </div>
+                <p v-else class="text-xs text-on-surface-variant py-4">
+                  {{ session.t('polls.emptyTitle') }}
+                </p>
               </div>
 
-              <!-- Tool 3: Emergency Dispatch -->
-              <div class="p-space-md rounded-lg bg-surface-container-low flex flex-col justify-between hover:bg-surface-container transition-colors">
-                <div class="flex flex-col gap-space-xs">
-                  <div class="w-10 h-10 rounded-lg bg-surface-container-lowest flex items-center justify-center text-error shadow-xs">
-                    <span class="material-symbols-outlined text-[20px]">support_agent</span>
-                  </div>
-                  <h4 class="font-label-lg text-label-lg font-bold text-on-surface mt-space-xs">
-                    {{ session.t('dashboard.emergencyTitle') }}
-                  </h4>
-                  <p class="font-body-sm text-body-sm text-on-surface-variant">
-                    {{ session.t('dashboard.emergencyDesc') }}
-                  </p>
-                </div>
-                <a
-                  href="tel:+3726543210"
-                  class="mt-space-md w-full py-2 px-space-sm rounded bg-surface-container-lowest font-label-md text-label-md font-bold text-on-surface hover:bg-error hover:text-on-error transition-colors text-center block"
-                >
-                  {{ session.t('dashboard.callEmergency') }}
-                </a>
-              </div>
+              <button
+                type="button"
+                class="w-full py-2 px-3 rounded-lg bg-surface-container-low hover:bg-surface-container text-xs font-semibold text-primary transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                @click="router.push('/polls')"
+              >
+                <span>{{ session.t('nav.polls') }}</span>
+                <span class="material-symbols-outlined text-[15px]">arrow_forward</span>
+              </button>
             </div>
           </div>
+
+          <!-- House Directory (Emergency & Key Association Contacts) -->
+          <DashboardHouseDirectory />
 
           <!-- Communal Property Snapshot (Resilient SVG Architectural Illustration) -->
           <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container flex flex-col md:flex-row items-center gap-space-lg">
@@ -358,7 +475,7 @@ const periodLabel = computed(() =>
                   </div>
                 </div>
                 <span class="px-2.5 py-0.5 rounded-full bg-surface-container font-label-md text-label-md text-on-surface font-semibold">
-                  {{ m.relation_type }}
+                  {{ session.t(`roleBadge.${m.relation_type}`) }}
                 </span>
               </div>
 
@@ -380,7 +497,7 @@ const periodLabel = computed(() =>
                     {{ session.t('dashboard.privacyDisplayMode') }}
                   </span>
                   <span class="font-label-lg text-label-lg font-semibold text-on-surface">
-                    {{ m.privacy_display_mode }}
+                    {{ session.t(`privacy.${m.privacy_display_mode}`) }}
                   </span>
                 </div>
 
@@ -426,61 +543,8 @@ const periodLabel = computed(() =>
             </div>
           </template>
 
-          <!-- Next Association Milestones Timeline -->
-          <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container">
-            <div class="flex items-center justify-between mb-space-md">
-              <div class="flex items-center gap-space-xs">
-                <span class="material-symbols-outlined text-[20px] text-primary">calendar_month</span>
-                <h3 class="font-label-lg text-label-lg font-bold text-on-surface uppercase tracking-wider">
-                  {{ session.t('dashboard.milestonesTitle') }}
-                </h3>
-              </div>
-              <span class="font-label-md text-label-md text-on-surface-variant">
-                {{ period ? formatDate(period.due_date, session.lang) : 'Nov 2026' }}
-              </span>
-            </div>
-
-            <div class="relative pl-6 space-y-space-md before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-surface-container-highest">
-              <div class="relative">
-                <span class="absolute -left-6 top-1 w-2.5 h-2.5 rounded-full bg-secondary ring-4 ring-surface-container-lowest" />
-                <div class="flex flex-col">
-                  <span class="font-label-md text-label-md font-bold text-secondary">Nov 4 • 23:59</span>
-                  <span class="font-body-md text-body-md font-semibold text-on-surface leading-snug">
-                    {{ session.t('dashboard.milestone1Title') }}
-                  </span>
-                  <span class="font-body-sm text-body-sm text-on-surface-variant">
-                    {{ session.t('dashboard.milestone1Desc') }}
-                  </span>
-                </div>
-              </div>
-
-              <div class="relative">
-                <span class="absolute -left-6 top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest" />
-                <div class="flex flex-col">
-                  <span class="font-label-md text-label-md font-bold text-on-surface">Nov 6</span>
-                  <span class="font-body-md text-body-md font-semibold text-on-surface leading-snug">
-                    {{ session.t('dashboard.milestone2Title') }}
-                  </span>
-                  <span class="font-body-sm text-body-sm text-on-surface-variant">
-                    {{ session.t('dashboard.milestone2Desc') }}
-                  </span>
-                </div>
-              </div>
-
-              <div class="relative">
-                <span class="absolute -left-6 top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest" />
-                <div class="flex flex-col">
-                  <span class="font-label-md text-label-md font-bold text-on-surface">Nov 10</span>
-                  <span class="font-body-md text-body-md font-semibold text-on-surface leading-snug">
-                    {{ session.t('dashboard.milestone3Title') }}
-                  </span>
-                  <span class="font-body-sm text-body-sm text-on-surface-variant">
-                    {{ session.t('dashboard.milestone3Desc') }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <!-- Next Association Milestones / Calendar -->
+          <DashboardHouseCalendar :period="period" />
 
           <!-- Weekly Heat Efficiency Widget (SVG Sparkline from Mockup) -->
           <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container flex flex-col justify-between">

@@ -136,6 +136,69 @@ test('buildNotificationDescriptor maps all 4 known event types and unknown safel
   assert.equal(pollOpened.variant, 'deadline')
   assert.ok(pollOpened.values.date.includes('2026'))
 
+  const issueReported = buildNotificationDescriptor(
+    {
+      id: 'n11',
+      event_type: 'ISSUE_REPORTED',
+      params: { category: 'WATER', entrance: 1 },
+      subject_type: 'issue',
+      subject_id: 'issue-101',
+      created_at: '2026-05-02T09:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(issueReported.key, 'notifications.events.ISSUE_REPORTED')
+  assert.equal(issueReported.route, '/issues/issue-101')
+  assert.equal(issueReported.variant, 'neutral')
+
+  const issueUrgent = buildNotificationDescriptor(
+    {
+      id: 'n12',
+      event_type: 'ISSUE_URGENT',
+      params: { category: 'HEATING', entrance: null },
+      subject_type: 'issue',
+      subject_id: 'issue-102',
+      created_at: '2026-05-02T09:05:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(issueUrgent.key, 'notifications.events.ISSUE_URGENT')
+  assert.equal(issueUrgent.route, '/issues/issue-102')
+  assert.equal(issueUrgent.variant, 'emergency')
+  assert.equal(issueUrgent.icon, 'warning')
+
+  const issueStatusChanged = buildNotificationDescriptor(
+    {
+      id: 'n13',
+      event_type: 'ISSUE_STATUS_CHANGED',
+      params: { category: 'LIGHTING', entrance: 2, status: 'IN_PROGRESS', merged: false },
+      subject_type: 'issue',
+      subject_id: 'issue-103',
+      created_at: '2026-05-02T10:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(issueStatusChanged.key, 'notifications.events.ISSUE_STATUS_CHANGED')
+  assert.equal(issueStatusChanged.route, '/issues/issue-103')
+
+  const issueMerged = buildNotificationDescriptor(
+    {
+      id: 'n14',
+      event_type: 'ISSUE_STATUS_CHANGED',
+      params: { category: 'CLEANING', entrance: null, status: 'DUPLICATE', merged: true },
+      subject_type: 'issue',
+      subject_id: 'issue-original-99',
+      created_at: '2026-05-02T11:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(issueMerged.key, 'notifications.events.ISSUE_STATUS_MERGED')
+  assert.equal(issueMerged.route, '/issues/issue-original-99')
+
   const unknown = buildNotificationDescriptor(
     {
       id: 'n5',
@@ -300,6 +363,115 @@ test('formatNotificationText formats human-readable text in English and Estonian
   )
   assert.ok(pollTextRu.startsWith('Правление открыло опрос. Пожалуйста, ответьте до '))
   assert.ok(pollTextRu.includes('2026'))
+
+  // #014 Issue notification texts in en, et, and ru — never exposes title, description, or reporter
+  setI18nLocale('en')
+  const issueRepEn = formatNotificationText(
+    {
+      id: 'n11',
+      event_type: 'ISSUE_REPORTED',
+      params: {
+        category: 'WATER_AND_SEWAGE',
+        entrance: 1,
+        title: 'Secret Issue Title',
+        description: 'Secret Description',
+      },
+      subject_type: 'issue',
+      subject_id: 'issue-101',
+      created_at: '2026-05-02T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.equal(issueRepEn, 'New issue report: water & sewage, entrance 1')
+  assert.equal(issueRepEn.includes('Secret'), false)
+
+  const issueUrgEn = formatNotificationText(
+    {
+      id: 'n12',
+      event_type: 'ISSUE_URGENT',
+      params: { category: 'HEATING', entrance: null },
+      subject_type: 'issue',
+      subject_id: 'issue-102',
+      created_at: '2026-05-02T09:05:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.equal(issueUrgEn, 'Urgent issue report: heating, outside the entrances')
+
+  const issueStatEn = formatNotificationText(
+    {
+      id: 'n13',
+      event_type: 'ISSUE_STATUS_CHANGED',
+      params: { category: 'LIGHTING', entrance: 2, status: 'IN_PROGRESS', merged: false },
+      subject_type: 'issue',
+      subject_id: 'issue-103',
+      created_at: '2026-05-02T10:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.equal(issueStatEn, 'The issue you follow (lighting, entrance 2) is now: in progress')
+
+  const issueMergedEn = formatNotificationText(
+    {
+      id: 'n14',
+      event_type: 'ISSUE_STATUS_CHANGED',
+      params: { category: 'CLEANING', entrance: null, status: 'DUPLICATE', merged: true },
+      subject_type: 'issue',
+      subject_id: 'issue-99',
+      created_at: '2026-05-02T11:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.equal(
+    issueMergedEn,
+    'The issue you follow (cleaning, outside the entrances) was merged into another report of the same problem; you now follow that one',
+  )
+
+  setI18nLocale('et')
+  const issueStatEt = formatNotificationText(
+    {
+      id: 'n13',
+      event_type: 'ISSUE_STATUS_CHANGED',
+      params: { category: 'LIGHTING', entrance: null, status: 'RESOLVED', merged: false },
+      subject_type: 'issue',
+      subject_id: 'issue-103',
+      created_at: '2026-05-02T10:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'et',
+  )
+  assert.equal(
+    issueStatEt,
+    'Probleemiteade, mida jälgite (valgustus, väljaspool trepikodasid), on nüüd: lahendatud',
+  )
+
+  setI18nLocale('ru')
+  const issueStatRu = formatNotificationText(
+    {
+      id: 'n13',
+      event_type: 'ISSUE_STATUS_CHANGED',
+      params: { category: 'LIGHTING', entrance: 1, status: 'IN_PROGRESS', merged: false },
+      subject_type: 'issue',
+      subject_id: 'issue-103',
+      created_at: '2026-05-02T10:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'ru',
+  )
+  assert.equal(
+    issueStatRu,
+    'Статус обращения, за которым вы следите (освещение, подъезд 1): в работе',
+  )
 
   setI18nLocale('en')
 })

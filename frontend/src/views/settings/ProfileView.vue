@@ -14,6 +14,7 @@ import {
 import { localizeError } from '@/locales/index.js'
 import { formatShortDate } from '@/utils/dates.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import SettingsShellTabs from './components/SettingsShellTabs.vue'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -354,29 +355,8 @@ async function confirmRemoveTenant() {
         </p>
       </div>
 
-      <!-- Quick Settings Switcher Pills -->
-      <div class="flex flex-wrap items-center gap-2 shrink-0">
-        <button
-          type="button"
-          class="px-3.5 py-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface font-label-md text-xs font-semibold transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-          @click="router.push({ name: 'settings-notifications' })"
-        >
-          <span class="material-symbols-outlined text-[16px] text-on-surface-variant" aria-hidden="true">
-            tune
-          </span>
-          <span>{{ session.t('auth.menu.notificationSettings') }}</span>
-        </button>
-        <button
-          type="button"
-          class="px-3.5 py-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface font-label-md text-xs font-semibold transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-          @click="router.push({ name: 'settings-security' })"
-        >
-          <span class="material-symbols-outlined text-[16px] text-on-surface-variant" aria-hidden="true">
-            shield_lock
-          </span>
-          <span>{{ session.t('auth.menu.security') }}</span>
-        </button>
-      </div>
+      <!-- Unified Account Settings Navigation Shell -->
+      <SettingsShellTabs />
     </div>
 
     <ErrorCard v-if="privacyError" :error="privacyError" @retry="privacyError = null" />

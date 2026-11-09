@@ -13,7 +13,7 @@ const route = useRoute()
 const session = useSessionStore()
 
 const hasRoleAccess = computed(() => {
-  const role = session.me?.building_role || 'USER'
+  const role = session.buildingRole || session.me?.building_role || 'USER'
   if (route.meta?.requiresApartmentOrBoard) {
     const isBoardOrChairman = ['CHAIRMAN', 'BOARD'].includes(role)
     const hasApartments = (session.memberships?.length || 0) > 0

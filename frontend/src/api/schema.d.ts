@@ -1,6 +1,6 @@
 /**
  * Generated from docs/openapi.json (OpenAPI 3.1.0 - Apartment Association Platform v0.1.0)
- * Handed-over backend commit: 9fef5d0
+ * Handed-over backend commit: ebe1eb3
  */
 
 export type AnswerMode = 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE' | 'OWN_VALUE'
@@ -22,6 +22,9 @@ export type NotificationEventType =
   | 'APARTMENT_MESSAGE'
   | 'APARTMENT_MESSAGE_TO_BOARD'
   | 'POLL_OPENED'
+  | 'ISSUE_REPORTED'
+  | 'ISSUE_URGENT'
+  | 'ISSUE_STATUS_CHANGED'
 export type PeriodStatus = 'OPEN_FOR_RESIDENTS' | 'REVIEW_BY_BOARD' | 'LOCKED'
 export type PollKind = 'INFORMATIVE'
 export type PollStatus = 'DRAFT' | 'OPEN' | 'CLOSED' | 'CANCELLED'
@@ -39,7 +42,7 @@ export type ResourceType = 'COLD_WATER' | 'HOT_WATER' | 'ELECTRICITY' | 'HEAT' |
 export type RoleBadge = 'OWNER' | 'RESIDENT' | 'BOARD' | 'ACCOUNTANT'
 export type SignInStatus = 'SIGNED_IN' | 'REGISTRATION_REQUIRED' | 'SIGN_IN_TO_ACCEPT'
 export type StaffRole = 'BOARD' | 'ACCOUNTANT' | 'CHAIRMAN'
-export type SubjectType = 'post' | 'period' | 'poll'
+export type SubjectType = 'post' | 'period' | 'poll' | 'issue'
 export type SubmissionStatus = 'SUBMITTED' | 'MISSING' | 'AUTO_ESTIMATED' | 'ANOMALY_CONFIRMED'
 export type TargetScope = 'ALL_BUILDING' | 'ENTRANCE' | 'APARTMENT_LIST'
 export type UnavailableReason = 'DEMO_MODE' | 'CHANNEL_NOT_ENABLED' | 'NO_EMAIL' | 'NOT_LINKED'
@@ -774,6 +777,23 @@ export interface components {
     QuestionView: QuestionView
     ValueCountResult: ValueCountResult
     ValueType: ValueType
+    SettingType: SettingType
+    SettingView: SettingView
+    SettingsUpdate: SettingsUpdate
+    SettingsView: SettingsView
+    BoardStatus: BoardStatus
+    IssueAction: IssueAction
+    IssueCategory: IssueCategory
+    IssueEdit: IssueEdit
+    IssueForm: IssueForm
+    IssueReport: IssueReport
+    IssueStatus: IssueStatus
+    IssueSummary: IssueSummary
+    IssueView: IssueView
+    ReporterView: ReporterView
+    StatusChange: StatusChange
+    StatusFilter: StatusFilter
+    TimelineEntry: TimelineEntry
   }
 }
 
@@ -932,5 +952,128 @@ export interface PollResults {
   participation: Participation
   questions: QuestionResult[]
 }
+
+export type SettingType = 'INTEGER' | 'BOOLEAN'
+
+export interface SettingView {
+  key: string
+  type: SettingType
+  value: number | boolean
+  default: number | boolean
+  minimum: number | null
+  maximum: number | null
+  is_default: boolean
+  updated_at: string | null
+}
+
+export interface SettingsUpdate {
+  values: Record<string, boolean | number | null>
+}
+
+export interface SettingsView {
+  settings: SettingView[]
+}
+
+export type IssueCategory =
+  | 'LIGHTING'
+  | 'DOORS_AND_LOCKS'
+  | 'LIFT'
+  | 'HEATING'
+  | 'WATER_AND_SEWAGE'
+  | 'ELECTRICITY'
+  | 'CLEANING'
+  | 'WASTE'
+  | 'YARD'
+  | 'ROOF_AND_FACADE'
+  | 'OTHER'
+
+export type IssueStatus =
+  | 'REPORTED'
+  | 'IN_PROGRESS'
+  | 'WAITING_FOR_CONTRACTOR'
+  | 'RESOLVED'
+  | 'DUPLICATE'
+  | 'DECLINED'
+  | 'WITHDRAWN'
+
+export type StatusFilter = 'OPEN' | 'ENDED' | IssueStatus
+
+export type BoardStatus =
+  | 'IN_PROGRESS'
+  | 'WAITING_FOR_CONTRACTOR'
+  | 'RESOLVED'
+  | 'DUPLICATE'
+  | 'DECLINED'
+
+export type IssueAction = 'STATUS' | 'URGENT_CLEARED'
+
+export interface IssueForm {
+  urgent_enabled: boolean
+  apartment_ids: string[]
+  entrances: number[]
+}
+
+export interface IssueReport {
+  category: IssueCategory
+  entrance?: number | null
+  place?: string | null
+  title: string
+  description?: string
+  urgent?: boolean
+  apartment_id?: string | null
+}
+
+export interface IssueEdit {
+  category?: IssueCategory | null
+  entrance?: number | null
+  place?: string | null
+  title?: string | null
+  description?: string | null
+}
+
+export interface ReporterView {
+  badge: AuthorBadgeDTO
+  apartment_id: string | null
+}
+
+export interface TimelineEntry {
+  status: IssueStatus
+  at: string
+  action?: IssueAction
+  changed_by?: AuthorBadgeDTO | null
+}
+
+export interface IssueSummary {
+  id: string
+  category: IssueCategory
+  entrance: number | null
+  place: string | null
+  title: string
+  status: IssueStatus
+  urgent: boolean
+  followers: number
+  i_follow: boolean
+  i_reported: boolean
+  can_follow: boolean
+  can_edit: boolean
+  can_manage: boolean
+  duplicate_of: string | null
+  created_at: string
+  updated_at: string
+  ended_at: string | null
+}
+
+export interface IssueView extends IssueSummary {
+  description: string
+  reporter: ReporterView | null
+  timeline: TimelineEntry[]
+}
+
+export interface StatusChange {
+  status: BoardStatus
+  duplicate_of?: string | null
+}
+
+
 
 

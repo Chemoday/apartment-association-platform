@@ -324,13 +324,13 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
       err?.payload?.status === 'CANCELLED',
   )
 
-  // #010 Poll Notifications & Preferences:
-  // 1. Preferences matrix returns 28 cells (7 event types x 4 channels) with POLL_OPENED enabled by default and non-mandatory
+  // #010 & #014 Poll & Issue Notifications & Preferences:
+  // 1. Preferences matrix returns 40 cells (10 event types x 4 channels) with POLL_OPENED enabled by default and non-mandatory
   const prefsResp = await resolveOfflineDemoRequest('/notifications/preferences', {
     method: 'GET',
     actingUserId: '018f0000-0000-7000-8000-000000000102',
   })
-  assert.equal(prefsResp.preferences.length, 28)
+  assert.equal(prefsResp.preferences.length, 40)
   const pollOpenedPrefs = prefsResp.preferences.filter((p: any) => p.event_type === 'POLL_OPENED')
   assert.equal(pollOpenedPrefs.length, 4)
   assert.equal(
@@ -442,4 +442,302 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
   assert.equal(isOfflineDemoMode.value, false)
 })
 
+test('offlineDemoData supports GET and PUT /settings with role checks and all-or-nothing validation (#011)', async () => {
+  enableOfflineDemo()
 
+  // 1. Residents and accountant get 403 FORBIDDEN on GET /settings
+  for (const forbiddenUserId of [
+    '018f0000-0000-7000-8000-000000000102', // USER (Owner)
+    '018f0000-0000-7000-8000-000000000103', // ACCOUNTANT
+  ]) {
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/settings', {
+          method: 'GET',
+          actingUserId: forbiddenUserId,
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+  }
+
+  // 2. Board member can GET /settings, ordered by key, but gets 403 on PUT /settings
+  const boardGet = await resolveOfflineDemoRequest('/settings', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000105', // BOARD
+  })
+  assert.equal(boardGet.settings.length, 3)
+  assert.deepEqual(
+    boardGet.settings.map((s: any) => s.key),
+    [
+      'issues.reports_per_apartment_per_day',
+      'issues.urgent_enabled',
+      'issues.urgent_per_apartment_per_day',
+    ],
+  )
+
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/settings', {
+        method: 'PUT',
+        actingUserId: '018f0000-0000-7000-8000-000000000105', // BOARD
+        body: { values: { 'issues.urgent_enabled': true } },
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+
+  // 3. Chairman validation error (422) is all-or-nothing and exposes errors[].loc[2]
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/settings', {
+        method: 'PUT',
+        actingUserId: '018f0000-0000-7000-8000-000000000101', // CHAIRMAN
+        body: {
+          values: {
+            'issues.urgent_enabled': true,
+            'issues.urgent_per_apartment_per_day': 99, // max is 5
+          },
+        },
+      }),
+    (err: any) =>
+      err?.status === 422 &&
+      err?.errorCode === 'VALIDATION_ERROR' &&
+      Array.isArray(err?.fieldErrors) &&
+      err.fieldErrors.some(
+        (e: any) =>
+          e.loc?.[0] === 'body' &&
+          e.loc?.[1] === 'values' &&
+          e.loc?.[2] === 'issues.urgent_per_apartment_per_day',
+      ),
+  )
+
+  // Verify urgent_enabled was NOT changed after the failed 422 request
+  const afterFailedPut = await resolveOfflineDemoRequest('/settings', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000101',
+  })
+  assert.equal(
+    afterFailedPut.settings.find((s: any) => s.key === 'issues.urgent_enabled').value,
+    false,
+  )
+
+  // 4. Chairman updates and then resets a setting with null
+  const updated = await resolveOfflineDemoRequest('/settings', {
+    method: 'PUT',
+    actingUserId: '018f0000-0000-7000-8000-000000000101',
+    body: {
+      values: {
+        'issues.urgent_enabled': true,
+        'issues.reports_per_apartment_per_day': 5,
+      },
+    },
+  })
+  const urgentSetting = updated.settings.find((s: any) => s.key === 'issues.urgent_enabled')
+  assert.equal(urgentSetting.value, true)
+  assert.equal(urgentSetting.is_default, false)
+  assert.ok(urgentSetting.updated_at)
+
+  const afterReset = await resolveOfflineDemoRequest('/settings', {
+    method: 'PUT',
+    actingUserId: '018f0000-0000-7000-8000-000000000101',
+    body: {
+      values: {
+        'issues.urgent_enabled': null,
+      },
+    },
+  })
+  const resetUrgent = afterReset.settings.find((s: any) => s.key === 'issues.urgent_enabled')
+  assert.equal(resetUrgent.value, false)
+  disableOfflineDemo()
+})
+
+test('offlineDemoData supports #012 /issues endpoints, privacy rules, and settings integration', async () => {
+  enableOfflineDemo()
+
+  // 1. Accountant without apartment gets 403 FORBIDDEN on /issues
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/issues', {
+        method: 'GET',
+        actingUserId: '018f0000-0000-7000-8000-000000000103', // ACCOUNTANT
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+
+  // 2. Owner Apt 14 (0102) sees only the open issue, NOT Apt 02's withdrawn issue
+  const apt14Issues = await resolveOfflineDemoRequest('/issues', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000102',
+  })
+  assert.equal(apt14Issues.length, 1)
+  assert.equal(apt14Issues[0].title, 'No light on the 3rd floor landing')
+  assert.equal(apt14Issues[0].followers, 2)
+  assert.equal(apt14Issues[0].i_reported, true)
+  assert.equal(apt14Issues[0].can_edit, true)
+
+  // 3. Tenant Apt 02 (0104) sees both the open issue AND their own withdrawn issue
+  const apt02Issues = await resolveOfflineDemoRequest('/issues', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000104',
+  })
+  assert.equal(apt02Issues.length, 2)
+  assert.equal(apt02Issues[1].status, 'WITHDRAWN')
+
+  // 4. GET /issues/form reflects issues.urgent_enabled from #011 /settings
+  const formBefore = await resolveOfflineDemoRequest('/issues/form', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000102',
+  })
+  assert.equal(formBefore.urgent_enabled, false)
+  assert.deepEqual(formBefore.entrances, [1, 2])
+
+  await resolveOfflineDemoRequest('/settings', {
+    method: 'PUT',
+    actingUserId: '018f0000-0000-7000-8000-000000000101', // CHAIRMAN enables urgent
+    body: { values: { 'issues.urgent_enabled': true } },
+  })
+
+  const formAfter = await resolveOfflineDemoRequest('/issues/form', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000102',
+  })
+  assert.equal(formAfter.urgent_enabled, true)
+
+  // 5. Resident reports an issue, edits it, and another user follows it
+  const created = await resolveOfflineDemoRequest('/issues', {
+    method: 'POST',
+    actingUserId: '018f0000-0000-7000-8000-000000000102',
+    body: {
+      category: 'CLEANING',
+      entrance: null,
+      place: 'Bicycle room',
+      title: 'Sand on the floor in the bicycle room',
+      description: 'Needs sweeping',
+      urgent: true,
+    },
+  })
+  assert.equal(created.status, 'REPORTED')
+  assert.equal(created.urgent, true)
+  assert.equal(created.reporter, null) // Resident never sees reporter object
+
+  const detailForBoard = await resolveOfflineDemoRequest(`/issues/${created.id}`, {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000101', // CHAIRMAN sees reporter
+  })
+  assert.notEqual(detailForBoard.reporter, null)
+
+  // 6. (#013) Board clears urgent flag -> logs URGENT_CLEARED in board timeline, hidden from residents
+  const afterClearUrgent = await resolveOfflineDemoRequest(`/issues/${created.id}/urgent/clear`, {
+    method: 'POST',
+    actingUserId: '018f0000-0000-7000-8000-000000000101',
+  })
+  assert.equal(afterClearUrgent.urgent, false)
+  assert.equal(
+    afterClearUrgent.timeline.some((e: any) => e.action === 'URGENT_CLEARED'),
+    true,
+  )
+
+  const detailForResident = await resolveOfflineDemoRequest(`/issues/${created.id}`, {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000102',
+  })
+  assert.equal(
+    detailForResident.timeline.some((e: any) => e.action === 'URGENT_CLEARED'),
+    false,
+  )
+
+  // 7. (#013) Board marks created issue as DUPLICATE of seed open issue (0901) -> merges followers & moves 0901 to IN_PROGRESS
+  const markedDup = await resolveOfflineDemoRequest(`/issues/${created.id}/status`, {
+    method: 'POST',
+    actingUserId: '018f0000-0000-7000-8000-000000000101',
+    body: {
+      status: 'DUPLICATE',
+      duplicate_of: '018f0000-0000-7000-8000-000000000901',
+    },
+  })
+  assert.equal(markedDup.status, 'DUPLICATE')
+  assert.equal(markedDup.duplicate_of, '018f0000-0000-7000-8000-000000000901')
+
+  const originalAfterMerge = await resolveOfflineDemoRequest(
+    '/issues/018f0000-0000-7000-8000-000000000901',
+    {
+      method: 'GET',
+      actingUserId: '018f0000-0000-7000-8000-000000000101',
+    },
+  )
+  assert.equal(originalAfterMerge.status, 'IN_PROGRESS')
+
+  // 8. (#013) Board include_old=true returns 45-day-old ended issue (0900)
+  const boardWithOld = await resolveOfflineDemoRequest('/issues?include_old=true', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000101',
+  })
+  assert.equal(
+    boardWithOld.some((i: any) => i.id === '018f0000-0000-7000-8000-000000000900'),
+    true,
+  )
+
+  // 9. (#014) Issue notifications:
+  //    - When resident (0102) created urgent issue `created` above, CHAIRMAN (0101) and BOARD (0105) received ISSUE_URGENT,
+  //      while reporter (0102) did NOT receive ISSUE_URGENT.
+  const chairmanNotifs = await resolveOfflineDemoRequest('/notifications/feed', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000101',
+  })
+  const urgentNotif = chairmanNotifs.find(
+    (n: any) => n.event_type === 'ISSUE_URGENT' && n.subject_id === created.id,
+  )
+  assert.ok(urgentNotif, 'Expected CHAIRMAN to receive ISSUE_URGENT')
+  assert.equal(urgentNotif.subject_type, 'issue')
+  assert.deepEqual(urgentNotif.params, { category: 'CLEANING', entrance: null })
+
+  const reporterNotifs = await resolveOfflineDemoRequest('/notifications/feed', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000102',
+  })
+  assert.equal(
+    reporterNotifs.some(
+      (n: any) => n.event_type === 'ISSUE_URGENT' && n.subject_id === created.id,
+    ),
+    false,
+  )
+
+  //    - When CHAIRMAN (0101) merged `created` into `0901` (which was REPORTED -> IN_PROGRESS),
+  //      reporter/follower (0102) received both the merge notice (merged: true, subject_id: 0901)
+  //      and the IN_PROGRESS notice (merged: false, subject_id: 0901).
+  const mergeNotice = reporterNotifs.find(
+    (n: any) =>
+      n.event_type === 'ISSUE_STATUS_CHANGED' &&
+      n.subject_id === '018f0000-0000-7000-8000-000000000901' &&
+      n.params.merged === true,
+  )
+  assert.ok(mergeNotice, 'Expected follower of duplicate to receive merge notice')
+  assert.equal(mergeNotice.params.status, 'DUPLICATE')
+  assert.equal(mergeNotice.params.category, 'CLEANING')
+
+  const originalProgressNotice = reporterNotifs.find(
+    (n: any) =>
+      n.event_type === 'ISSUE_STATUS_CHANGED' &&
+      n.subject_id === '018f0000-0000-7000-8000-000000000901' &&
+      n.params.merged === false &&
+      n.params.status === 'IN_PROGRESS',
+  )
+  assert.ok(
+    originalProgressNotice,
+    'Expected merged follower to also receive IN_PROGRESS notice when REPORTED original moves to IN_PROGRESS',
+  )
+
+  //    - Switching off mandatory ISSUE_URGENT returns 422 PREFERENCE_MANDATORY
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/notifications/preferences', {
+        method: 'PUT',
+        actingUserId: '018f0000-0000-7000-8000-000000000101',
+        body: {
+          preferences: [{ event_type: 'ISSUE_URGENT', channel: 'in_app', enabled: false }],
+        },
+      }),
+    (err: any) => err?.status === 422 && err?.errorCode === 'PREFERENCE_MANDATORY',
+  )
+
+  disableOfflineDemo()
+})

@@ -17,9 +17,29 @@ import type {
   ReadingSource,
   ReadingSummary,
   ResourceType,
+  SettingView,
   SubmissionStatus,
   TargetScope,
 } from '../api/schema';
+import {
+  cloneDefaultAssociationSettings,
+  validateAndApplySettingsUpdate,
+} from '../utils/associationSettings.js';
+import {
+  buildIssueReportedNotification,
+  canUserAccessIssues,
+  changeIssueStatusInStore,
+  clearIssueUrgentInStore,
+  createDefaultIssuesSeed,
+  createIssueInStore,
+  editIssueInStore,
+  isIssueVisibleToUser,
+  queryIssuesStore,
+  readSettingFromStore,
+  toIssueView,
+  updateIssueFollowInStore,
+  withdrawIssueInStore,
+} from '../utils/issues.js';
 
 const BUILDING_ID = '018f0000-0000-7000-8000-000000000001';
 
@@ -754,8 +774,11 @@ interface MockNotification {
     | 'PERIOD_REVIEW'
     | 'APARTMENT_MESSAGE'
     | 'APARTMENT_MESSAGE_TO_BOARD'
-    | 'POLL_OPENED';
-  subject_type: 'post' | 'period' | 'poll';
+    | 'POLL_OPENED'
+    | 'ISSUE_REPORTED'
+    | 'ISSUE_URGENT'
+    | 'ISSUE_STATUS_CHANGED';
+  subject_type: 'post' | 'period' | 'poll' | 'issue';
   subject_id: string;
   params: Record<string, unknown>;
   created_at: string;
@@ -859,6 +882,42 @@ function getInitialNotificationsForUser(userId: string): MockNotification[] {
     });
   }
 
+  // #014 Seeded issue notifications
+  if (
+    userId === '018f0000-0000-7000-8000-000000000101' ||
+    userId === '018f0000-0000-7000-8000-000000000105'
+  ) {
+    base.splice(1, 0, {
+      id: `018f0000-0000-7000-8000-000000009107`,
+      user_id: userId,
+      event_type: 'ISSUE_REPORTED',
+      subject_type: 'issue',
+      subject_id: '018f0000-0000-7000-8000-000000000901',
+      params: {
+        category: 'LIGHTING',
+        entrance: 1,
+      },
+      created_at: '2026-10-25T08:15:00Z',
+      read_at: null,
+    });
+  } else if (userId !== '018f0000-0000-7000-8000-000000000103') {
+    base.splice(1, 0, {
+      id: `018f0000-0000-7000-8000-000000009108`,
+      user_id: userId,
+      event_type: 'ISSUE_STATUS_CHANGED',
+      subject_type: 'issue',
+      subject_id: '018f0000-0000-7000-8000-000000000902',
+      params: {
+        category: 'DOORS_AND_LOCKS',
+        entrance: 2,
+        status: 'IN_PROGRESS',
+        merged: false,
+      },
+      created_at: '2026-10-25T09:30:00Z',
+      read_at: null,
+    });
+  }
+
   return base;
 }
 
@@ -877,7 +936,10 @@ interface MockPreference {
     | 'PERIOD_REVIEW'
     | 'APARTMENT_MESSAGE'
     | 'APARTMENT_MESSAGE_TO_BOARD'
-    | 'POLL_OPENED';
+    | 'POLL_OPENED'
+    | 'ISSUE_REPORTED'
+    | 'ISSUE_URGENT'
+    | 'ISSUE_STATUS_CHANGED';
   channel: 'in_app' | 'email' | 'telegram' | 'webpush';
   enabled: boolean;
   mandatory: boolean;
@@ -891,6 +953,9 @@ const EVENT_TYPES: Array<MockPreference['event_type']> = [
   'APARTMENT_MESSAGE',
   'APARTMENT_MESSAGE_TO_BOARD',
   'POLL_OPENED',
+  'ISSUE_REPORTED',
+  'ISSUE_URGENT',
+  'ISSUE_STATUS_CHANGED',
 ];
 const CHANNELS: Array<'in_app' | 'email' | 'telegram' | 'webpush'> = [
   'in_app',
@@ -906,9 +971,11 @@ function getUserPreferences(userId: string): MockPreference[] {
     const list: MockPreference[] = [];
     for (const ev of EVENT_TYPES) {
       for (const ch of CHANNELS) {
-        const mandatory = ev === 'EMERGENCY_PUBLISHED';
+        const mandatory = ev === 'EMERGENCY_PUBLISHED' || ev === 'ISSUE_URGENT';
         const enabled =
-          ev === 'APARTMENT_MESSAGE_TO_BOARD' ? ch === 'in_app' : true;
+          ev === 'APARTMENT_MESSAGE_TO_BOARD' || ev === 'ISSUE_REPORTED'
+            ? ch === 'in_app'
+            : true;
         list.push({
           event_type: ev,
           channel: ch,
@@ -920,6 +987,34 @@ function getUserPreferences(userId: string): MockPreference[] {
     preferencesByUser[userId] = list;
   }
   return preferencesByUser[userId];
+}
+
+function emitServerIssueNotificationBatch(batch: {
+  recipientUserIds: string[];
+  event_type: MockNotification['event_type'];
+  subject_type: MockNotification['subject_type'];
+  subject_id: string;
+  params: Record<string, unknown>;
+  created_at: string;
+}) {
+  for (const uid of batch.recipientUserIds || []) {
+    const prefs = getUserPreferences(uid);
+    const inAppPref = prefs.find(
+      (p) => p.event_type === batch.event_type && p.channel === 'in_app'
+    );
+    if (batch.event_type === 'ISSUE_URGENT' || !inAppPref || inAppPref.enabled) {
+      getUserNotifications(uid).unshift({
+        id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+        user_id: uid,
+        event_type: batch.event_type,
+        subject_type: batch.subject_type,
+        subject_id: batch.subject_id,
+        params: { ...batch.params },
+        created_at: batch.created_at,
+        read_at: null,
+      });
+    }
+  }
 }
 
 function emitApartmentThreadNotifications(
@@ -5040,6 +5135,14 @@ export function createApiMiddleware() {
     if (pathname === '/api/v1/notifications/preferences' && method === 'PUT') {
       const body = await readBody(req);
       const changes = Array.isArray(body.preferences) ? body.preferences : [];
+      if (changes.length < 1 || changes.length > 40) {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          'Provide between 1 and 40 preference changes.'
+        );
+      }
       const prefs = getUserPreferences(user.user_id);
 
       for (const chg of changes) {
@@ -5051,7 +5154,7 @@ export function createApiMiddleware() {
             res,
             422,
             'PREFERENCE_MANDATORY',
-            'Emergencies cannot be switched off.'
+            'Mandatory notifications cannot be switched off.'
           );
         }
       }
@@ -5117,11 +5220,15 @@ export function createApiMiddleware() {
             ? 'PERIOD_REVIEW'
             : lower.includes('poll')
               ? 'POLL_OPENED'
-              : lower.includes('board')
-                ? 'APARTMENT_MESSAGE_TO_BOARD'
-                : lower.includes('message')
-                  ? 'APARTMENT_MESSAGE'
-                  : 'READING_DEADLINE';
+              : lower.includes('issue-reported')
+                ? 'ISSUE_REPORTED'
+                : lower.includes('issue')
+                  ? 'ISSUE_STATUS_CHANGED'
+                  : lower.includes('board')
+                    ? 'APARTMENT_MESSAGE_TO_BOARD'
+                    : lower.includes('message')
+                      ? 'APARTMENT_MESSAGE'
+                      : 'READING_DEADLINE';
         const prefs = getUserPreferences(user.user_id);
         const match = prefs.find((p) => p.event_type === eventType && p.channel === 'email');
         if (match && !match.mandatory) {
@@ -5453,7 +5560,248 @@ export function createApiMiddleware() {
       return sendJson(res, 200, computeServerPollResults(found, isBoard));
     }
 
+    if (pathname === '/api/v1/settings' && method === 'GET') {
+      if (!isBoard) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only board members and the chairman can view association settings.');
+      }
+      const ordered = [...associationSettingsStore].sort((a, b) => a.key.localeCompare(b.key));
+      return sendJson(res, 200, { settings: ordered });
+    }
+
+    if (pathname === '/api/v1/settings' && method === 'PUT') {
+      if (user.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Only the chairman can update association settings.');
+      }
+      const body = await readBody(req);
+      const outcome = validateAndApplySettingsUpdate(associationSettingsStore, body);
+      if (!outcome.ok) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Invalid association settings update.', {
+          errors: outcome.errors,
+        });
+      }
+      associationSettingsStore = outcome.settings;
+      return sendJson(res, 200, { settings: associationSettingsStore });
+    }
+
+    // =========================================================================
+    // Issue Tracker (/api/v1/issues) - #012 (E9/I1)
+    // =========================================================================
+    if (pathname === '/api/v1/issues' || pathname.startsWith('/api/v1/issues/')) {
+      const userMems = membershipsByUser[user.user_id] || [];
+      if (!canUserAccessIssues(user, userMems)) {
+        return sendError(
+          res,
+          403,
+          'FORBIDDEN',
+          'Only residents with an apartment and board members can access the issue tracker.'
+        );
+      }
+
+      if (pathname === '/api/v1/issues/form' && method === 'GET') {
+        const urgentEnabled = Boolean(
+          readSettingFromStore(associationSettingsStore, 'issues.urgent_enabled', false)
+        );
+        const apartmentIds = userMems
+          .slice()
+          .sort((a, b) => a.apartment_number.localeCompare(b.apartment_number))
+          .map((m) => m.apartment_id);
+        return sendJson(res, 200, {
+          urgent_enabled: urgentEnabled,
+          apartment_ids: apartmentIds,
+          entrances: [1, 2],
+        });
+      }
+
+      if (pathname === '/api/v1/issues' && method === 'GET') {
+        const result = queryIssuesStore(issuesStore, user, {
+          status: urlObj.searchParams.get('status'),
+          category: urlObj.searchParams.get('category'),
+          entrance: urlObj.searchParams.get('entrance'),
+          include_old: urlObj.searchParams.get('include_old'),
+          limit: urlObj.searchParams.get('limit'),
+          offset: urlObj.searchParams.get('offset'),
+        });
+        if (!result.ok) {
+          return sendError(
+            res,
+            result.status || 422,
+            result.errorCode || 'VALIDATION_ERROR',
+            result.message || 'Invalid query.'
+          );
+        }
+        return sendJson(res, 200, result.items);
+      }
+
+      if (pathname === '/api/v1/issues' && method === 'POST') {
+        const body = await readBody(req);
+        const requestedAptId =
+          body?.apartment_id != null && body?.apartment_id !== ''
+            ? String(body.apartment_id)
+            : userMems[0]?.apartment_id;
+        const matchedMem =
+          userMems.find((m) => m.apartment_id === requestedAptId) || userMems[0];
+        const reporterBadge =
+          matchedMem?.preview_badge || resolveAuthorBadge(user.user_id);
+
+        const outcome = createIssueInStore({
+          issuesStore,
+          settingsStore: associationSettingsStore,
+          user,
+          userMemberships: userMems,
+          reporterBadge,
+          body,
+          buildingEntrances: [1, 2],
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 422,
+            outcome.errorCode || 'VALIDATION_ERROR',
+            outcome.message || 'Validation error.',
+            outcome.extra || {}
+          );
+        }
+        if (outcome.rawIssue) {
+          const notifBatch = buildIssueReportedNotification(outcome.rawIssue, DEMO_USERS, user);
+          emitServerIssueNotificationBatch(notifBatch as any);
+        }
+        return sendJson(res, 201, outcome.issue);
+      }
+
+      const issueStatusMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/status$/);
+      if (issueStatusMatch && method === 'POST') {
+        const issueId = issueStatusMatch[1];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        const body = await readBody(req);
+        const outcome = changeIssueStatusInStore({
+          issuesStore,
+          issue: found,
+          user,
+          body,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 422,
+            outcome.errorCode || 'VALIDATION_ERROR',
+            outcome.message || 'Cannot change issue status.',
+            outcome.extra || {}
+          );
+        }
+        for (const notifBatch of outcome.notifications || []) {
+          emitServerIssueNotificationBatch(notifBatch as any);
+        }
+        return sendJson(res, 200, outcome.issue);
+      }
+
+      const issueUrgentClearMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/urgent\/clear$/);
+      if (issueUrgentClearMatch && method === 'POST') {
+        const issueId = issueUrgentClearMatch[1];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        const outcome = clearIssueUrgentInStore({
+          issue: found,
+          user,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 409,
+            outcome.errorCode || 'ISSUE_ENDED',
+            outcome.message || 'Cannot clear urgent flag.'
+          );
+        }
+        return sendJson(res, 200, outcome.issue);
+      }
+
+      const issueWithdrawMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/withdraw$/);
+      if (issueWithdrawMatch && method === 'POST') {
+        const issueId = issueWithdrawMatch[1];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        const outcome = withdrawIssueInStore({ issue: found, user });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 409,
+            outcome.errorCode || 'ISSUE_NOT_EDITABLE',
+            outcome.message || 'Cannot withdraw issue.'
+          );
+        }
+        return sendJson(res, 200, outcome.issue);
+      }
+
+      const issueFollowMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/follow$/);
+      if (issueFollowMatch && (method === 'PUT' || method === 'DELETE')) {
+        const issueId = issueFollowMatch[1];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        const outcome = updateIssueFollowInStore({
+          issue: found,
+          user,
+          follow: method === 'PUT',
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 409,
+            outcome.errorCode || 'ISSUE_ENDED',
+            outcome.message || 'Cannot update follow state.'
+          );
+        }
+        return sendJson(res, 200, outcome.issue);
+      }
+
+      const issueDetailMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)$/);
+      if (issueDetailMatch && method === 'GET') {
+        const issueId = issueDetailMatch[1];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        return sendJson(res, 200, toIssueView(found, user));
+      }
+
+      if (issueDetailMatch && method === 'PATCH') {
+        const issueId = issueDetailMatch[1];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        const body = await readBody(req);
+        const outcome = editIssueInStore({
+          issue: found,
+          user,
+          body,
+          buildingEntrances: [1, 2],
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 422,
+            outcome.errorCode || 'VALIDATION_ERROR',
+            outcome.message || 'Cannot edit issue.'
+          );
+        }
+        return sendJson(res, 200, outcome.issue);
+      }
+    }
+
     return sendError(res, 404, 'NOT_FOUND', `Endpoint ${method} ${pathname} not found.`);
   };
 }
+
+let associationSettingsStore: SettingView[] = cloneDefaultAssociationSettings();
+let issuesStore: any[] = createDefaultIssuesSeed();
+
+
 

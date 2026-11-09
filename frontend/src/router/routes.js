@@ -7,6 +7,33 @@ import DocumentsView from '@/views/documents/DocumentsView.vue'
 import WelcomeView from '@/views/entry/WelcomeView.vue'
 import ThemeLabView from '@/views/theme/ThemeLabView.vue'
 
+export const NAV_GROUPS = [
+  {
+    id: 'home',
+    icon: 'space_dashboard',
+    labelKey: 'home',
+    shortLabelKey: 'home',
+  },
+  {
+    id: 'services',
+    icon: 'home_iot_device',
+    labelKey: 'services',
+    shortLabelKey: 'services',
+  },
+  {
+    id: 'community',
+    icon: 'forum',
+    labelKey: 'community',
+    shortLabelKey: 'community',
+  },
+  {
+    id: 'management',
+    icon: 'admin_panel_settings',
+    labelKey: 'management',
+    shortLabelKey: 'management',
+  },
+]
+
 export const APP_ROUTES = [
   {
     path: '/',
@@ -16,6 +43,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
       navKey: 'dashboard',
+      navGroup: 'home',
       icon: 'space_dashboard',
     },
   },
@@ -27,6 +55,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
       navKey: 'readings',
+      navGroup: 'services',
       icon: 'speed',
     },
   },
@@ -38,6 +67,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
       navKey: 'forum',
+      navGroup: 'community',
       icon: 'forum',
     },
   },
@@ -59,6 +89,7 @@ export const APP_ROUTES = [
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
       requiresApartmentOrBoard: true,
       navKey: 'messages',
+      navGroup: 'community',
       icon: 'mail',
     },
   },
@@ -80,6 +111,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
       navKey: 'polls',
+      navGroup: 'community',
       icon: 'how_to_vote',
     },
   },
@@ -120,6 +152,29 @@ export const APP_ROUTES = [
     },
   },
   {
+    path: '/issues',
+    name: 'issues',
+    component: () => import('@/views/issues/IssuesView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
+      requiresApartmentOrBoard: true,
+      navKey: 'issues',
+      navGroup: 'services',
+      icon: 'report_problem',
+    },
+  },
+  {
+    path: '/issues/:issueId',
+    name: 'issue-detail',
+    component: () => import('@/views/issues/IssueDetailView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
+      requiresApartmentOrBoard: true,
+    },
+  },
+  {
     path: '/documents',
     name: 'documents',
     component: DocumentsView,
@@ -127,6 +182,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
       navKey: 'documents',
+      navGroup: 'services',
       icon: 'folder_open',
     },
   },
@@ -138,6 +194,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
       navKey: 'accounting',
+      navGroup: 'management',
       icon: 'account_balance',
     },
   },
@@ -149,6 +206,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['BOARD', 'CHAIRMAN'],
       navKey: 'apartments',
+      navGroup: 'management',
       icon: 'apartment',
     },
   },
@@ -169,6 +227,7 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['BOARD', 'CHAIRMAN'],
       navKey: 'boardRoom',
+      navGroup: 'management',
       icon: 'meeting_room',
     },
   },
@@ -189,7 +248,20 @@ export const APP_ROUTES = [
       layout: 'AppLayout',
       roles: ['CHAIRMAN'],
       navKey: 'people',
+      navGroup: 'management',
       icon: 'group',
+    },
+  },
+  {
+    path: '/settings/association',
+    name: 'settings-association',
+    component: () => import('@/views/settings/AssociationSettingsView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['BOARD', 'CHAIRMAN'],
+      navKey: 'associationSettings',
+      navGroup: 'management',
+      icon: 'tune',
     },
   },
   {

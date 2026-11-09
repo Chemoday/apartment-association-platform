@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { listPosts, getPost, deletePost } from '@/api/endpoints/communication.js'
 import { formatDateTime } from '@/utils/dates.js'
@@ -14,6 +14,7 @@ import BaseChip from '@/components/base/BaseChip.vue'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
+const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 
@@ -155,8 +156,20 @@ watch(
 )
 
 onMounted(() => {
+  if (route.query.compose === '1') {
+    composerOpen.value = true
+  }
   loadPosts()
 })
+
+watch(
+  () => route.query.compose,
+  (val) => {
+    if (val === '1') {
+      composerOpen.value = true
+    }
+  },
+)
 </script>
 
 <template>
