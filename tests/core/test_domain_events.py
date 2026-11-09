@@ -39,7 +39,11 @@ from src.modules.communication.schemas import PostCategory, PostType, TargetScop
 from src.modules.governance.events import PollOpened
 from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
 from src.modules.maintenance.events import MaintenanceTaskDue
-from src.modules.meters.events import MeterReadingSubmitted, ReadingPeriodStatusChanged
+from src.modules.meters.events import (
+    MeterReadingSubmitted,
+    ReadingPeriodOpened,
+    ReadingPeriodStatusChanged,
+)
 from src.modules.meters.schemas import PeriodStatus, ReadingSource
 from src.modules.property.models import Building
 
@@ -144,6 +148,12 @@ def _samples() -> dict[str, DomainEvent]:
             old_status=PeriodStatus.OPEN_FOR_RESIDENTS,
             new_status=PeriodStatus.REVIEW_BY_BOARD,
             changed_by_user_id=user,
+        ),
+        "ReadingPeriodOpened": ReadingPeriodOpened(
+            period_id=uuid.uuid4(),
+            building_id=building,
+            period_code="2026-11",
+            due_date=datetime(2026, 12, 4, 21, 59, 59, tzinfo=UTC),
         ),
         "UserAccountClosed": UserAccountClosed(user_id=user, building_id=building),
     }

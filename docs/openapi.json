@@ -2688,7 +2688,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state. error_code: `ANOMALY_CONFIRMATION_STEP_1`, `ANOMALY_CONFIRMATION_STEP_2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`",
+            "description": "Conflict with the current state. error_code: `ANOMALY_CONFIRMATION_STEP_1`, `ANOMALY_CONFIRMATION_STEP_2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `WRONG_PERIOD`",
             "content": {
               "application/json": {
                 "schema": {
@@ -9373,6 +9373,16 @@
                 "type": "null"
               }
             ]
+          },
+          "next_submission": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NextSubmission"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -9385,7 +9395,8 @@
           "previous_value",
           "average_delta",
           "previous_delta",
-          "reading"
+          "reading",
+          "next_submission"
         ],
         "title": "DashboardMeter"
       },
@@ -10952,6 +10963,67 @@
           "MWh"
         ],
         "title": "MeterUnit"
+      },
+      "NextSubmission": {
+        "properties": {
+          "period_code": {
+            "type": "string",
+            "title": "Period Code"
+          },
+          "due_date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Due Date"
+          },
+          "final": {
+            "type": "boolean",
+            "title": "Final"
+          },
+          "previous_value": {
+            "type": "string",
+            "pattern": "^-?[0-9]+\\.[0-9]{3}$",
+            "title": "Previous Value",
+            "examples": [
+              "1254.000"
+            ]
+          },
+          "average_delta": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+\\.[0-9]{3}$",
+                "examples": [
+                  "1254.000"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Delta"
+          },
+          "reading": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadingSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "period_code",
+          "due_date",
+          "final",
+          "previous_value",
+          "average_delta",
+          "reading"
+        ],
+        "title": "NextSubmission",
+        "description": "Where a meter's next resident reading goes (docs/API.md section 2)."
       },
       "NoticeDraft": {
         "properties": {
