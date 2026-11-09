@@ -126,6 +126,7 @@ Every error has the same JSON body (`ErrorResponse` in the contract):
 ## 6. The two-popup confirmation flow
 
 `POST /api/v1/meters/readings` with `{meter_id, period_code, value, confirmation_level, reason}`.
+A resident always sends the meter's `next_submission.period_code` from the dashboard (section 7).
 
 ```text
 level 0 ──► 200 saved (normal value)                          done
@@ -145,10 +146,12 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
 - Disable the submit button while a request is in flight; a double click with the same value is
   a harmless no-op on the backend, but a second popup chain is confusing.
 - Other outcomes to handle on this form:
-  - `409 PERIOD_CLOSED` (residents after the period moved to review) and `409 PERIOD_LOCKED` (board,
+  - `409 PERIOD_CLOSED` (residents: their target period itself moved to review) and `409 PERIOD_LOCKED` (board,
     locked period): show "submission closed", refresh the dashboard.
   - `409 READING_SET_BY_BOARD`: the board corrected this reading; the resident cannot change it.
   - `409 LATER_READING_EXISTS`: an older period cannot change any more.
+  - `409 WRONG_PERIOD` (residents): the reading belongs to `target_period_code`; refresh the
+    dashboard and offer the form for that period.
   - `422 REASON_REQUIRED` (chairman / accountant changing an existing reading): show a required
     "reason" field whenever the cell already has a reading.
   - `403 FORBIDDEN`: a board member on someone else's meter, or a member without
@@ -157,8 +160,17 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
 ## 7. Dashboard, matrix and periods
 
 - `GET /meters/my-dashboard` without `period_code` picks the period residents can submit to.
-  `period` is `null` when the building has none. `reading` is `null` until something was submitted
-  for that meter; `previous_value` is what the new value must not go below.
+  `period` is `null` when the building has none.
+  `reading` is `null` until something was submitted for that meter in the shown period.
+- **Which month** (docs/API.md section 2): every meter has `next_submission` with everything its
+  form needs: `period_code`, `due_date`, `final`, `previous_value` (what the new value must not go
+  below), `average_delta` and `reading` (already submitted for that period). Its period can
+  differ from the shown `period` (one meter still due for October, another already for
+  November), so the form always uses these fields. Show the month on the form ("Reading for
+  November"). When `final` is `true`, the reading is a late one for the previous month: before
+  sending, warn "This is your October reading. You cannot change it afterwards; your next
+  reading will be for November." `next_submission: null` means nothing can be submitted now (no
+  right to submit, or the period is missing or closed): hide the form.
 - A user can belong to several apartments: render one card per apartment.
 - **Consumption hints**: each dashboard meter has `average_delta` (the 3-period average the anomaly
   check uses) and `previous_delta` (last period's consumption), both decimal strings or `null`.
@@ -190,8 +202,9 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   lists only the periods that have a reading, so align them by `period_code`;
   `source: "AUTO_ESTIMATED"` is an estimate). The same readings call works for a resident's own
   apartment and an accountant (who has no cards).
-- Periods do not close automatically. `due_date` (end of the local deadline day) is shown to users
-  and, once notifications exist (docs/API.md section 6), drives the reading reminders.
+- Periods open by themselves on the 1st of each month, but never close by themselves. `due_date`
+  (end of the local deadline day) is shown to users, drives the reading reminders (docs/API.md
+  section 6) and ends the time a late reading for the previous month is accepted.
 
 ## 8. Emergencies and the forum
 

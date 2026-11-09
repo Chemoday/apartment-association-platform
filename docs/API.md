@@ -25,7 +25,7 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
 | 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` | The request is valid, but conflicts with the current state |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `WRONG_PERIOD`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
 | 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION`, `INVALID_DUPLICATE` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
@@ -164,9 +164,38 @@ Only the user of that membership may change it. A membership that belongs to som
 
 ## 2. Meter Readings & Two-Step Anomaly Flow (`meters`)
 
+### Monthly periods and which month a reading belongs to
+- **Periods open by themselves.** On the 1st of every month (local time, `INSTANCE_TIMEZONE`) a
+  background job opens the period of that month, `OPEN_FOR_RESIDENTS`, with its `due_date` on
+  the building's `reading_deadline_day` of the next month (a day past the month's end is its last
+  day). Missed months are never filled in afterwards: after a downtime only the current month
+  opens. Periods still never move to review or close by themselves (`PATCH …/status`).
+- **The month of a resident's reading** (owner decision 2026-11-09). M is the current month, P the
+  month before:
+  - From the 1st of M until P's `due_date`, a meter that has no reading for P yet (an estimate
+    does not count) and no reading in a later period submits **for P**, while P is still
+    `OPEN_FOR_RESIDENTS`. That reading is **final** for the resident: the meter's next
+    submission goes to M, and P can no longer change (`LATER_READING_EXISTS` once M has one).
+  - Otherwise the reading is **for M**, and the resident changes it freely until M ends.
+  - Example: submitted on 15 October, the reading is October's and can be changed until
+    31 October; on 2 November the next one is November's. Nothing submitted in October and
+    submitting on 3 November: the reading is October's, and every later one is November's.
+  - Each dashboard meter says where its next submission goes (`next_submission`); a resident
+    sending another period gets `409 WRONG_PERIOD` with `target_period_code`.
+- The chairman and the accountant correct any period from the matrix as before. A chairman who
+  is also a member of the apartment submits as a resident in the target period, and as the board
+  in any other one.
+- **Automatic meters** (epic E4, not built yet; owner's rule): the first reading sent in a new
+  month closes the previous month, later ones go to the current month. Its exact form (by the
+  time of measurement) is settled with E4.
+
 ### `GET /api/v1/meters/my-dashboard?period_code=2026-10`
 Returns the resident's apartment meters, previous readings, current period status, and deadline.
-`period_code` is optional. It defaults to the latest period that is `OPEN_FOR_RESIDENTS`, else the latest period overall, so a pre-created future period is never picked. `period` is `null` when the building has no periods yet. Only active meters of the user's own apartments are listed.
+`period_code` is optional. Without it the dashboard shows P while the user still has a meter
+whose next submission goes to P, else M; if that period does not exist (the job has not run
+yet), the latest period that is `OPEN_FOR_RESIDENTS`, else the latest period overall. `period` is
+`null` when the building has no periods yet. Only active meters of the user's own apartments are
+listed.
 ```json
 {
   "period": { "period_code": "2026-10", "status": "OPEN_FOR_RESIDENTS", "due_date": "2026-11-04T21:59:59Z" },
@@ -177,7 +206,11 @@ Returns the resident's apartment meters, previous readings, current period statu
         {
           "meter_id": "uuid", "resource_type": "COLD_WATER", "serial_number": "SN-1", "location_label": "Bathroom",
           "unit": "m3", "previous_value": "124.000", "average_delta": "4.200", "previous_delta": "3.900",
-          "reading": { "reading_id": "uuid", "value": "128.200", "consumption_delta": "4.200", "source": "RESIDENT", "is_anomaly_confirmed": false }
+          "reading": { "reading_id": "uuid", "value": "128.200", "consumption_delta": "4.200", "source": "RESIDENT", "is_anomaly_confirmed": false },
+          "next_submission": {
+            "period_code": "2026-11", "due_date": "2026-12-04T21:59:59Z", "final": false,
+            "previous_value": "128.200", "average_delta": "4.100", "reading": null
+          }
         }
       ]
     }
@@ -185,6 +218,21 @@ Returns the resident's apartment meters, previous readings, current period statu
 }
 ```
 `reading` is `null` until something was submitted for that period.
+
+`next_submission`: where this meter's next reading goes (see "Which month a reading belongs
+to") and what its form needs. It does not depend on the `period_code` asked for, and its period
+can differ from `period` (one meter still due for last month, another already for this one), so
+the form uses these fields, not the meter's own:
+- `period_code` and `due_date` of that period;
+- `final: true` when it is a late reading for the previous month that the resident cannot change
+  afterwards (warn before sending: "this is October's reading; you cannot change it later, and
+  your next one will be November's");
+- `previous_value` (the floor of the new value), `average_delta` (the anomaly check's average)
+  and `reading` (what was already submitted for that period, or `null`), all for that period.
+
+`null` when nothing can be submitted now: the user cannot submit for the apartment
+(`can_submit_readings` is `false`), or the target period does not exist yet or is not
+`OPEN_FOR_RESIDENTS`.
 
 Consumption hints, so the client can show "your usual consumption is about 4.2 m³" before anything is submitted:
 - `average_delta`: the meter's 3-period average before this period, exactly the value the anomaly check uses (docs/ROADMAP_MVP.md, section C: only `RESIDENT`, `ADMIN_OVERRIDE` and `IOT_WEBHOOK` readings that are not confirmed anomalies count). `null` when there is no such history.
@@ -209,11 +257,18 @@ Who may submit, and in which period status:
 
 | Caller | Meter | Allowed period status | Stored `source` |
 | :--- | :--- | :--- | :--- |
-| Member of the meter's apartment with `can_submit_readings` | apartment meter | `OPEN_FOR_RESIDENTS` (otherwise `409 PERIOD_CLOSED`) | `RESIDENT` |
+| Member of the meter's apartment with `can_submit_readings` | apartment meter, only for the meter's target period (otherwise `409 WRONG_PERIOD` with `target_period_code`) | `OPEN_FOR_RESIDENTS` (otherwise `409 PERIOD_CLOSED`: the target period itself was moved to review) | `RESIDENT` |
 | `CHAIRMAN` / `ACCOUNTANT` | any meter of the building, including master meters | `OPEN_FOR_RESIDENTS`, `REVIEW_BY_BOARD` (otherwise `409 PERIOD_LOCKED`) | `ADMIN_OVERRIDE` |
 
 - **Reason.** A board change (`ADMIN_OVERRIDE`) to a reading that already exists requires a non-blank `reason` (`422 REASON_REQUIRED`). Blank reasons count as missing.
 - **Visibility.** An unknown meter, or one the caller may not see, returns `404 METER_NOT_FOUND`. `BOARD` members see meters in the matrix but get `403 FORBIDDEN` on submit. So does a member without `can_submit_readings`. An unknown period returns `404 PERIOD_NOT_FOUND`.
+- **The month.** A resident submits only for the period the rule above gives (`next_submission`);
+  any other one is `409 WRONG_PERIOD` with `target_period_code` (a target period that does not
+  exist yet is `404 PERIOD_NOT_FOUND`, as before). Re-sending the resident's own reading
+  unchanged (a double click, a retry after a timeout) answers `200` with it even when the target
+  has moved on meanwhile, as long as its period is still open. The chairman and the accountant
+  are not limited: in another period than the target they write as the board
+  (`ADMIN_OVERRIDE`), also for their own apartment.
 - **Board corrections stay.** A resident cannot overwrite a reading the board set (`409 READING_SET_BY_BOARD`), even after the period is reopened. Replacing an `AUTO_ESTIMATED` reading is allowed.
 - **No rewriting history.** A reading cannot change once a later period already has a reading for that meter (`409 LATER_READING_EXISTS`), because that period's `previous_value` snapshot would silently break.
 - **Replaced meters.** An inactive (replaced) meter only accepts board corrections of a reading it already has in that period.
@@ -221,7 +276,7 @@ Who may submit, and in which period status:
 - `previous_value` is the meter's reading in the latest earlier period, or `initial_value` if there is none.
 - `average_delta` follows docs/ROADMAP_MVP.md, section C.
 - **Locking.** The period is taken `FOR SHARE`, then the meter `FOR UPDATE`. Status changes and estimates lock the period `FOR NO KEY UPDATE` first, then the meters. This one order means a submission and a status change or estimate run one after the other and never deadlock, and a reading can never land in a period that was just closed.
-- `due_date` is the end of the local deadline day in `INSTANCE_TIMEZONE` (default `Europe/Tallinn`), sent in UTC: `2026-11-04T21:59:59Z` is 23:59:59 on 4 November in Tallinn. Periods are closed by `PATCH …/status`, not automatically; `due_date` only drives the reading reminders (section 6).
+- `due_date` is the end of the local deadline day in `INSTANCE_TIMEZONE` (default `Europe/Tallinn`), sent in UTC: `2026-11-04T21:59:59Z` is 23:59:59 on 4 November in Tallinn. Periods are opened by the monthly job and closed by `PATCH …/status`, never automatically; `due_date` drives the reading reminders (section 6) and ends the time a late reading for the previous month is accepted.
 
 **Request:**
 ```json
@@ -317,6 +372,8 @@ Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum
 (Requires role: `CHAIRMAN` or `ACCOUNTANT`)
 
 Finds all active apartment meters without a reading in period_code, calculates their 3-month rolling average delta, inserts readings with source = "AUTO_ESTIMATED", and writes audit logs.
+- A meter that already has a reading in a later period is skipped: that later reading's
+  consumption already covers this month (its `previous_value` is the reading before this period).
 - Allowed only in `REVIEW_BY_BOARD` (`409 PERIOD_NOT_IN_REVIEW`), so residents can no longer submit.
 - The estimated `value` is `previous_value + average`, where the average defaults to `0.000` without history. The reading has `submitted_by_user_id = NULL`; its audit row records the triggering user and the reason `"3-month avg estimate"`.
 - Running it again estimates nothing new.
@@ -333,6 +390,10 @@ Transitions period status (OPEN_FOR_RESIDENTS ↔ REVIEW_BY_BOARD ↔ LOCKED).
   - `LOCKED → REVIEW_BY_BOARD` (reopen before invoices are sent)
 - Anything else, including skipping a step or "changing" to the same status, returns `409 INVALID_PERIOD_TRANSITION` with `allowed_statuses`.
 - A transition emits `ReadingPeriodStatusChanged`.
+- Reopening a period for residents (`REVIEW_BY_BOARD → OPEN_FOR_RESIDENTS`) lets them submit only
+  where it is their target (section 2): the current month, or the previous month until its
+  `due_date` for meters without a reading for it. Later, readings of an older month are entered
+  by the chairman or the accountant.
 
 ### `GET /api/v1/meters/readings/{reading_id}/history`
 Returns chronological audit trail from meters_reading_logs.
