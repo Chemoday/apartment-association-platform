@@ -24,8 +24,8 @@ const session = useSessionStore()
 </script>
 
 <template>
-  <div class="space-y-4">
-    <div v-if="loading" class="space-y-4">
+  <div class="space-y-3">
+    <div v-if="loading" class="space-y-3">
       <BaseSkeleton :lines="4" />
     </div>
 
@@ -35,7 +35,7 @@ const session = useSessionStore()
       :title="session.t('forum.noDiscussionsFound')"
     />
 
-    <div v-else class="space-y-4">
+    <div v-else class="space-y-2.5">
       <PostListItem
         v-for="post in posts"
         :key="post.id"

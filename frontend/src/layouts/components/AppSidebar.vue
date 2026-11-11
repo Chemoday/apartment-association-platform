@@ -20,7 +20,7 @@ const visibleNavRoutes = computed(() =>
       const hasApartments = (session.memberships?.length || 0) > 0
       if (!isBoardOrChairman && !hasApartments) return false
     }
-    const allowed = r.meta?.roles
+    const allowed = r.meta?.navRoles || r.meta?.roles
     if (!allowed || allowed.length === 0) return true
     return allowed.includes(buildingRole.value)
   }),

@@ -5,6 +5,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseChip from '@/components/base/BaseChip.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
+import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import { formatDateTime } from '@/utils/dates.js'
 
 defineProps({
@@ -60,6 +61,10 @@ const session = useSessionStore()
               v-if="notice.author_badge"
               :badge="notice.author_badge"
               :is-mine="notice.is_mine"
+            />
+            <PostOriginBadge
+              :origin="notice.origin"
+              post-type="OFFICIAL_NOTICE"
             />
           </div>
           <h3 class="text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">

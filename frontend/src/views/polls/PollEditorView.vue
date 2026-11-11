@@ -7,6 +7,7 @@ import { listApartments } from '@/api/endpoints/property.js'
 import { isoToLocalDateInput, validatePollDraft } from '@/utils/pollValidation.js'
 import { localizeError } from '@/locales/index.js'
 import QuestionEditor from './components/QuestionEditor.vue'
+import TargetScopePicker from '@/components/domain/TargetScopePicker.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const route = useRoute()
@@ -69,6 +70,23 @@ const availableEntrances = computed(() => {
     if (a.entrance) set.add(a.entrance)
   }
   return Array.from(set).sort((a, b) => a - b)
+})
+
+const targetModel = computed({
+  get() {
+    return {
+      target_scope: form.target_scope,
+      target_entrance: form.target_entrance,
+      target_apartment_ids: form.target_apartment_ids,
+    }
+  },
+  set(val) {
+    if (!val) return
+    form.target_scope = val.target_scope || 'ALL_BUILDING'
+    form.target_entrance = val.target_entrance ?? 1
+    form.target_apartment_ids = Array.isArray(val.target_apartment_ids) ? val.target_apartment_ids : []
+    delete fieldErrors.target
+  },
 })
 
 function clearErrors() {
@@ -353,24 +371,19 @@ onMounted(() => {
       <!-- Audience, Eligibility, Unit & Deadline -->
       <div class="grid grid-cols-1 gap-4 border-t border-surface-container pt-5 sm:grid-cols-2">
         <!-- Target Scope -->
-        <div>
-          <label class="block text-sm font-semibold text-on-surface">
-            {{ session.t('polls.editor.targetScopeLabel') }}
-          </label>
-          <select
-            v-model="form.target_scope"
-            data-testid="poll-draft-target-scope"
-            class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
+        <div class="sm:col-span-2">
+          <TargetScopePicker
+            v-model="targetModel"
+            :apartments="apartments"
+            :available-entrances="availableEntrances"
+            :error-message="fieldErrors.target ? resolveFieldError(fieldErrors.target) : ''"
+            test-id-prefix="poll-draft"
             @change="delete fieldErrors.target"
-          >
-            <option value="ALL_BUILDING">{{ session.t('polls.target.allBuilding') }}</option>
-            <option value="ENTRANCE">{{ session.t('polls.editor.targetByEntrance') }}</option>
-            <option value="APARTMENT_LIST">{{ session.t('polls.target.selectedApartments') }}</option>
-          </select>
+          />
         </div>
 
         <!-- Deadline Date Picker (sent as end-of-day 23:59:59 local time) -->
-        <div>
+        <div class="sm:col-span-2">
           <label
             for="poll-draft-deadline"
             class="block text-sm font-semibold text-on-surface"
@@ -395,51 +408,6 @@ onMounted(() => {
             {{ resolveFieldError(fieldErrors.closes_at) }}
           </p>
         </div>
-
-        <!-- Entrance Selector when target_scope === 'ENTRANCE' -->
-        <div v-if="form.target_scope === 'ENTRANCE'" class="sm:col-span-2">
-          <label class="block text-xs font-semibold text-on-surface">
-            {{ session.t('polls.editor.selectEntranceLabel') }}
-          </label>
-          <select
-            v-model.number="form.target_entrance"
-            data-testid="poll-draft-entrance-select"
-            class="mt-1 block w-48 rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
-          >
-            <option v-for="ent in availableEntrances" :key="ent" :value="ent">
-              {{ session.t('polls.target.entrance', { entrance: ent }) }}
-            </option>
-          </select>
-        </div>
-
-        <!-- Apartments Multi-Select when target_scope === 'APARTMENT_LIST' -->
-        <div v-if="form.target_scope === 'APARTMENT_LIST'" class="sm:col-span-2">
-          <span class="block text-xs font-semibold text-on-surface">
-            {{ session.t('polls.editor.selectApartmentsLabel') }}
-          </span>
-          <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-6">
-            <label
-              v-for="apt in apartments"
-              :key="apt.apartment_id"
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-surface-container-high bg-surface-container-low px-3 py-2 text-xs font-medium text-on-surface"
-            >
-              <input
-                type="checkbox"
-                :checked="form.target_apartment_ids.includes(apt.apartment_id)"
-                class="h-4 w-4 rounded accent-primary"
-                @change="toggleTargetApartment(apt.apartment_id, $event.target.checked)"
-              />
-              <span>{{ session.t('common.aptShort', { number: apt.apartment_number }) }}</span>
-            </label>
-          </div>
-        </div>
-
-        <p
-          v-if="fieldErrors.target"
-          class="sm:col-span-2 text-xs font-semibold text-error"
-        >
-          {{ resolveFieldError(fieldErrors.target) }}
-        </p>
 
         <!-- Eligibility -->
         <div>

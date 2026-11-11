@@ -46,6 +46,16 @@ export function useRole() {
   )
   const canEditAssociationSettings = computed(() => buildingRole.value === 'CHAIRMAN')
 
+  // Maintenance calendar: CHAIRMAN and BOARD (#015 E10/M1)
+  const canManageMaintenance = computed(() =>
+    ['BOARD', 'CHAIRMAN'].includes(buildingRole.value),
+  )
+
+  // Maintenance log view: CHAIRMAN, BOARD, and ACCOUNTANT (#016 E10/M1)
+  const canViewMaintenanceLog = computed(() =>
+    ['BOARD', 'CHAIRMAN', 'ACCOUNTANT'].includes(buildingRole.value),
+  )
+
   // Whether the user has at least one apartment with can_submit_readings
   const canSubmitOwnReadings = computed(() =>
     (session.me?.memberships || []).some((m) => m.can_submit_readings),
@@ -72,6 +82,8 @@ export function useRole() {
     canDeleteForumTopic,
     canViewAssociationSettings,
     canEditAssociationSettings,
+    canManageMaintenance,
+    canViewMaintenanceLog,
     canSubmitOwnReadings,
     greetingName,
   }

@@ -28,6 +28,7 @@ const forumTopicsCount = ref(0)
 const openIssues = ref([])
 const openPolls = ref([])
 const pendingVotePolls = ref([])
+const isBuildingDetailsOpen = ref(false)
 const loading = ref(true)
 const loadError = ref(null)
 
@@ -195,6 +196,7 @@ const periodLabel = computed(() =>
         :period="period"
         :apartments="apartments"
         :forum-count="forumTopicsCount"
+        :open-issues-count="openIssues.length"
       />
 
       <!-- Action Needed Banner: Pending Polls awaiting Resident's Vote -->
@@ -356,95 +358,142 @@ const periodLabel = computed(() =>
           <!-- House Directory (Emergency & Key Association Contacts) -->
           <DashboardHouseDirectory />
 
-          <!-- Communal Property Snapshot (Resilient SVG Architectural Illustration) -->
-          <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container flex flex-col md:flex-row items-center gap-space-lg">
-            <div class="w-full md:w-1/3 aspect-[4/3] rounded-lg overflow-hidden relative bg-surface-container flex items-center justify-center">
-              <svg
-                viewBox="0 0 320 240"
-                class="w-full h-full object-cover"
-                role="img"
-                aria-label="Sõpruse pst 12 Renovated Nordic Apartment Building"
+          <!-- Communal Property Snapshot (Collapsible Building Passport & Architecture) -->
+          <div class="bg-surface-container-lowest rounded-xl p-space-md sm:p-space-lg shadow-xs border border-surface-container">
+            <div class="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                data-testid="toggle-building-details-btn"
+                class="flex items-center gap-2 text-left cursor-pointer group"
+                @click="isBuildingDetailsOpen = !isBuildingDetailsOpen"
               >
-                <defs>
-                  <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#dce9ff" />
-                    <stop offset="100%" stop-color="#f8f9ff" />
-                  </linearGradient>
-                </defs>
-                <rect width="320" height="240" fill="url(#skyGrad)" />
-                <rect x="0" y="195" width="320" height="45" fill="#d3e4fe" />
-                <rect x="42" y="42" width="236" height="153" rx="4" fill="#131b2e" />
-                <rect x="48" y="48" width="224" height="147" rx="2" fill="#ffffff" />
-                <!-- 4 floors of Nordic slatted wooden balconies & windows -->
-                <g fill="#eff4ff" stroke="#cbdbf5" stroke-width="1">
-                  <rect x="60" y="60" width="44" height="24" rx="2" />
-                  <rect x="116" y="60" width="44" height="24" rx="2" />
-                  <rect x="172" y="60" width="44" height="24" rx="2" />
-                  <rect x="224" y="60" width="36" height="24" rx="2" />
+                <div class="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-on-primary transition-colors">
+                  <span class="material-symbols-outlined text-[18px]">apartment</span>
+                </div>
+                <div>
+                  <h3 class="font-title-sm text-sm font-bold text-on-surface group-hover:text-primary transition-colors">
+                    {{ session.t('dashboard.aboutBuilding.title') }}
+                  </h3>
+                  <p class="text-xs text-on-surface-variant">
+                    {{ session.buildingAddress }} • Class B • {{ session.buildingApartmentsCount }} {{ session.t('dashboard.apartmentsLabel') }}
+                  </p>
+                </div>
+              </button>
 
-                  <rect x="60" y="94" width="44" height="24" rx="2" />
-                  <rect x="116" y="94" width="44" height="24" rx="2" />
-                  <rect x="172" y="94" width="44" height="24" rx="2" />
-                  <rect x="224" y="94" width="36" height="24" rx="2" />
-
-                  <rect x="60" y="128" width="44" height="24" rx="2" />
-                  <rect x="116" y="128" width="44" height="24" rx="2" />
-                  <rect x="172" y="128" width="44" height="24" rx="2" />
-                  <rect x="224" y="128" width="36" height="24" rx="2" />
-                </g>
-                <!-- Entrances 1 & 2 -->
-                <rect x="95" y="164" width="32" height="31" rx="2" fill="#006c4a" />
-                <rect x="195" y="164" width="32" height="31" rx="2" fill="#006c4a" />
-                <!-- Birch trees -->
-                <circle cx="30" cy="165" r="20" fill="#82f5c1" opacity="0.85" />
-                <rect x="28" y="175" width="4" height="20" fill="#45464d" />
-                <circle cx="292" cy="160" r="22" fill="#82f5c1" opacity="0.85" />
-                <rect x="290" y="172" width="4" height="23" fill="#45464d" />
-              </svg>
-              <div class="absolute bottom-2 left-2 px-2 py-1 bg-surface-container-lowest/90 backdrop-blur-xs rounded font-label-md text-[11px] font-semibold text-on-surface">
-                {{ session.t('dashboard.renovatedYear') }}
-              </div>
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface inline-flex items-center gap-1 transition-colors cursor-pointer"
+                @click="isBuildingDetailsOpen = !isBuildingDetailsOpen"
+              >
+                <span>
+                  {{
+                    isBuildingDetailsOpen
+                      ? session.t('dashboard.aboutBuilding.hideDetails')
+                      : session.t('dashboard.aboutBuilding.showDetails')
+                  }}
+                </span>
+                <span
+                  class="material-symbols-outlined text-[16px] transition-transform duration-150"
+                  :class="isBuildingDetailsOpen ? 'rotate-180' : ''"
+                >
+                  expand_more
+                </span>
+              </button>
             </div>
 
-            <div class="w-full md:w-2/3 flex flex-col justify-between">
-              <div class="flex items-center gap-space-xs mb-1">
-                <span class="font-label-md text-label-md uppercase tracking-wider text-secondary font-bold">
-                  {{ session.t('dashboard.energyPerformance') }}
-                </span>
-                <span class="px-2 py-0.5 rounded bg-secondary-container text-on-secondary-container font-label-md text-label-md font-bold">
-                  Class B
-                </span>
+            <!-- Expanded Building Passport -->
+            <div
+              v-if="isBuildingDetailsOpen"
+              class="mt-space-md pt-space-md border-t border-surface-container flex flex-col md:flex-row items-center gap-space-lg animate-in fade-in duration-150"
+            >
+              <div class="w-full md:w-1/3 aspect-[4/3] rounded-lg overflow-hidden relative bg-surface-container flex items-center justify-center">
+                <svg
+                  viewBox="0 0 320 240"
+                  class="w-full h-full object-cover"
+                  role="img"
+                  aria-label="Sõpruse pst 12 Renovated Nordic Apartment Building"
+                >
+                  <defs>
+                    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#dce9ff" />
+                      <stop offset="100%" stop-color="#f8f9ff" />
+                    </linearGradient>
+                  </defs>
+                  <rect width="320" height="240" fill="url(#skyGrad)" />
+                  <rect x="0" y="195" width="320" height="45" fill="#d3e4fe" />
+                  <rect x="42" y="42" width="236" height="153" rx="4" fill="#131b2e" />
+                  <rect x="48" y="48" width="224" height="147" rx="2" fill="#ffffff" />
+                  <!-- 4 floors of Nordic slatted wooden balconies & windows -->
+                  <g fill="#eff4ff" stroke="#cbdbf5" stroke-width="1">
+                    <rect x="60" y="60" width="44" height="24" rx="2" />
+                    <rect x="116" y="60" width="44" height="24" rx="2" />
+                    <rect x="172" y="60" width="44" height="24" rx="2" />
+                    <rect x="224" y="60" width="36" height="24" rx="2" />
+
+                    <rect x="60" y="94" width="44" height="24" rx="2" />
+                    <rect x="116" y="94" width="44" height="24" rx="2" />
+                    <rect x="172" y="94" width="44" height="24" rx="2" />
+                    <rect x="224" y="94" width="36" height="24" rx="2" />
+
+                    <rect x="60" y="128" width="44" height="24" rx="2" />
+                    <rect x="116" y="128" width="44" height="24" rx="2" />
+                    <rect x="172" y="128" width="44" height="24" rx="2" />
+                    <rect x="224" y="128" width="36" height="24" rx="2" />
+                  </g>
+                  <!-- Entrances 1 & 2 -->
+                  <rect x="95" y="164" width="32" height="31" rx="2" fill="#006c4a" />
+                  <rect x="195" y="164" width="32" height="31" rx="2" fill="#006c4a" />
+                  <!-- Birch trees -->
+                  <circle cx="30" cy="165" r="20" fill="#82f5c1" opacity="0.85" />
+                  <rect x="28" y="175" width="4" height="20" fill="#45464d" />
+                  <circle cx="292" cy="160" r="22" fill="#82f5c1" opacity="0.85" />
+                  <rect x="290" y="172" width="4" height="23" fill="#45464d" />
+                </svg>
+                <div class="absolute bottom-2 left-2 px-2 py-1 bg-surface-container-lowest/90 backdrop-blur-xs rounded font-label-md text-[11px] font-semibold text-on-surface">
+                  {{ session.t('dashboard.renovatedYear') }}
+                </div>
               </div>
-              <h3 class="font-headline-md text-headline-md font-bold text-on-surface">
-                {{ session.buildingAddress }} ({{ session.t('common.reg') }} {{ session.buildingRegistryCode }})
-              </h3>
-              <p class="font-body-sm text-body-sm text-on-surface-variant mt-1 leading-relaxed">
-                {{ session.t('dashboard.buildingFeaturesDesc') }}
-              </p>
-              <div class="grid grid-cols-3 gap-space-sm mt-space-md pt-space-xs">
-                <div class="flex flex-col">
-                  <span class="font-label-md text-label-md text-on-surface-variant">
-                    {{ session.t('dashboard.apartmentsEntrances') }}
+
+              <div class="w-full md:w-2/3 flex flex-col justify-between">
+                <div class="flex items-center gap-space-xs mb-1">
+                  <span class="font-label-md text-label-md uppercase tracking-wider text-secondary font-bold">
+                    {{ session.t('dashboard.energyPerformance') }}
                   </span>
-                  <span class="font-headline-md text-headline-md font-bold text-on-surface font-numeric-display">
-                    {{ session.buildingApartmentsCount }} / {{ session.buildingEntrancesCount }}
+                  <span class="px-2 py-0.5 rounded bg-secondary-container text-on-secondary-container font-label-md text-label-md font-bold">
+                    Class B
                   </span>
                 </div>
-                <div class="flex flex-col">
-                  <span class="font-label-md text-label-md text-on-surface-variant">
-                    {{ session.t('dashboard.heatedArea') }}
-                  </span>
-                  <span class="font-headline-md text-headline-md font-bold text-on-surface font-numeric-display">
-                    {{ session.buildingHeatedArea }} m²
-                  </span>
-                </div>
-                <div class="flex flex-col">
-                  <span class="font-label-md text-label-md text-on-surface-variant">
-                    {{ session.t('dashboard.registryCodeLabel') }}
-                  </span>
-                  <span class="font-headline-md text-headline-md font-bold text-secondary font-numeric-display">
-                    {{ session.buildingRegistryCode }}
-                  </span>
+                <h4 class="font-headline-sm text-base font-bold text-on-surface">
+                  {{ session.buildingAddress }} ({{ session.t('common.reg') }} {{ session.buildingRegistryCode }})
+                </h4>
+                <p class="font-body-sm text-body-sm text-on-surface-variant mt-1 leading-relaxed">
+                  {{ session.t('dashboard.buildingFeaturesDesc') }}
+                </p>
+                <div class="grid grid-cols-3 gap-space-sm mt-space-md pt-space-xs">
+                  <div class="flex flex-col">
+                    <span class="font-label-md text-label-md text-on-surface-variant">
+                      {{ session.t('dashboard.apartmentsEntrances') }}
+                    </span>
+                    <span class="font-headline-md text-headline-md font-bold text-on-surface font-numeric-display">
+                      {{ session.buildingApartmentsCount }} / {{ session.buildingEntrancesCount }}
+                    </span>
+                  </div>
+                  <div class="flex flex-col">
+                    <span class="font-label-md text-label-md text-on-surface-variant">
+                      {{ session.t('dashboard.heatedArea') }}
+                    </span>
+                    <span class="font-headline-md text-headline-md font-bold text-on-surface font-numeric-display">
+                      {{ session.buildingHeatedArea }} m²
+                    </span>
+                  </div>
+                  <div class="flex flex-col">
+                    <span class="font-label-md text-label-md text-on-surface-variant">
+                      {{ session.t('dashboard.registryCodeLabel') }}
+                    </span>
+                    <span class="font-headline-md text-headline-md font-bold text-secondary font-numeric-display">
+                      {{ session.buildingRegistryCode }}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>

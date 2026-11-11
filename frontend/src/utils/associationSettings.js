@@ -33,6 +33,16 @@ export const DEFAULT_ASSOCIATION_SETTINGS = [
     is_default: true,
     updated_at: null,
   },
+  {
+    key: 'maintenance.overdue_reminder_days',
+    type: 'INTEGER',
+    value: 7,
+    default: 7,
+    minimum: 1,
+    maximum: 30,
+    is_default: true,
+    updated_at: null,
+  },
 ]
 
 /**

@@ -25,11 +25,14 @@ export type NotificationEventType =
   | 'ISSUE_REPORTED'
   | 'ISSUE_URGENT'
   | 'ISSUE_STATUS_CHANGED'
+  | 'MAINTENANCE_DUE'
+  | 'NOTICE_PUBLISHED'
 export type PeriodStatus = 'OPEN_FOR_RESIDENTS' | 'REVIEW_BY_BOARD' | 'LOCKED'
 export type PollKind = 'INFORMATIVE'
 export type PollStatus = 'DRAFT' | 'OPEN' | 'CLOSED' | 'CANCELLED'
 export type PollUnit = 'APARTMENT' | 'PERSON'
 export type PostCategory = 'GENERAL' | 'WATER_SHUTOFF' | 'MAINTENANCE' | 'MARKETPLACE'
+export type PostOrigin = 'MAINTENANCE'
 export type PostType =
   | 'EMERGENCY'
   | 'OFFICIAL_NOTICE'
@@ -42,7 +45,7 @@ export type ResourceType = 'COLD_WATER' | 'HOT_WATER' | 'ELECTRICITY' | 'HEAT' |
 export type RoleBadge = 'OWNER' | 'RESIDENT' | 'BOARD' | 'ACCOUNTANT'
 export type SignInStatus = 'SIGNED_IN' | 'REGISTRATION_REQUIRED' | 'SIGN_IN_TO_ACCEPT'
 export type StaffRole = 'BOARD' | 'ACCOUNTANT' | 'CHAIRMAN'
-export type SubjectType = 'post' | 'period' | 'poll' | 'issue'
+export type SubjectType = 'post' | 'period' | 'poll' | 'issue' | 'maintenance_task'
 export type SubmissionStatus = 'SUBMITTED' | 'MISSING' | 'AUTO_ESTIMATED' | 'ANOMALY_CONFIRMED'
 export type TargetScope = 'ALL_BUILDING' | 'ENTRANCE' | 'APARTMENT_LIST'
 export type UnavailableReason = 'DEMO_MODE' | 'CHANNEL_NOT_ENABLED' | 'NO_EMAIL' | 'NOT_LINKED'
@@ -612,6 +615,7 @@ export interface PostView {
   comments_count: number
   created_at: string
   last_activity_at: string
+  origin?: PostOrigin | null
 }
 
 export interface CommentView {
@@ -1074,6 +1078,111 @@ export interface StatusChange {
   duplicate_of?: string | null
 }
 
+export type PeriodUnit = 'DAY' | 'MONTH' | 'YEAR'
+export type TaskStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
+export type OccurrenceState = 'UPCOMING' | 'DUE' | 'OVERDUE' | 'PAUSED'
 
+export interface NoticeDraft {
+  title: string
+  body: string
+  category: PostCategory
+  target_scope: TargetScope
+  target_entrance: number | null
+  target_apartment_ids: string[] | null
+  comments_enabled: boolean
+}
 
+export interface CurrentOccurrence {
+  occurrence_id: string
+  due_date: string
+  publish_on: string
+  state: OccurrenceState
+  published_at: string | null
+  board_post_id: string | null
+  notice_post_id: string | null
+  notice_failed: boolean
+  reminder_count: number
+}
+
+export interface TaskView {
+  id: string
+  title: string
+  instructions: string
+  period_unit: PeriodUnit
+  period_count: number
+  lead_days: number
+  anchor_date: string
+  status: TaskStatus
+  notice: NoticeDraft | null
+  current: CurrentOccurrence | null
+  last_closed_on: string | null
+  created_at: string
+  updated_at: string
+  archived_at: string | null
+}
+
+export interface TaskCreate {
+  title: string
+  instructions?: string
+  period_unit: PeriodUnit
+  period_count: number
+  lead_days: number
+  first_due_date: string
+  notice?: NoticeDraft | null
+}
+
+export interface TaskEdit {
+  title?: string
+  instructions?: string
+  lead_days?: number
+  notice?: NoticeDraft | null
+  period_unit?: PeriodUnit
+  period_count?: number
+  next_due_date?: string
+  occurrence_id?: string
+}
+
+export interface TaskResume {
+  next_due_date?: string
+  occurrence_id?: string
+}
+
+export type LogKind = 'DONE' | 'SKIPPED'
+
+export interface DoneRequest {
+  occurrence_id: string
+  done_on: string
+  note?: string | null
+  cost?: string | null
+}
+
+export interface SkipRequest {
+  occurrence_id: string
+  note: string
+}
+
+export interface LogEntryView {
+  id: string
+  task_id: string
+  task_title: string
+  kind: LogKind
+  planned_date: string
+  closed_on: string
+  note: string
+  cost: string | null
+  recorded_by: AuthorBadgeDTO
+  recorded_at: string
+  updated_at: string
+  updated_by: AuthorBadgeDTO | null
+}
+
+export interface LogEdit {
+  note?: string | null
+  cost?: string | null
+}
+
+export interface ClosedOccurrence {
+  entry: LogEntryView
+  task: TaskView
+}
 

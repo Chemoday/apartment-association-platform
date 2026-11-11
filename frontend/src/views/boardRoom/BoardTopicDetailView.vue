@@ -8,6 +8,7 @@ import { localizeError } from '@/locales/index.js'
 import CommentList from '@/views/forum/components/CommentList.vue'
 import CommentComposer from '@/views/forum/components/CommentComposer.vue'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
+import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const route = useRoute()
@@ -240,11 +241,17 @@ watch(
         </p>
 
         <div class="pt-4 border-t border-surface-container flex flex-wrap items-center justify-between gap-2">
-          <AuthorBadge
-            v-if="post.author_badge"
-            :badge="post.author_badge"
-            :is-mine="post.is_mine"
-          />
+          <div class="flex flex-wrap items-center gap-2">
+            <AuthorBadge
+              v-if="post.author_badge"
+              :badge="post.author_badge"
+              :is-mine="post.is_mine"
+            />
+            <PostOriginBadge
+              :origin="post.origin"
+              post-type="BOARD_TOPIC"
+            />
+          </div>
           <span
             v-if="post.last_activity_at"
             class="text-xs text-on-surface-variant"

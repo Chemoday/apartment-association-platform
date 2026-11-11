@@ -24,12 +24,30 @@ const statusTab = ref('ALL') // 'ALL' | 'OPEN' | 'ENDED' | specific IssueStatus
 const selectedCategory = ref('')
 const selectedEntrance = ref('') // '' = all, '0' = outside/whole building, '1'..'N' = entrance N
 const includeOld = ref(false)
+const personalScope = ref('ALL') // 'ALL' | 'MY_REPORTED' | 'TRACKED'
+const urgentOnly = ref(false)
+const searchQuery = ref('')
 
 const showReportModal = ref(false)
 const followingId = ref('')
 
 const isBoardOrChairman = computed(() =>
   ['CHAIRMAN', 'BOARD'].includes(session.me?.building_role || ''),
+)
+
+const myReportedCount = computed(() => issues.value.filter((i) => i.i_reported).length)
+const myFollowedCount = computed(() => issues.value.filter((i) => i.i_follow).length)
+const urgentCount = computed(
+  () => issues.value.filter((i) => i.urgent && isIssueOpen(i.status)).length,
+)
+
+const hasSecondaryFilters = computed(
+  () =>
+    personalScope.value !== 'ALL' ||
+    urgentOnly.value ||
+    searchQuery.value.trim().length > 0 ||
+    selectedCategory.value !== '' ||
+    selectedEntrance.value !== '',
 )
 
 const CATEGORY_ICONS = {
@@ -100,11 +118,27 @@ async function loadIssues() {
   }
 }
 
+const filteredIssues = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  return issues.value.filter((item) => {
+    if (personalScope.value === 'MY_REPORTED' && !item.i_reported) return false
+    if (personalScope.value === 'TRACKED' && !item.i_follow) return false
+    if (urgentOnly.value && !item.urgent) return false
+    if (q) {
+      const matchTitle = (item.title || '').toLowerCase().includes(q)
+      const matchPlace = (item.place || '').toLowerCase().includes(q)
+      const matchDesc = (item.description || '').toLowerCase().includes(q)
+      if (!matchTitle && !matchPlace && !matchDesc) return false
+    }
+    return true
+  })
+})
+
 const openIssuesList = computed(() =>
-  issues.value.filter((item) => isIssueOpen(item.status)),
+  filteredIssues.value.filter((item) => isIssueOpen(item.status)),
 )
 const endedIssuesList = computed(() =>
-  issues.value.filter((item) => !isIssueOpen(item.status)),
+  filteredIssues.value.filter((item) => !isIssueOpen(item.status)),
 )
 
 function formatLocation(issue) {
@@ -170,6 +204,9 @@ function resetFilters() {
   selectedCategory.value = ''
   selectedEntrance.value = ''
   includeOld.value = false
+  personalScope.value = 'ALL'
+  urgentOnly.value = false
+  searchQuery.value = ''
 }
 
 watch([statusTab, selectedCategory, selectedEntrance, includeOld], () => {
@@ -246,55 +283,126 @@ watch(
       <div
         class="rounded-xl border border-surface-container bg-surface-container-lowest p-4 shadow-2xs"
       >
-        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <!-- Primary status tabs -->
-          <div class="flex flex-wrap items-center gap-1.5" role="tablist">
+        <div class="space-y-3">
+          <!-- Row 1: Status Tabs, Personal Scope Tabs & Urgent Chip -->
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-surface-container pb-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <!-- Primary status tabs -->
+              <div class="flex items-center gap-1 p-0.5 rounded-lg bg-surface-container border border-surface-container-high" role="tablist">
+                <button
+                  v-for="tab in ['ALL', 'OPEN', 'ENDED']"
+                  :key="tab"
+                  type="button"
+                  role="tab"
+                  :data-testid="`issues-status-tab-${tab}`"
+                  :aria-selected="statusTab === tab"
+                  class="rounded-md px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="
+                    statusTab === tab
+                      ? 'bg-surface-container-lowest text-primary shadow-2xs'
+                      : 'text-on-surface-variant hover:text-on-surface'
+                  "
+                  @click="statusTab = tab"
+                >
+                  {{ session.t(`issues.filters.statusTabs.${tab}`) }}
+                </button>
+              </div>
+
+              <!-- Scope Pills (All / My reports / Tracked) -->
+              <div class="inline-flex items-center gap-1.5">
+                <button
+                  type="button"
+                  data-testid="issues-scope-all"
+                  class="rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="
+                    personalScope === 'ALL'
+                      ? 'bg-secondary-container text-on-secondary-container'
+                      : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container'
+                  "
+                  @click="personalScope = 'ALL'"
+                >
+                  {{ session.t('issues.filters.scopeAll') }}
+                </button>
+                <button
+                  type="button"
+                  data-testid="issues-scope-my-reported"
+                  class="rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer"
+                  :class="
+                    personalScope === 'MY_REPORTED'
+                      ? 'bg-secondary-container text-on-secondary-container'
+                      : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container'
+                  "
+                  @click="personalScope = 'MY_REPORTED'"
+                >
+                  <span>{{ session.t('issues.filters.scopeMyReported') }}</span>
+                  <span
+                    v-if="myReportedCount > 0"
+                    class="px-1.5 py-0.2 rounded-full bg-surface-container-highest text-[10px] font-bold"
+                  >
+                    {{ myReportedCount }}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="issues-scope-tracked"
+                  class="rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer"
+                  :class="
+                    personalScope === 'TRACKED'
+                      ? 'bg-secondary-container text-on-secondary-container'
+                      : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container'
+                  "
+                  @click="personalScope = 'TRACKED'"
+                >
+                  <span>{{ session.t('issues.filters.scopeTracked') }}</span>
+                  <span
+                    v-if="myFollowedCount > 0"
+                    class="px-1.5 py-0.2 rounded-full bg-surface-container-highest text-[10px] font-bold"
+                  >
+                    {{ myFollowedCount }}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Urgent Toggle Chip -->
             <button
-              v-for="tab in ['ALL', 'OPEN', 'ENDED']"
-              :key="tab"
               type="button"
-              role="tab"
-              :data-testid="`issues-status-tab-${tab}`"
-              :aria-selected="statusTab === tab"
-              class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer"
+              data-testid="issues-urgent-filter-toggle"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer border"
               :class="
-                statusTab === tab
-                  ? 'bg-primary text-on-primary shadow-2xs'
-                  : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
+                urgentOnly
+                  ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/70 dark:text-rose-200 dark:border-rose-700 shadow-2xs'
+                  : 'bg-surface-container-low text-on-surface-variant border-surface-container hover:bg-surface-container'
               "
-              @click="statusTab = tab"
+              @click="urgentOnly = !urgentOnly"
             >
-              {{ session.t(`issues.filters.statusTabs.${tab}`) }}
+              <span class="material-symbols-outlined text-[15px] text-rose-600">priority_high</span>
+              <span>{{ session.t('issues.filters.urgentOnly') }}</span>
+              <span
+                v-if="urgentCount > 0"
+                class="px-1.5 py-0.2 rounded-full bg-rose-200 text-rose-950 dark:bg-rose-900 dark:text-rose-100 text-[10px] font-bold"
+              >
+                {{ urgentCount }}
+              </span>
             </button>
           </div>
 
-          <!-- Specific status, category, and entrance filters -->
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label for="issues-filter-status" class="sr-only">
-                {{ session.t('issues.filters.statusLabel') }}
-              </label>
-              <select
-                id="issues-filter-status"
-                v-model="statusTab"
-                data-testid="issues-filter-status"
-                class="w-full rounded-lg border border-surface-container-high bg-surface-container-low px-3 py-1.5 text-xs font-medium text-on-surface"
-              >
-                <option value="ALL">{{ session.t('issues.filters.statusTabs.ALL') }}</option>
-                <option value="OPEN">{{ session.t('issues.filters.statusTabs.OPEN') }}</option>
-                <option value="ENDED">{{ session.t('issues.filters.statusTabs.ENDED') }}</option>
-                <optgroup :label="session.t('issues.filters.specificStatusGroup')">
-                  <option
-                    v-for="st in ALL_ISSUE_STATUSES"
-                    :key="st"
-                    :value="st"
-                  >
-                    {{ session.t(`issues.statuses.${st}`) }}
-                  </option>
-                </optgroup>
-              </select>
+          <!-- Row 2: Search Input & Category, Entrance, Status Dropdowns -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-center">
+            <!-- Search bar -->
+            <div class="relative">
+              <span class="material-symbols-outlined text-[18px] text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2">
+                search
+              </span>
+              <input
+                v-model="searchQuery"
+                type="search"
+                :placeholder="session.t('issues.filters.searchPlaceholder')"
+                class="w-full rounded-lg border border-surface-container-high bg-surface-container-low pl-9 pr-3 py-1.5 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary"
+              />
             </div>
 
+            <!-- Category filter -->
             <div>
               <label for="issues-filter-category" class="sr-only">
                 {{ session.t('issues.filters.categoryLabel') }}
@@ -316,6 +424,7 @@ watch(
               </select>
             </div>
 
+            <!-- Entrance filter -->
             <div>
               <label for="issues-filter-entrance" class="sr-only">
                 {{ session.t('issues.filters.locationLabel') }}
@@ -336,6 +445,43 @@ watch(
                   {{ session.t('issues.locationEntrance', { n: ent }) }}
                 </option>
               </select>
+            </div>
+
+            <!-- Specific status filter & Reset -->
+            <div class="flex items-center gap-1.5">
+              <label for="issues-filter-status" class="sr-only">
+                {{ session.t('issues.filters.statusLabel') }}
+              </label>
+              <select
+                id="issues-filter-status"
+                v-model="statusTab"
+                data-testid="issues-filter-status"
+                class="flex-1 rounded-lg border border-surface-container-high bg-surface-container-low px-3 py-1.5 text-xs font-medium text-on-surface"
+              >
+                <option value="ALL">{{ session.t('issues.filters.statusTabs.ALL') }}</option>
+                <option value="OPEN">{{ session.t('issues.filters.statusTabs.OPEN') }}</option>
+                <option value="ENDED">{{ session.t('issues.filters.statusTabs.ENDED') }}</option>
+                <optgroup :label="session.t('issues.filters.specificStatusGroup')">
+                  <option
+                    v-for="st in ALL_ISSUE_STATUSES"
+                    :key="st"
+                    :value="st"
+                  >
+                    {{ session.t(`issues.statuses.${st}`) }}
+                  </option>
+                </optgroup>
+              </select>
+
+              <button
+                v-if="hasSecondaryFilters"
+                type="button"
+                data-testid="issues-reset-secondary-filters-btn"
+                class="p-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer shrink-0"
+                :title="session.t('issues.filters.clearFilters')"
+                @click="resetFilters"
+              >
+                <span class="material-symbols-outlined text-[17px]">filter_alt_off</span>
+              </button>
             </div>
           </div>
         </div>
