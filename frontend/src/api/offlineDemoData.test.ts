@@ -66,12 +66,21 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
       actingUserId: '018f0000-0000-7000-8000-000000000101',
     },
   )
-  assert.equal(boardTopics.length, 1)
-  assert.equal(boardTopics[0].title, 'Where the keys to the basement and the roof are')
-  assert.equal(boardTopics[0].author_badge.display_label, 'Oleg Sidorov')
+  assert.equal(boardTopics.length >= 2, true)
+  const manualTopic = boardTopics.find(
+    (t: any) => t.title === 'Where the keys to the basement and the roof are',
+  )
+  assert.ok(manualTopic)
+  assert.equal(manualTopic.author_badge.display_label, 'Oleg Sidorov')
+  assert.equal(manualTopic.origin, null)
+
+  const automaticTopic = boardTopics.find((t: any) => t.origin === 'MAINTENANCE')
+  assert.ok(automaticTopic)
+  assert.equal(automaticTopic.post_type, 'BOARD_TOPIC')
+  assert.equal(automaticTopic.origin, 'MAINTENANCE')
 
   const boardTopicDetail = await resolveOfflineDemoRequest(
-    `/communication/posts/${boardTopics[0].id}`,
+    `/communication/posts/${manualTopic.id}`,
     {
       method: 'GET',
       actingUserId: '018f0000-0000-7000-8000-000000000105',
@@ -324,13 +333,13 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
       err?.payload?.status === 'CANCELLED',
   )
 
-  // #010 & #014 Poll & Issue Notifications & Preferences:
-  // 1. Preferences matrix returns 40 cells (10 event types x 4 channels) with POLL_OPENED enabled by default and non-mandatory
+  // #010, #014 & #018 Poll, Issue & Maintenance Notifications & Preferences:
+  // 1. Preferences matrix returns 48 cells (12 event types x 4 channels) with POLL_OPENED enabled by default and non-mandatory
   const prefsResp = await resolveOfflineDemoRequest('/notifications/preferences', {
     method: 'GET',
     actingUserId: '018f0000-0000-7000-8000-000000000102',
   })
-  assert.equal(prefsResp.preferences.length, 40)
+  assert.equal(prefsResp.preferences.length, 48)
   const pollOpenedPrefs = prefsResp.preferences.filter((p: any) => p.event_type === 'POLL_OPENED')
   assert.equal(pollOpenedPrefs.length, 4)
   assert.equal(
@@ -465,13 +474,14 @@ test('offlineDemoData supports GET and PUT /settings with role checks and all-or
     method: 'GET',
     actingUserId: '018f0000-0000-7000-8000-000000000105', // BOARD
   })
-  assert.equal(boardGet.settings.length, 3)
+  assert.equal(boardGet.settings.length, 4)
   assert.deepEqual(
     boardGet.settings.map((s: any) => s.key),
     [
       'issues.reports_per_apartment_per_day',
       'issues.urgent_enabled',
       'issues.urgent_per_apartment_per_day',
+      'maintenance.overdue_reminder_days',
     ],
   )
 
@@ -741,3 +751,450 @@ test('offlineDemoData supports #012 /issues endpoints, privacy rules, and settin
 
   disableOfflineDemo()
 })
+
+test('offlineDemoData supports #015 maintenance calendar endpoints and transitions', async () => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const residentId = '018f0000-0000-7000-8000-000000000104'
+
+  // Resident gets 403 FORBIDDEN
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/maintenance/tasks', {
+        method: 'GET',
+        actingUserId: residentId,
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+
+  // Chairman lists tasks (seed has 4 tasks: 3 active + 1 paused)
+  const tasks = await resolveOfflineDemoRequest('/maintenance/tasks', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  assert.equal(Array.isArray(tasks), true)
+  assert.equal(tasks.length >= 4, true)
+
+  // Filter by state=OVERDUE
+  const overdueTasks = await resolveOfflineDemoRequest('/maintenance/tasks?state=OVERDUE', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  assert.equal(overdueTasks.every((t: any) => t.current?.state === 'OVERDUE'), true)
+
+  // Chairman creates a new task
+  const created = await resolveOfflineDemoRequest('/maintenance/tasks', {
+    method: 'POST',
+    actingUserId: chairmanId,
+    body: {
+      title: 'Elevator annual cable inspection',
+      instructions: 'Contract with Schindler lift service',
+      period_unit: 'YEAR',
+      period_count: 1,
+      lead_days: 14,
+      first_due_date: '2027-02-15',
+      notice: null,
+    },
+  })
+  assert.ok(created.id)
+  assert.equal(created.status, 'ACTIVE')
+  assert.equal(created.current?.due_date, '2027-02-15')
+
+  // Chairman pauses the task
+  const paused = await resolveOfflineDemoRequest(`/maintenance/tasks/${created.id}/pause`, {
+    method: 'POST',
+    actingUserId: chairmanId,
+  })
+  assert.equal(paused.status, 'PAUSED')
+  assert.equal(paused.current?.state, 'PAUSED')
+
+  // Pausing already paused task throws 409 INVALID_TASK_TRANSITION
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest(`/maintenance/tasks/${created.id}/pause`, {
+        method: 'POST',
+        actingUserId: chairmanId,
+      }),
+    (err: any) => err?.status === 409 && err?.errorCode === 'INVALID_TASK_TRANSITION',
+  )
+
+  // Resume the task
+  const resumed = await resolveOfflineDemoRequest(`/maintenance/tasks/${created.id}/resume`, {
+    method: 'POST',
+    actingUserId: chairmanId,
+  })
+  assert.equal(resumed.status, 'ACTIVE')
+
+  // Archive the task
+  const archived = await resolveOfflineDemoRequest(`/maintenance/tasks/${created.id}/archive`, {
+    method: 'POST',
+    actingUserId: chairmanId,
+  })
+  assert.equal(archived.status, 'ARCHIVED')
+  assert.equal(archived.current, null)
+
+  // Editing archived task throws 409 TASK_ARCHIVED
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest(`/maintenance/tasks/${created.id}`, {
+        method: 'PATCH',
+        actingUserId: chairmanId,
+        body: { title: 'New title' },
+      }),
+    (err: any) => err?.status === 409 && err?.errorCode === 'TASK_ARCHIVED',
+  )
+
+  disableOfflineDemo()
+})
+
+test('offlineDemoData supports #016 maintenance done, skip, log filters, log edit, and accountant access', async () => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const boardId = '018f0000-0000-7000-8000-000000000105'
+  const accountantId = '018f0000-0000-7000-8000-000000000103'
+  const residentId = '018f0000-0000-7000-8000-000000000104'
+
+  // Resident gets 403 FORBIDDEN on GET /maintenance/log
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/maintenance/log', {
+        method: 'GET',
+        actingUserId: residentId,
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+
+  // Accountant can read GET /maintenance/log
+  const initialLog = await resolveOfflineDemoRequest('/maintenance/log', {
+    method: 'GET',
+    actingUserId: accountantId,
+  })
+  assert.equal(Array.isArray(initialLog), true)
+  assert.equal(initialLog.length >= 4, true)
+
+  // Accountant gets 403 FORBIDDEN on GET /maintenance/tasks and PATCH /maintenance/log/:id
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/maintenance/tasks', {
+        method: 'GET',
+        actingUserId: accountantId,
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest(`/maintenance/log/${initialLog[0].id}`, {
+        method: 'PATCH',
+        actingUserId: accountantId,
+        body: { note: 'Accountant attempt' },
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+
+  // Board member marks an active task done with cost and note
+  const heatingTask = await resolveOfflineDemoRequest('/maintenance/tasks/task-heating-substation', {
+    method: 'GET',
+    actingUserId: boardId,
+  })
+  const oldOccId = heatingTask.current.occurrence_id
+  const oldDueDate = heatingTask.current.due_date
+
+  const doneRes = await resolveOfflineDemoRequest('/maintenance/tasks/task-heating-substation/done', {
+    method: 'POST',
+    actingUserId: boardId,
+    body: {
+      occurrence_id: oldOccId,
+      done_on: heatingTask.last_closed_on,
+      note: 'All valves and pressure gauges verified.',
+      cost: '145.5',
+    },
+  })
+  assert.equal(doneRes.entry.kind, 'DONE')
+  assert.equal(doneRes.entry.cost, '145.50')
+  assert.equal(doneRes.entry.recorded_by.display_label, 'Liina Vaher')
+  assert.notEqual(doneRes.task.current.occurrence_id, oldOccId)
+  assert.equal(doneRes.task.current.due_date > oldDueDate, true)
+
+  // Repeating with old occurrence_id gives 409 OCCURRENCE_CLOSED
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/maintenance/tasks/task-heating-substation/done', {
+        method: 'POST',
+        actingUserId: boardId,
+        body: {
+          occurrence_id: oldOccId,
+          done_on: heatingTask.last_closed_on,
+          note: 'Duplicate submit',
+        },
+      }),
+    (err: any) =>
+      err?.status === 409 &&
+      err?.errorCode === 'OCCURRENCE_CLOSED' &&
+      err?.payload?.current_occurrence_id === doneRes.task.current.occurrence_id,
+  )
+
+  // Paused task can be skipped with required note
+  const pausedTask = await resolveOfflineDemoRequest('/maintenance/tasks/task-staircase-window-paint', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  const skipRes = await resolveOfflineDemoRequest('/maintenance/tasks/task-staircase-window-paint/skip', {
+    method: 'POST',
+    actingUserId: chairmanId,
+    body: {
+      occurrence_id: pausedTask.current.occurrence_id,
+      note: 'Weather too cold this season.',
+    },
+  })
+  assert.equal(skipRes.entry.kind, 'SKIPPED')
+  assert.equal(skipRes.entry.cost, null)
+  assert.equal(skipRes.task.status, 'PAUSED')
+
+  // Chairman edits a DONE log entry note and cost
+  const patchedEntry = await resolveOfflineDemoRequest(`/maintenance/log/${doneRes.entry.id}`, {
+    method: 'PATCH',
+    actingUserId: chairmanId,
+    body: {
+      note: 'Updated note with invoice #402.',
+      cost: '160',
+    },
+  })
+  assert.equal(patchedEntry.note, 'Updated note with invoice #402.')
+  assert.equal(patchedEntry.cost, '160.00')
+  assert.equal(patchedEntry.updated_by.display_label, 'Peeter Tamm')
+
+  // Setting cost on a SKIPPED entry returns 422 VALIDATION_ERROR
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest(`/maintenance/log/${skipRes.entry.id}`, {
+        method: 'PATCH',
+        actingUserId: chairmanId,
+        body: { cost: '50.00' },
+      }),
+    (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+  )
+
+  disableOfflineDemo()
+})
+
+test('offlineDemoData supports #017 automatic reminders, notices, task origin badges, and settings', async () => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const residentId = '018f0000-0000-7000-8000-000000000104'
+
+  // 1. Posts list returns origin: 'MAINTENANCE' for maintenance posts and null for user posts
+  const posts = await resolveOfflineDemoRequest('/communication/posts?limit=50', {
+    method: 'GET',
+    actingUserId: residentId,
+  })
+  const autoNotice = posts.find((p: any) => p.id === '018f0000-0000-7000-8000-000000000604')
+  assert.ok(autoNotice)
+  assert.equal(autoNotice.origin, 'MAINTENANCE')
+  assert.equal(autoNotice.post_type, 'OFFICIAL_NOTICE')
+
+  const regularNotice = posts.find((p: any) => p.id === '018f0000-0000-7000-8000-000000000601')
+  assert.ok(regularNotice)
+  assert.equal(regularNotice.origin, null)
+
+  // 2. Post detail reflects origin
+  const noticeDetail = await resolveOfflineDemoRequest('/communication/posts/018f0000-0000-7000-8000-000000000604', {
+    method: 'GET',
+    actingUserId: residentId,
+  })
+  assert.equal(noticeDetail.origin, 'MAINTENANCE')
+
+  const boardTopicDetail = await resolveOfflineDemoRequest('/communication/posts/018f0000-0000-7000-8000-000000000763', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  assert.equal(boardTopicDetail.origin, 'MAINTENANCE')
+  assert.equal(boardTopicDetail.post_type, 'BOARD_TOPIC')
+
+  // 3. Task details have published references and notice_failed flag
+  const fireTask = await resolveOfflineDemoRequest('/maintenance/tasks/task-fire-extinguishers', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  assert.equal(fireTask.current.board_post_id, '018f0000-0000-7000-8000-000000000763')
+  assert.equal(fireTask.current.notice_post_id, '018f0000-0000-7000-8000-000000000604')
+  assert.ok(fireTask.current.published_at)
+  assert.equal(fireTask.current.notice_failed, false)
+
+  const atticTask = await resolveOfflineDemoRequest('/maintenance/tasks/task-attic-ventilation', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  assert.equal(atticTask.current.notice_failed, true)
+
+  // 4. Building settings include maintenance.overdue_reminder_days
+  const settingsRes = await resolveOfflineDemoRequest('/settings', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  const overdueSetting = settingsRes.settings.find((s: any) => s.key === 'maintenance.overdue_reminder_days')
+  assert.ok(overdueSetting)
+  assert.equal(overdueSetting.value, 7)
+  assert.equal(overdueSetting.type, 'INTEGER')
+
+  // Validation: out of bounds (1..30)
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/settings', {
+        method: 'PUT',
+        actingUserId: chairmanId,
+        body: { values: { 'maintenance.overdue_reminder_days': 0 } },
+      }),
+    (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+  )
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/settings', {
+        method: 'PUT',
+        actingUserId: chairmanId,
+        body: { values: { 'maintenance.overdue_reminder_days': 31 } },
+      }),
+    (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+  )
+
+  // Valid update
+  const updatedSettings = await resolveOfflineDemoRequest('/settings', {
+    method: 'PUT',
+    actingUserId: chairmanId,
+    body: { values: { 'maintenance.overdue_reminder_days': 14 } },
+  })
+  const updatedOverdue = updatedSettings.settings.find((s: any) => s.key === 'maintenance.overdue_reminder_days')
+  assert.equal(updatedOverdue.value, 14)
+
+  disableOfflineDemo()
+})
+
+test('offlineDemoData supports #018 maintenance due and notice published notifications & preferences', async () => {
+  enableOfflineDemo()
+
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+  const boardMemberId = '018f0000-0000-7000-8000-000000000105'
+  const accountantId = '018f0000-0000-7000-8000-000000000103'
+
+  // 1. Feed seeds check
+  const chairmanFeed = await resolveOfflineDemoRequest('/notifications/feed', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  const maintDueItem = chairmanFeed.find((n: any) => n.event_type === 'MAINTENANCE_DUE')
+  assert.ok(maintDueItem, 'Chairman receives seeded MAINTENANCE_DUE')
+  assert.equal(maintDueItem.subject_type, 'maintenance_task')
+  assert.ok(maintDueItem.params.due_date)
+  assert.equal(typeof maintDueItem.params.overdue, 'boolean')
+
+  const residentFeed = await resolveOfflineDemoRequest('/notifications/feed', {
+    method: 'GET',
+    actingUserId: residentId,
+  })
+  const residentMaintDue = residentFeed.find((n: any) => n.event_type === 'MAINTENANCE_DUE')
+  assert.equal(residentMaintDue, undefined, 'Resident does not receive MAINTENANCE_DUE')
+
+  const residentNotice = residentFeed.find((n: any) => n.event_type === 'NOTICE_PUBLISHED')
+  assert.ok(residentNotice, 'Resident receives seeded NOTICE_PUBLISHED')
+  assert.equal(residentNotice.subject_type, 'post')
+  assert.deepEqual(residentNotice.params, {}, 'Notice params must be empty')
+
+  // 2. Preferences matrix has 48 rows
+  const prefsRes = await resolveOfflineDemoRequest('/notifications/preferences', {
+    method: 'GET',
+    actingUserId: residentId,
+  })
+  assert.equal(prefsRes.preferences.length, 48)
+
+  const maintPrefs = prefsRes.preferences.filter((p: any) => p.event_type === 'MAINTENANCE_DUE')
+  assert.equal(maintPrefs.length, 4)
+  const maintInApp = maintPrefs.find((p: any) => p.channel === 'in_app')
+  assert.equal(maintInApp.enabled, true)
+  const maintEmail = maintPrefs.find((p: any) => p.channel === 'email')
+  assert.equal(maintEmail.enabled, false)
+  assert.equal(maintPrefs.every((p: any) => p.mandatory === false), true)
+
+  const noticePrefs = prefsRes.preferences.filter((p: any) => p.event_type === 'NOTICE_PUBLISHED')
+  assert.equal(noticePrefs.length, 4)
+  assert.equal(noticePrefs.every((p: any) => p.enabled === true && p.mandatory === false), true)
+
+  // 3. PUT /notifications/preferences bounds validation (1..48)
+  const excessiveChanges = Array.from({ length: 49 }, (_, i) => ({
+    event_type: 'NOTICE_PUBLISHED',
+    channel: 'in_app',
+    enabled: true,
+  }))
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/notifications/preferences', {
+        method: 'PUT',
+        actingUserId: residentId,
+        body: { preferences: excessiveChanges },
+      }),
+    (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+  )
+
+  // Valid preference update
+  const updatedPrefs = await resolveOfflineDemoRequest('/notifications/preferences', {
+    method: 'PUT',
+    actingUserId: residentId,
+    body: {
+      preferences: [
+        { event_type: 'NOTICE_PUBLISHED', channel: 'in_app', enabled: false },
+        { event_type: 'MAINTENANCE_DUE', channel: 'in_app', enabled: false },
+      ],
+    },
+  })
+  const updatedNoticeInApp = updatedPrefs.preferences.find(
+    (p: any) => p.event_type === 'NOTICE_PUBLISHED' && p.channel === 'in_app',
+  )
+  assert.equal(updatedNoticeInApp.enabled, false)
+
+  // Re-enable in_app preference for resident
+  await resolveOfflineDemoRequest('/notifications/preferences', {
+    method: 'PUT',
+    actingUserId: residentId,
+    body: {
+      preferences: [
+        { event_type: 'NOTICE_PUBLISHED', channel: 'in_app', enabled: true },
+      ],
+    },
+  })
+
+  // 4. Publishing an OFFICIAL_NOTICE generates NOTICE_PUBLISHED for target residents and board, not author
+  const createdNotice = await resolveOfflineDemoRequest('/communication/posts', {
+    method: 'POST',
+    actingUserId: chairmanId,
+    body: {
+      post_type: 'OFFICIAL_NOTICE',
+      category: 'GENERAL',
+      title: 'Water Pipe Maintenance Notice',
+      body: 'Water will be shut off for two hours tomorrow.',
+      target_scope: 'ALL_BUILDING',
+    },
+  })
+  assert.ok(createdNotice.id)
+
+  const residentFeedAfter = await resolveOfflineDemoRequest('/notifications/feed', {
+    method: 'GET',
+    actingUserId: residentId,
+  })
+  const receivedNotice = residentFeedAfter.find(
+    (n: any) => n.event_type === 'NOTICE_PUBLISHED' && n.subject_id === createdNotice.id,
+  )
+  assert.ok(receivedNotice, 'Target resident received NOTICE_PUBLISHED')
+  assert.deepEqual(receivedNotice.params, {})
+
+  const authorFeedAfter = await resolveOfflineDemoRequest('/notifications/feed', {
+    method: 'GET',
+    actingUserId: chairmanId,
+  })
+  const authorNotice = authorFeedAfter.find(
+    (n: any) => n.event_type === 'NOTICE_PUBLISHED' && n.subject_id === createdNotice.id,
+  )
+  assert.equal(authorNotice, undefined, 'Author does not receive own NOTICE_PUBLISHED')
+
+  disableOfflineDemo()
+})
+
+

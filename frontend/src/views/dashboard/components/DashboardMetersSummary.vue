@@ -18,6 +18,10 @@ const props = defineProps({
     type: Number,
     default: 4,
   },
+  openIssuesCount: {
+    type: Number,
+    default: 0,
+  },
 })
 
 const router = useRouter()
@@ -127,7 +131,7 @@ const periodName = computed(() =>
       </div>
     </div>
 
-    <!-- 2. Maintenance & Work Orders -->
+    <!-- 2. Maintenance & Work Orders (Active building repairs / issues) -->
     <div class="bg-surface-container-lowest rounded-xl p-space-md shadow-xs border border-surface-container flex flex-col justify-between group hover:shadow-md transition-shadow">
       <div class="flex items-start justify-between">
         <div class="flex flex-col">
@@ -135,9 +139,11 @@ const periodName = computed(() =>
             {{ session.t('dashboard.summary.maintenance') }}
           </span>
           <div class="flex items-baseline gap-2 mt-1">
-            <span class="font-headline-lg text-headline-lg font-bold text-on-surface font-numeric-display">1</span>
+            <span class="font-headline-lg text-headline-lg font-bold text-on-surface font-numeric-display">
+              {{ openIssuesCount }}
+            </span>
             <span class="font-label-md text-label-md text-on-surface-variant">
-              {{ session.t('dashboard.summary.activeOrder') }}
+              {{ session.t('dashboard.summary.activeRepairs') }}
             </span>
           </div>
         </div>
@@ -147,17 +153,29 @@ const periodName = computed(() =>
       </div>
       <div class="mt-space-sm">
         <p class="font-body-sm text-body-sm text-on-surface line-clamp-1 font-medium">
-          {{ session.t('dashboard.summary.elevatorInspection') }}
+          {{
+            openIssuesCount > 0
+              ? session.t('dashboard.summary.inProgressRepairs', { count: openIssuesCount })
+              : session.t('dashboard.summary.elevatorInspection')
+          }}
         </p>
       </div>
       <div class="mt-space-sm pt-space-xs flex items-center justify-between">
         <button
           type="button"
-          class="font-label-md text-label-md text-primary font-semibold hover:underline flex items-center gap-1"
-          @click="router.push('/forum')"
+          class="font-label-md text-label-md text-primary font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+          @click="router.push(openIssuesCount > 0 ? '/issues' : { path: '/issues', query: { report: '1' } })"
         >
-          <span>{{ session.t('dashboard.summary.reportNewIssue') }}</span>
-          <span class="material-symbols-outlined text-[14px]">add</span>
+          <span>
+            {{
+              openIssuesCount > 0
+                ? session.t('dashboard.summary.viewIssues')
+                : session.t('dashboard.summary.reportNewIssue')
+            }}
+          </span>
+          <span class="material-symbols-outlined text-[14px]">
+            {{ openIssuesCount > 0 ? 'arrow_forward' : 'add' }}
+          </span>
         </button>
       </div>
     </div>

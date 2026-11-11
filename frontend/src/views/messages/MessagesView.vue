@@ -2,12 +2,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
-import { createApartmentThread, listApartmentThreads } from '@/api/endpoints/communication.js'
+import { createApartmentThread, listApartmentThreads, getPost } from '@/api/endpoints/communication.js'
 import { listApartments } from '@/api/endpoints/property.js'
 import { formatDateTime, formatRelativeTime } from '@/utils/dates.js'
 import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import CommentList from '@/views/forum/components/CommentList.vue'
+import CommentComposer from '@/views/forum/components/CommentComposer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,6 +19,12 @@ const threads = ref([])
 const loading = ref(false)
 const loadError = ref(null)
 const apartmentsMap = ref({})
+
+// Desktop Split-View & Search
+const searchQuery = ref('')
+const selectedThreadId = ref('')
+const selectedThreadDetail = ref(null)
+const loadingThread = ref(false)
 
 const isBoardOrChairman = computed(() =>
   ['CHAIRMAN', 'BOARD'].includes(session.me?.building_role || ''),
@@ -73,6 +81,54 @@ function resolveThreadApartmentLabel(thread) {
   return session.t('messages.apartmentThreadBadge')
 }
 
+const filteredThreads = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return threads.value
+  return threads.value.filter((t) => {
+    const title = String(t.title || '').toLowerCase()
+    const body = String(t.body || '').toLowerCase()
+    const apt = String(resolveThreadApartmentLabel(t) || '').toLowerCase()
+    return title.includes(q) || body.includes(q) || apt.includes(q)
+  })
+})
+
+async function loadThreadDetail(id) {
+  if (!id) {
+    selectedThreadDetail.value = null
+    return
+  }
+  loadingThread.value = true
+  try {
+    selectedThreadDetail.value = await getPost(id)
+  } catch {
+    selectedThreadDetail.value = null
+  } finally {
+    loadingThread.value = false
+  }
+}
+
+async function selectThread(thread) {
+  if (!thread?.id) return
+  if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+    router.push({ name: 'message-thread', params: { postId: thread.id } })
+    return
+  }
+  selectedThreadId.value = thread.id
+  router.replace({ query: { ...route.query, thread: thread.id } }).catch(() => {})
+  await loadThreadDetail(thread.id)
+}
+
+async function onCommentAdded() {
+  if (selectedThreadId.value) {
+    await loadThreadDetail(selectedThreadId.value)
+    const found = threads.value.find((t) => t.id === selectedThreadId.value)
+    if (found) {
+      found.comments_count = (found.comments_count || 0) + 1
+      found.last_activity_at = new Date().toISOString()
+    }
+  }
+}
+
 let fetchInboxSeq = 0
 
 async function fetchInbox() {
@@ -106,6 +162,21 @@ async function fetchInbox() {
       }
     }
     apartmentsMap.value = nextMap
+
+    // Auto-select thread on desktop or from query param
+    const requestedThreadId = route.query.thread
+    if (requestedThreadId && threads.value.some((t) => t.id === requestedThreadId)) {
+      selectedThreadId.value = requestedThreadId
+      loadThreadDetail(requestedThreadId)
+    } else if (
+      typeof window !== 'undefined' &&
+      window.innerWidth >= 1024 &&
+      threads.value.length > 0 &&
+      !selectedThreadId.value
+    ) {
+      selectedThreadId.value = threads.value[0].id
+      loadThreadDetail(threads.value[0].id)
+    }
   } catch (err) {
     if (seq !== fetchInboxSeq) return
     loadError.value = err
@@ -166,6 +237,16 @@ watch(
   (val) => {
     if (val === '1') {
       showComposer.value = true
+    }
+  },
+)
+
+watch(
+  () => route.query.thread,
+  (newId) => {
+    if (newId && newId !== selectedThreadId.value) {
+      selectedThreadId.value = newId
+      loadThreadDetail(newId)
     }
   },
 )
@@ -390,56 +471,186 @@ watch(
         </p>
       </div>
 
-      <!-- Inbox List (sorted as API returns it: newest last_activity_at first) -->
-      <div v-else class="space-y-3">
-        <RouterLink
-          v-for="thread in threads"
-          :key="thread.id"
-          :to="{ name: 'message-thread', params: { postId: thread.id } }"
-          class="group block bg-surface-container-lowest border border-surface-container hover:border-primary/50 rounded-2xl p-space-md transition-all shadow-xs hover:shadow-md"
-        >
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-            <div class="flex flex-wrap items-center gap-2">
-              <!-- Apartment Badge ("Apt. 14") -->
-              <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-primary-container text-on-primary text-xs font-mono font-bold">
-                <span class="material-symbols-outlined text-[14px]">door_front</span>
-                <span>{{ resolveThreadApartmentLabel(thread) }}</span>
-              </span>
-
-              <!-- Subject -->
-              <h2 class="font-title-md text-title-md font-bold text-on-surface group-hover:text-primary transition-colors">
-                {{ thread.title }}
-              </h2>
-            </div>
-
-            <!-- Last activity timestamp -->
-            <div class="flex items-center gap-2 text-xs text-on-surface-variant shrink-0">
-              <span class="font-medium">
-                {{ session.t('messages.lastActivityLabel') }}:
-                {{ formatRelativeTime(thread.last_activity_at || thread.created_at, session.lang) }}
-              </span>
-              <span class="hidden md:inline font-mono text-[11px] opacity-75">
-                ({{ formatDateTime(thread.last_activity_at || thread.created_at, session.lang) }})
-              </span>
-            </div>
+      <!-- 12-Col Split-View Layout for Messages (5 cols inbox list / 7 cols reader & discussion pane) -->
+      <div v-else class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <!-- Left Column: Search & Threads List (5 cols on lg) -->
+        <div class="lg:col-span-5 space-y-3">
+          <!-- Search Bar & Heading -->
+          <div class="flex items-center justify-between gap-2 px-1">
+            <span class="text-xs font-bold uppercase tracking-wider text-on-surface-variant">
+              {{ session.t('messages.inboxHeading') }} ({{ filteredThreads.length }})
+            </span>
           </div>
 
-          <p class="text-xs sm:text-sm text-on-surface-variant line-clamp-2 mb-3">
-            {{ thread.body }}
-          </p>
-
-          <div class="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-surface-container">
-            <AuthorBadge
-              v-if="thread.author_badge"
-              :badge="thread.author_badge"
-              :is-mine="thread.is_mine"
+          <div class="relative">
+            <span class="material-symbols-outlined text-[18px] text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2">
+              search
+            </span>
+            <input
+              v-model="searchQuery"
+              type="search"
+              :placeholder="session.t('messages.searchPlaceholder')"
+              class="w-full rounded-xl border border-surface-container-high bg-surface-container-low pl-9 pr-3 py-2 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary transition-all"
             />
-            <div class="inline-flex items-center gap-1.5 text-xs text-on-surface-variant font-medium">
-              <span class="material-symbols-outlined text-[16px]">chat_bubble</span>
-              <span>{{ session.t('messages.repliesCount', { count: thread.comments_count || 0 }) }}</span>
+          </div>
+
+          <!-- Empty search results -->
+          <div
+            v-if="filteredThreads.length === 0"
+            class="p-6 rounded-2xl border border-surface-container bg-surface-container-lowest text-center text-xs text-on-surface-variant"
+          >
+            {{ session.t('common.noMatchingResults') || 'No messages match your search.' }}
+          </div>
+
+          <!-- Thread Items -->
+          <div
+            v-for="thread in filteredThreads"
+            :key="thread.id"
+            :data-testid="`message-thread-item-${thread.id}`"
+            class="group block bg-surface-container-lowest border rounded-2xl p-3.5 transition-all shadow-xs cursor-pointer"
+            :class="
+              selectedThreadId === thread.id
+                ? 'border-primary ring-2 ring-primary/20 shadow-xs bg-surface-container-lowest'
+                : 'border-surface-container hover:border-primary/50 hover:bg-surface-container-low/40'
+            "
+            @click="selectThread(thread)"
+          >
+            <div class="flex items-start justify-between gap-2 mb-1.5">
+              <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+                <!-- Apartment Badge -->
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary-container text-on-primary text-[11px] font-mono font-bold shrink-0">
+                  <span class="material-symbols-outlined text-[13px]">door_front</span>
+                  <span>{{ resolveThreadApartmentLabel(thread) }}</span>
+                </span>
+                <h3 class="text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">
+                  {{ thread.title }}
+                </h3>
+              </div>
+
+              <!-- Open in standalone page button -->
+              <RouterLink
+                :to="{ name: 'message-thread', params: { postId: thread.id } }"
+                class="p-1 rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container transition-colors shrink-0"
+                :title="session.t('forum.fullThreadBtn')"
+                @click.stop
+              >
+                <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+              </RouterLink>
+            </div>
+
+            <p class="text-xs text-on-surface-variant line-clamp-2 mb-2.5">
+              {{ thread.body }}
+            </p>
+
+            <div class="flex items-center justify-between gap-2 pt-2 border-t border-surface-container text-xs">
+              <AuthorBadge
+                v-if="thread.author_badge"
+                :badge="thread.author_badge"
+                :is-mine="thread.is_mine"
+              />
+              <div class="flex items-center gap-2 text-on-surface-variant shrink-0">
+                <span class="text-[11px]">
+                  {{ formatRelativeTime(thread.last_activity_at || thread.created_at, session.lang) }}
+                </span>
+                <span class="inline-flex items-center gap-0.5 text-[11px] font-mono">
+                  <span class="material-symbols-outlined text-[13px]">chat_bubble</span>
+                  <span>{{ thread.comments_count || 0 }}</span>
+                </span>
+              </div>
             </div>
           </div>
-        </RouterLink>
+        </div>
+
+        <!-- Right Column: Reader Pane (7 cols on lg, hidden on mobile since mobile navigates to thread page) -->
+        <aside class="hidden lg:block lg:col-span-7 lg:sticky lg:top-20 space-y-4">
+          <!-- Loading thread -->
+          <div
+            v-if="loadingThread"
+            class="p-8 rounded-2xl border border-surface-container bg-surface-container-lowest text-center text-sm text-on-surface-variant"
+          >
+            {{ session.t('messages.loadingThread') }}
+          </div>
+
+          <!-- Thread reader detail -->
+          <article
+            v-else-if="selectedThreadDetail"
+            class="bg-surface-container-lowest border border-surface-container rounded-2xl p-5 space-y-5 shadow-xs"
+          >
+            <div class="flex items-start justify-between gap-3 border-b border-surface-container pb-3.5">
+              <div class="space-y-1.5 min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-primary-container text-on-primary text-xs font-mono font-bold">
+                    <span class="material-symbols-outlined text-[14px]">door_front</span>
+                    <span>{{ resolveThreadApartmentLabel(selectedThreadDetail) }}</span>
+                  </span>
+                  <RouterLink
+                    v-if="isBoardOrChairman && selectedThreadDetail?.target_apartment_ids?.[0]"
+                    :to="{ name: 'apartment-card', params: { apartmentId: selectedThreadDetail.target_apartment_ids[0] } }"
+                    class="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                  >
+                    <span class="material-symbols-outlined text-[14px]">apartment</span>
+                    <span>{{ session.t('apartments.openCard') }}</span>
+                  </RouterLink>
+                </div>
+
+                <h2 class="text-lg font-bold text-on-surface">
+                  {{ selectedThreadDetail.title }}
+                </h2>
+
+                <div class="flex items-center gap-2 text-xs text-on-surface-variant">
+                  <AuthorBadge
+                    v-if="selectedThreadDetail.author_badge"
+                    :badge="selectedThreadDetail.author_badge"
+                    :is-mine="selectedThreadDetail.is_mine"
+                  />
+                  <span>·</span>
+                  <span>{{ formatDateTime(selectedThreadDetail.created_at, session.lang) }}</span>
+                </div>
+              </div>
+
+              <RouterLink
+                :to="{ name: 'message-thread', params: { postId: selectedThreadDetail.id } }"
+                class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low hover:bg-surface-container text-xs font-semibold text-on-surface transition-colors shrink-0"
+              >
+                <span>{{ session.t('forum.fullThreadBtn') }}</span>
+                <span class="material-symbols-outlined text-[15px]">open_in_new</span>
+              </RouterLink>
+            </div>
+
+            <div class="text-sm text-on-surface whitespace-pre-line leading-relaxed">
+              {{ selectedThreadDetail.body }}
+            </div>
+
+            <!-- Replies & Comment Composer -->
+            <div class="pt-4 border-t border-surface-container space-y-4">
+              <h3 class="text-xs font-bold uppercase tracking-wider text-on-surface-variant">
+                {{ session.t('messages.repliesHeading') }} ({{ selectedThreadDetail.comments?.length ?? 0 }})
+              </h3>
+
+              <CommentList :comments="selectedThreadDetail.comments || []" />
+
+              <CommentComposer
+                :post-id="selectedThreadDetail.id"
+                :disabled="false"
+                :omit-author-apartment="true"
+                @added="onCommentAdded"
+              />
+            </div>
+          </article>
+
+          <!-- Prompt when no thread selected -->
+          <div
+            v-else
+            class="p-10 rounded-2xl border border-dashed border-surface-container-high bg-surface-container-lowest/60 text-center space-y-3"
+          >
+            <div class="w-12 h-12 rounded-full bg-surface-container text-on-surface-variant flex items-center justify-center mx-auto">
+              <span class="material-symbols-outlined text-[24px]">chat</span>
+            </div>
+            <p class="text-xs text-on-surface-variant max-w-xs mx-auto">
+              {{ session.t('messages.selectThreadPrompt') }}
+            </p>
+          </div>
+        </aside>
       </div>
     </template>
   </div>

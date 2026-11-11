@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { bellEnabled, setUnread, unread } from '@/composables/useUnreadCount.js'
 import { getFeed, markAllRead, markRead } from '@/api/endpoints/notifications.js'
+import { getMaintenanceTask } from '@/api/endpoints/maintenance.js'
 import { buildNotificationDescriptor, formatNotificationText } from '@/utils/notificationText.js'
 import { formatDateTime, formatRelativeTime } from '@/utils/dates.js'
 
@@ -16,6 +17,25 @@ const items = ref([])
 const loading = ref(false)
 const markingAll = ref(false)
 const rootRef = ref(null)
+const taskTitles = ref({})
+
+function resolveMaintenanceTitles(batch) {
+  for (const item of batch) {
+    if (item.event_type === 'MAINTENANCE_DUE' && item.subject_id) {
+      const id = item.subject_id
+      if (taskTitles.value[id] === undefined) {
+        taskTitles.value[id] = null
+        getMaintenanceTask(id)
+          .then((task) => {
+            taskTitles.value[id] = task?.title || ''
+          })
+          .catch(() => {
+            taskTitles.value[id] = ''
+          })
+      }
+    }
+  }
+}
 
 const badgeLabel = computed(() => {
   if (unread.value <= 0) return ''
@@ -28,6 +48,7 @@ async function loadLatest() {
   try {
     const res = await getFeed({ unreadOnly: false, limit: 10, offset: 0 })
     items.value = Array.isArray(res) ? res : []
+    resolveMaintenanceTitles(items.value)
   } catch (err) {
     if (err?.status === 404) {
       bellEnabled.value = false
@@ -97,8 +118,13 @@ function goToSettings() {
 }
 
 function getItemUi(item) {
-  const desc = buildNotificationDescriptor(item, session.lang)
-  const text = formatNotificationText(item, session.t, session.lang)
+  const title = taskTitles.value[item.subject_id]
+  const effectiveItem =
+    item.event_type === 'MAINTENANCE_DUE' && title
+      ? { ...item, params: { ...item.params, title } }
+      : item
+  const desc = buildNotificationDescriptor(effectiveItem, session.lang)
+  const text = formatNotificationText(effectiveItem, session.t, session.lang)
   let iconBg = 'bg-surface-container text-on-surface-variant'
   if (desc.variant === 'emergency') {
     iconBg = 'bg-error-container text-error'

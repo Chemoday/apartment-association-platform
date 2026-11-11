@@ -253,6 +253,58 @@ export const APP_ROUTES = [
     },
   },
   {
+    path: '/maintenance',
+    name: 'maintenance',
+    component: () => import('@/views/maintenance/MaintenanceView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['BOARD', 'CHAIRMAN'],
+      navKey: 'maintenance',
+      navGroup: 'management',
+      icon: 'event_repeat',
+    },
+  },
+  {
+    path: '/maintenance/new',
+    name: 'maintenance-new',
+    component: () => import('@/views/maintenance/MaintenanceTaskEditorView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['BOARD', 'CHAIRMAN'],
+    },
+  },
+  {
+    path: '/maintenance/:taskId/edit',
+    name: 'maintenance-edit',
+    component: () => import('@/views/maintenance/MaintenanceTaskEditorView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['BOARD', 'CHAIRMAN'],
+    },
+  },
+  {
+    path: '/maintenance/log',
+    name: 'maintenance-log',
+    component: () => import('@/views/maintenance/MaintenanceLogView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
+      navRoles: ['ACCOUNTANT'],
+      navKey: 'maintenanceLog',
+      navGroup: 'management',
+      icon: 'history_edu',
+    },
+  },
+  {
+    path: '/maintenance/:taskId',
+    name: 'maintenance-detail',
+    component: () => import('@/views/maintenance/MaintenanceTaskView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['BOARD', 'CHAIRMAN'],
+    },
+  },
+  {
     path: '/settings/association',
     name: 'settings-association',
     component: () => import('@/views/settings/AssociationSettingsView.vue'),

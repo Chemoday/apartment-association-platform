@@ -3,6 +3,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { formatDate } from '@/utils/dates.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
+import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 
 defineProps({
@@ -43,6 +44,10 @@ const session = useSessionStore()
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-xs mb-space-xs">
           <div class="flex items-center gap-2 flex-wrap">
             <AuthorBadge :badge="notice.author_badge" :is-mine="notice.is_mine" />
+            <PostOriginBadge
+              :origin="notice.origin"
+              post-type="OFFICIAL_NOTICE"
+            />
             <span class="text-xs text-on-surface-variant">•</span>
             <span class="font-label-md text-label-md text-on-surface-variant">
               {{ formatDate(notice.created_at, session.lang) }}

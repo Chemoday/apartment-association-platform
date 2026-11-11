@@ -10,14 +10,17 @@ import type {
   MatrixApartment,
   MembershipView,
   MeterUnit,
+  NotificationEventType,
   PeriodDTO,
   PeriodStatus,
   PostCategory,
+  PostOrigin,
   PostType,
   ReadingSource,
   ReadingSummary,
   ResourceType,
   SettingView,
+  SubjectType,
   SubmissionStatus,
   TargetScope,
 } from '../api/schema';
@@ -40,6 +43,21 @@ import {
   updateIssueFollowInStore,
   withdrawIssueInStore,
 } from '../utils/issues.js';
+import {
+  applyLogEditInStore,
+  applyTaskDoneInStore,
+  applyTaskSkipInStore,
+  computeOccurrenceState,
+  createDefaultMaintenanceLogSeed,
+  createDefaultMaintenanceSeed,
+  getTodayDateInTallinn,
+  maxAllowedLeadDays,
+  publishMaintenanceTasksInStore,
+  queryMaintenanceLogStore,
+  queryTasksStore,
+  toTaskView,
+  validateTaskDraft,
+} from '../utils/maintenance.js';
 
 const BUILDING_ID = '018f0000-0000-7000-8000-000000000001';
 
@@ -611,6 +629,7 @@ interface InternalPost {
   created_at: string;
   acknowledged_by: Record<string, string>;
   comments: InternalComment[];
+  origin?: PostOrigin | null;
 }
 
 const postsStore: InternalPost[] = [
@@ -760,6 +779,51 @@ const postsStore: InternalPost[] = [
       },
     ],
   },
+  {
+    id: '018f0000-0000-7000-8000-000000000604',
+    post_type: 'OFFICIAL_NOTICE',
+    origin: 'MAINTENANCE',
+    category: 'MAINTENANCE',
+    title: 'Annual Fire Extinguisher Inspection',
+    body: 'Inspector will check all stairwell and common area fire safety equipment. No access to individual flats needed.\n\nPlanned date: 2026-11-05',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_apartment_id: '018f0000-0000-7000-8000-000000000301',
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: false,
+    created_at: '2026-10-25T09:00:00Z',
+    acknowledged_by: {},
+    comments: [],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000763',
+    post_type: 'BOARD_TOPIC',
+    origin: 'MAINTENANCE',
+    category: 'MAINTENANCE',
+    title: 'Maintenance: Inspect fire extinguishers, overdue since 05.11.2026',
+    body: 'Basement, technical rooms, and all 4 landings in both entrances. Certified technician needed.',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_apartment_id: null,
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-25T09:00:00Z',
+    acknowledged_by: {},
+    comments: [
+      {
+        id: '018f0000-0000-7000-8000-000000000764',
+        post_id: '018f0000-0000-7000-8000-000000000763',
+        body: 'Still not done: overdue since 05.11.2026 (reminder 1)',
+        author_user_id: '018f0000-0000-7000-8000-000000000101',
+        author_apartment_id: null,
+        created_at: '2026-11-06T09:00:00Z',
+      },
+    ],
+  },
 ];
 
 const userLocales: Record<string, 'et' | 'ru' | 'en' | null> = {};
@@ -767,18 +831,8 @@ const userLocales: Record<string, 'et' | 'ru' | 'en' | null> = {};
 interface MockNotification {
   id: string;
   user_id: string;
-  event_type:
-    | 'EMERGENCY_PUBLISHED'
-    | 'EMERGENCY_RESOLVED'
-    | 'READING_DEADLINE'
-    | 'PERIOD_REVIEW'
-    | 'APARTMENT_MESSAGE'
-    | 'APARTMENT_MESSAGE_TO_BOARD'
-    | 'POLL_OPENED'
-    | 'ISSUE_REPORTED'
-    | 'ISSUE_URGENT'
-    | 'ISSUE_STATUS_CHANGED';
-  subject_type: 'post' | 'period' | 'poll' | 'issue';
+  event_type: NotificationEventType;
+  subject_type: SubjectType;
   subject_id: string;
   params: Record<string, unknown>;
   created_at: string;
@@ -929,17 +983,7 @@ function getUserNotifications(userId: string): MockNotification[] {
 }
 
 interface MockPreference {
-  event_type:
-    | 'EMERGENCY_PUBLISHED'
-    | 'EMERGENCY_RESOLVED'
-    | 'READING_DEADLINE'
-    | 'PERIOD_REVIEW'
-    | 'APARTMENT_MESSAGE'
-    | 'APARTMENT_MESSAGE_TO_BOARD'
-    | 'POLL_OPENED'
-    | 'ISSUE_REPORTED'
-    | 'ISSUE_URGENT'
-    | 'ISSUE_STATUS_CHANGED';
+  event_type: NotificationEventType;
   channel: 'in_app' | 'email' | 'telegram' | 'webpush';
   enabled: boolean;
   mandatory: boolean;
@@ -956,6 +1000,8 @@ const EVENT_TYPES: Array<MockPreference['event_type']> = [
   'ISSUE_REPORTED',
   'ISSUE_URGENT',
   'ISSUE_STATUS_CHANGED',
+  'MAINTENANCE_DUE',
+  'NOTICE_PUBLISHED',
 ];
 const CHANNELS: Array<'in_app' | 'email' | 'telegram' | 'webpush'> = [
   'in_app',
@@ -973,7 +1019,9 @@ function getUserPreferences(userId: string): MockPreference[] {
       for (const ch of CHANNELS) {
         const mandatory = ev === 'EMERGENCY_PUBLISHED' || ev === 'ISSUE_URGENT';
         const enabled =
-          ev === 'APARTMENT_MESSAGE_TO_BOARD' || ev === 'ISSUE_REPORTED'
+          ev === 'APARTMENT_MESSAGE_TO_BOARD' ||
+          ev === 'ISSUE_REPORTED' ||
+          ev === 'MAINTENANCE_DUE'
             ? ch === 'in_app'
             : true;
         list.push({
@@ -987,6 +1035,70 @@ function getUserPreferences(userId: string): MockPreference[] {
     preferencesByUser[userId] = list;
   }
   return preferencesByUser[userId];
+}
+
+function getServerNoticeRecipientUserIds(
+  notice: { target_scope?: string | null; target_entrance?: number | null; target_apartment_ids?: string[] | null },
+  authorUserId?: string | null
+): string[] {
+  const recipients = new Set(['018f0000-0000-7000-8000-000000000101', '018f0000-0000-7000-8000-000000000105']);
+  const userApts = [
+    { userId: '018f0000-0000-7000-8000-000000000101', entrance: 1, aptId: '018f0000-0000-7000-8000-000000000301' },
+    { userId: '018f0000-0000-7000-8000-000000000105', entrance: 1, aptId: '018f0000-0000-7000-8000-000000000302' },
+    { userId: '018f0000-0000-7000-8000-000000000104', entrance: 1, aptId: '018f0000-0000-7000-8000-000000000302' },
+    { userId: '018f0000-0000-7000-8000-000000000102', entrance: 2, aptId: '018f0000-0000-7000-8000-000000000314' },
+  ];
+  for (const u of userApts) {
+    if (!notice.target_scope || notice.target_scope === 'ALL_BUILDING') {
+      recipients.add(u.userId);
+    } else if (notice.target_scope === 'ENTRANCE' && Number(notice.target_entrance) === u.entrance) {
+      recipients.add(u.userId);
+    } else if (
+      notice.target_scope === 'APARTMENT_LIST' &&
+      Array.isArray(notice.target_apartment_ids) &&
+      notice.target_apartment_ids.includes(u.aptId)
+    ) {
+      recipients.add(u.userId);
+    }
+  }
+  if (authorUserId) {
+    recipients.delete(authorUserId);
+  }
+  return Array.from(recipients);
+}
+
+function dispatchServerMaintenanceAndNoticeNotifications(notif: {
+  event_type: MockNotification['event_type'];
+  subject_type: MockNotification['subject_type'];
+  subject_id: string;
+  params?: any;
+  target_scope?: string | null;
+  target_entrance?: number | null;
+  target_apartment_ids?: string[] | null;
+  author_user_id?: string | null;
+  created_at?: string;
+}) {
+  if (notif.event_type === 'MAINTENANCE_DUE') {
+    const recipientUserIds = ['018f0000-0000-7000-8000-000000000101', '018f0000-0000-7000-8000-000000000105'];
+    emitServerIssueNotificationBatch({
+      recipientUserIds,
+      event_type: 'MAINTENANCE_DUE',
+      subject_type: 'maintenance_task',
+      subject_id: notif.subject_id,
+      params: notif.params || {},
+      created_at: notif.created_at || new Date().toISOString(),
+    });
+  } else if (notif.event_type === 'NOTICE_PUBLISHED') {
+    const recipientUserIds = getServerNoticeRecipientUserIds(notif, notif.author_user_id);
+    emitServerIssueNotificationBatch({
+      recipientUserIds,
+      event_type: 'NOTICE_PUBLISHED',
+      subject_type: 'post',
+      subject_id: notif.subject_id,
+      params: {},
+      created_at: notif.created_at || new Date().toISOString(),
+    });
+  }
 }
 
 function emitServerIssueNotificationBatch(batch: {
@@ -3725,6 +3837,7 @@ export function createApiMiddleware() {
         created_at: p.created_at,
         last_activity_at:
           p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
+        origin: p.origin || null,
       }));
       return sendJson(res, 200, paged);
     }
@@ -3844,6 +3957,19 @@ export function createApiMiddleware() {
       };
       postsStore.unshift(created);
 
+      if (postType === 'OFFICIAL_NOTICE') {
+        dispatchServerMaintenanceAndNoticeNotifications({
+          event_type: 'NOTICE_PUBLISHED',
+          subject_type: 'post',
+          subject_id: created.id,
+          target_scope: created.target_scope,
+          target_entrance: created.target_entrance,
+          target_apartment_ids: created.target_apartment_ids,
+          author_user_id: user.user_id,
+          created_at: created.created_at,
+        });
+      }
+
       // If an emergency is published, notify all other demo users (author never gets own alert)
       if (postType === 'EMERGENCY') {
         for (const demoUser of DEMO_USERS) {
@@ -3940,6 +4066,7 @@ export function createApiMiddleware() {
           post.comments.length > 0
             ? post.comments[post.comments.length - 1].created_at
             : post.created_at,
+        origin: post.origin || null,
         comments: post.comments.map((c) => ({
           id: c.id,
           post_id: post.id,
@@ -5135,12 +5262,12 @@ export function createApiMiddleware() {
     if (pathname === '/api/v1/notifications/preferences' && method === 'PUT') {
       const body = await readBody(req);
       const changes = Array.isArray(body.preferences) ? body.preferences : [];
-      if (changes.length < 1 || changes.length > 40) {
+      if (changes.length < 1 || changes.length > 48) {
         return sendError(
           res,
           422,
           'VALIDATION_ERROR',
-          'Provide between 1 and 40 preference changes.'
+          'Provide between 1 and 48 preference changes.'
         );
       }
       const prefs = getUserPreferences(user.user_id);
@@ -5796,12 +5923,362 @@ export function createApiMiddleware() {
       }
     }
 
+    // =========================================================================
+    // Maintenance Calendar (/api/v1/maintenance) - #015 (E10/M1)
+    // =========================================================================
+    if (pathname === '/api/v1/maintenance/tasks' || pathname.startsWith('/api/v1/maintenance/tasks/')) {
+      if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only the chairman and board members can access maintenance tasks.');
+      }
+
+      const today = getTodayDateInTallinn();
+
+      // GET /api/v1/maintenance/tasks
+      if (pathname === '/api/v1/maintenance/tasks' && method === 'GET') {
+        const overdueReminderDays = Number(
+          readSettingFromStore(associationSettingsStore, 'maintenance.overdue_reminder_days', 7)
+        );
+        publishMaintenanceTasksInStore({
+          tasksStore: maintenanceStore,
+          postsStore,
+          today,
+          overdueReminderDays,
+          onNotification: dispatchServerMaintenanceAndNoticeNotifications,
+        });
+
+        const statusParam = (urlObj.searchParams.get('status') as string) || undefined;
+        const stateParam = (urlObj.searchParams.get('state') as string) || undefined;
+        const limitParam = urlObj.searchParams.get('limit') ? Number(urlObj.searchParams.get('limit')) : 50;
+        const offsetParam = urlObj.searchParams.get('offset') ? Number(urlObj.searchParams.get('offset')) : 0;
+
+        const list = queryTasksStore(
+          maintenanceStore,
+          { status: statusParam, state: stateParam, limit: limitParam, offset: offsetParam },
+          today
+        );
+        return sendJson(res, 200, list);
+      }
+
+      // POST /api/v1/maintenance/tasks
+      if (pathname === '/api/v1/maintenance/tasks' && method === 'POST') {
+        const body = await readBody(req);
+        const validated = validateTaskDraft(body, { today });
+        if (!validated.valid) {
+          return sendError(res, 422, 'VALIDATION_ERROR', 'Validation failed for maintenance task.', {
+            errors: validated.errors,
+          });
+        }
+
+        const p = validated.payload;
+        const taskId = `task-${Date.now()}`;
+        const occId = `occ-${Date.now()}`;
+        const lead = p.lead_days;
+        const dueDate = p.first_due_date;
+        const occState = computeOccurrenceState(dueDate, lead, 'ACTIVE', today);
+
+        const newTask: any = {
+          id: taskId,
+          title: p.title,
+          instructions: p.instructions || '',
+          period_unit: p.period_unit,
+          period_count: p.period_count,
+          lead_days: lead,
+          anchor_date: dueDate,
+          status: 'ACTIVE',
+          notice: p.notice,
+          current: {
+            occurrence_id: occId,
+            due_date: dueDate,
+            publish_on: occState.publish_on,
+            state: occState.state,
+            published_at: null,
+            board_post_id: null,
+            notice_post_id: null,
+            notice_failed: false,
+            reminder_count: 0,
+          },
+          last_closed_on: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          archived_at: null,
+        };
+
+        maintenanceStore.push(newTask);
+        return sendJson(res, 201, toTaskView(newTask, today));
+      }
+
+      // POST /api/v1/maintenance/tasks/:taskId/pause
+      const pauseMatch = pathname.match(/^\/api\/v1\/maintenance\/tasks\/([^/]+)\/pause$/);
+      if (pauseMatch && method === 'POST') {
+        const taskId = pauseMatch[1];
+        const found = maintenanceStore.find((t) => t.id === taskId);
+        if (!found) {
+          return sendError(res, 404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.');
+        }
+        if (found.status === 'ARCHIVED') {
+          return sendError(res, 409, 'TASK_ARCHIVED', 'Task is archived.');
+        }
+        if (found.status !== 'ACTIVE') {
+          return sendError(res, 409, 'INVALID_TASK_TRANSITION', 'Task must be ACTIVE to pause.', {
+            status: found.status,
+          });
+        }
+        found.status = 'PAUSED';
+        found.updated_at = new Date().toISOString();
+        return sendJson(res, 200, toTaskView(found, today));
+      }
+
+      // POST /api/v1/maintenance/tasks/:taskId/resume
+      const resumeMatch = pathname.match(/^\/api\/v1\/maintenance\/tasks\/([^/]+)\/resume$/);
+      if (resumeMatch && method === 'POST') {
+        const taskId = resumeMatch[1];
+        const found = maintenanceStore.find((t) => t.id === taskId);
+        if (!found) {
+          return sendError(res, 404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.');
+        }
+        if (found.status === 'ARCHIVED') {
+          return sendError(res, 409, 'TASK_ARCHIVED', 'Task is archived.');
+        }
+        if (found.status !== 'PAUSED') {
+          return sendError(res, 409, 'INVALID_TASK_TRANSITION', 'Task must be PAUSED to resume.', {
+            status: found.status,
+          });
+        }
+
+        const body = await readBody(req);
+        if (body.next_due_date) {
+          if (body.occurrence_id && found.current?.occurrence_id && body.occurrence_id !== found.current.occurrence_id) {
+            return sendError(res, 409, 'OCCURRENCE_CLOSED', 'Occurrence has already been closed.', {
+              current_occurrence_id: found.current.occurrence_id,
+            });
+          }
+          found.current.due_date = body.next_due_date;
+          found.anchor_date = body.next_due_date;
+        }
+
+        found.status = 'ACTIVE';
+        found.updated_at = new Date().toISOString();
+        return sendJson(res, 200, toTaskView(found, today));
+      }
+
+      // POST /api/v1/maintenance/tasks/:taskId/archive
+      const archiveMatch = pathname.match(/^\/api\/v1\/maintenance\/tasks\/([^/]+)\/archive$/);
+      if (archiveMatch && method === 'POST') {
+        const taskId = archiveMatch[1];
+        const found = maintenanceStore.find((t) => t.id === taskId);
+        if (!found) {
+          return sendError(res, 404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.');
+        }
+        if (found.status === 'ARCHIVED') {
+          return sendError(res, 409, 'TASK_ARCHIVED', 'Task is already archived.');
+        }
+
+        found.status = 'ARCHIVED';
+        found.current = null;
+        found.archived_at = new Date().toISOString();
+        found.updated_at = found.archived_at;
+        return sendJson(res, 200, toTaskView(found, today));
+      }
+
+      // GET & PATCH /api/v1/maintenance/tasks/:taskId
+      const detailMatch = pathname.match(/^\/api\/v1\/maintenance\/tasks\/([^/]+)$/);
+      if (detailMatch && method === 'GET') {
+        const overdueReminderDays = Number(
+          readSettingFromStore(associationSettingsStore, 'maintenance.overdue_reminder_days', 7)
+        );
+        publishMaintenanceTasksInStore({
+          tasksStore: maintenanceStore,
+          postsStore,
+          today,
+          overdueReminderDays,
+          onNotification: dispatchServerMaintenanceAndNoticeNotifications,
+        });
+
+        const taskId = detailMatch[1];
+        const found = maintenanceStore.find((t) => t.id === taskId);
+        if (!found) {
+          return sendError(res, 404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.');
+        }
+        return sendJson(res, 200, toTaskView(found, today));
+      }
+
+      if (detailMatch && method === 'PATCH') {
+        const taskId = detailMatch[1];
+        const found = maintenanceStore.find((t) => t.id === taskId);
+        if (!found) {
+          return sendError(res, 404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.');
+        }
+        if (found.status === 'ARCHIVED') {
+          return sendError(res, 409, 'TASK_ARCHIVED', 'Task is archived and cannot be edited.');
+        }
+
+        const body = await readBody(req);
+
+        if (body.occurrence_id && found.current?.occurrence_id && body.occurrence_id !== found.current.occurrence_id) {
+          return sendError(res, 409, 'OCCURRENCE_CLOSED', 'Occurrence has already been closed.', {
+            current_occurrence_id: found.current.occurrence_id,
+          });
+        }
+
+        if (('period_unit' in body && !('period_count' in body)) || ('period_count' in body && !('period_unit' in body))) {
+          return sendError(res, 422, 'VALIDATION_ERROR', 'period_unit and period_count must be updated together.');
+        }
+
+        const unit = body.period_unit || found.period_unit;
+        const count = body.period_count !== undefined ? body.period_count : found.period_count;
+        const lead = body.lead_days !== undefined ? body.lead_days : found.lead_days;
+
+        if (body.title !== undefined) {
+          if (!body.title || typeof body.title !== 'string') {
+            return sendError(res, 422, 'VALIDATION_ERROR', 'Title cannot be empty.');
+          }
+          found.title = body.title.trim();
+          for (const entry of maintenanceLogStore) {
+            if (entry.task_id === found.id) {
+              entry.task_title = found.title;
+            }
+          }
+        }
+
+        if (body.instructions !== undefined) {
+          found.instructions = body.instructions || '';
+        }
+
+        if (body.period_unit !== undefined && body.period_count !== undefined) {
+          found.period_unit = unit;
+          found.period_count = count;
+        }
+
+        if (body.lead_days !== undefined) {
+          const maxLead = maxAllowedLeadDays(unit, count);
+          if (lead < 0 || lead > maxLead) {
+            return sendError(res, 422, 'VALIDATION_ERROR', `lead_days must be between 0 and ${maxLead}.`);
+          }
+          found.lead_days = lead;
+        }
+
+        if (body.notice !== undefined) {
+          found.notice = body.notice;
+        }
+
+        if (body.next_due_date !== undefined) {
+          if (found.current) {
+            found.current.due_date = body.next_due_date;
+            found.anchor_date = body.next_due_date;
+          }
+        }
+
+        found.updated_at = new Date().toISOString();
+        return sendJson(res, 200, toTaskView(found, today));
+      }
+
+      // POST /api/v1/maintenance/tasks/:taskId/done
+      const doneMatch = pathname.match(/^\/api\/v1\/maintenance\/tasks\/([^/]+)\/done$/);
+      if (doneMatch && method === 'POST') {
+        const taskId = doneMatch[1];
+        const body = await readBody(req);
+        const outcome = applyTaskDoneInStore({
+          tasksStore: maintenanceStore,
+          logStore: maintenanceLogStore,
+          taskId,
+          body,
+          user,
+          today,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 422,
+            outcome.errorCode || 'VALIDATION_ERROR',
+            outcome.message || 'Cannot mark maintenance task done.',
+            outcome.extra || {}
+          );
+        }
+        return sendJson(res, 201, outcome.result);
+      }
+
+      // POST /api/v1/maintenance/tasks/:taskId/skip
+      const skipMatch = pathname.match(/^\/api\/v1\/maintenance\/tasks\/([^/]+)\/skip$/);
+      if (skipMatch && method === 'POST') {
+        const taskId = skipMatch[1];
+        const body = await readBody(req);
+        const outcome = applyTaskSkipInStore({
+          tasksStore: maintenanceStore,
+          logStore: maintenanceLogStore,
+          taskId,
+          body,
+          user,
+          today,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 422,
+            outcome.errorCode || 'VALIDATION_ERROR',
+            outcome.message || 'Cannot skip maintenance task.',
+            outcome.extra || {}
+          );
+        }
+        return sendJson(res, 201, outcome.result);
+      }
+    }
+
+    // =========================================================================
+    // Maintenance Log (/api/v1/maintenance/log) - #016 (E10/M1)
+    // =========================================================================
+    if (pathname === '/api/v1/maintenance/log' && method === 'GET') {
+      if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)) {
+        return sendError(
+          res,
+          403,
+          'FORBIDDEN',
+          'Only the chairman, board members, and accountant can view the maintenance log.'
+        );
+      }
+      const outcome = queryMaintenanceLogStore(maintenanceLogStore, {
+        task_id: urlObj.searchParams.get('task_id'),
+        from: urlObj.searchParams.get('from'),
+        to: urlObj.searchParams.get('to'),
+        limit: urlObj.searchParams.get('limit'),
+        offset: urlObj.searchParams.get('offset'),
+      });
+      if (!outcome.ok) {
+        return sendError(
+          res,
+          outcome.status || 422,
+          outcome.errorCode || 'VALIDATION_ERROR',
+          outcome.message || 'Invalid maintenance log query.'
+        );
+      }
+      return sendJson(res, 200, outcome.items);
+    }
+
+    const logEditMatch = pathname.match(/^\/api\/v1\/maintenance\/log\/([^/]+)$/);
+    if (logEditMatch && method === 'PATCH') {
+      const entryId = logEditMatch[1];
+      const body = await readBody(req);
+      const outcome = applyLogEditInStore({
+        logStore: maintenanceLogStore,
+        entryId,
+        body,
+        user,
+      });
+      if (!outcome.ok) {
+        return sendError(
+          res,
+          outcome.status || 422,
+          outcome.errorCode || 'VALIDATION_ERROR',
+          outcome.message || 'Cannot edit maintenance log entry.'
+        );
+      }
+      return sendJson(res, 200, outcome.entry);
+    }
+
     return sendError(res, 404, 'NOT_FOUND', `Endpoint ${method} ${pathname} not found.`);
   };
 }
 
 let associationSettingsStore: SettingView[] = cloneDefaultAssociationSettings();
 let issuesStore: any[] = createDefaultIssuesSeed();
-
-
-
+let maintenanceStore: any[] = createDefaultMaintenanceSeed();
+let maintenanceLogStore: any[] = createDefaultMaintenanceLogSeed();

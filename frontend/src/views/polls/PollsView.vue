@@ -13,22 +13,64 @@ const polls = ref([])
 const loading = ref(false)
 const loadError = ref(null)
 const statusFilter = ref('ALL')
+const searchQuery = ref('')
 
 const isBoardOrChairman = computed(() =>
   ['CHAIRMAN', 'BOARD'].includes(session.me?.building_role || ''),
 )
 
+const needsVoteCount = computed(
+  () => polls.value.filter((p) => p.can_answer && !p.answered && p.status === 'OPEN').length,
+)
+const openCount = computed(
+  () => polls.value.filter((p) => p.status === 'OPEN').length,
+)
+const votedCount = computed(
+  () => polls.value.filter((p) => p.answered).length,
+)
+
 const filterTabs = computed(() => {
   const base = [
-    { key: 'ALL', label: session.t('polls.filters.all') },
-    { key: 'OPEN', label: session.t('polls.filters.open') },
+    { key: 'ALL', label: session.t('polls.filters.all'), count: polls.value.length },
+    {
+      key: 'NEEDS_VOTE',
+      label: session.t('polls.filters.needsVote'),
+      count: needsVoteCount.value,
+      highlight: needsVoteCount.value > 0,
+      icon: 'schedule',
+    },
+    { key: 'OPEN', label: session.t('polls.filters.open'), count: openCount.value },
+    { key: 'VOTED', label: session.t('polls.filters.voted'), count: votedCount.value },
     { key: 'CLOSED', label: session.t('polls.filters.closed') },
     { key: 'CANCELLED', label: session.t('polls.filters.cancelled') },
   ]
   if (isBoardOrChairman.value) {
-    base.splice(2, 0, { key: 'DRAFT', label: session.t('polls.filters.draft') })
+    base.splice(4, 0, {
+      key: 'DRAFT',
+      label: session.t('polls.filters.draft'),
+      count: polls.value.filter((p) => p.status === 'DRAFT').length,
+    })
   }
   return base
+})
+
+const filteredPolls = computed(() => {
+  let list = polls.value
+  if (statusFilter.value === 'NEEDS_VOTE') {
+    list = list.filter((p) => p.can_answer && !p.answered && p.status === 'OPEN')
+  } else if (statusFilter.value === 'VOTED') {
+    list = list.filter((p) => p.answered)
+  } else if (statusFilter.value !== 'ALL') {
+    list = list.filter((p) => p.status === statusFilter.value)
+  }
+
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return list
+  return list.filter(
+    (p) =>
+      String(p.title || '').toLowerCase().includes(q) ||
+      String(p.description || '').toLowerCase().includes(q),
+  )
 })
 
 let fetchPollsSeq = 0
@@ -38,14 +80,7 @@ async function fetchPolls() {
   loading.value = true
   loadError.value = null
   try {
-    if (statusFilter.value === 'DRAFT' && !isBoardOrChairman.value) {
-      statusFilter.value = 'ALL'
-    }
-    const params = {}
-    if (statusFilter.value && statusFilter.value !== 'ALL') {
-      params.status = statusFilter.value
-    }
-    const res = await listPolls(params)
+    const res = await listPolls()
     if (seq !== fetchPollsSeq) return
     polls.value = Array.isArray(res) ? res : []
   } catch (err) {
@@ -82,7 +117,7 @@ function statusBadgeClass(status) {
 }
 
 watch(
-  () => [statusFilter.value, session.actingUserId],
+  () => [session.actingUserId, session.sessionRevision],
   () => {
     fetchPolls()
   },
@@ -120,29 +155,63 @@ onMounted(() => {
       </RouterLink>
     </header>
 
-    <!-- Status Filter Bar -->
-    <div
-      class="flex flex-wrap items-center gap-2 border-b border-surface-container pb-3"
-      role="tablist"
-      :aria-label="session.t('polls.filters.ariaLabel')"
-    >
-      <button
-        v-for="tab in filterTabs"
-        :key="tab.key"
-        type="button"
-        role="tab"
-        :aria-selected="statusFilter === tab.key"
-        :data-testid="`polls-filter-${tab.key.toLowerCase()}`"
-        class="rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors cursor-pointer"
-        :class="
-          statusFilter === tab.key
-            ? 'bg-primary text-on-primary shadow-2xs'
-            : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container hover:text-on-surface border border-surface-container'
-        "
-        @click="statusFilter = tab.key"
+    <!-- Status Filter & Search Bar -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-surface-container pb-3">
+      <!-- Status Filter Tabs -->
+      <div
+        class="flex flex-wrap items-center gap-1.5"
+        role="tablist"
+        :aria-label="session.t('polls.filters.ariaLabel')"
       >
-        {{ tab.label }}
-      </button>
+        <button
+          v-for="tab in filterTabs"
+          :key="tab.key"
+          type="button"
+          role="tab"
+          :aria-selected="statusFilter === tab.key"
+          :data-testid="`polls-filter-${tab.key.toLowerCase()}`"
+          class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer"
+          :class="
+            statusFilter === tab.key
+              ? tab.key === 'NEEDS_VOTE'
+                ? 'bg-amber-600 text-white shadow-2xs'
+                : 'bg-primary text-on-primary shadow-2xs'
+              : tab.highlight
+                ? 'bg-amber-50 text-amber-900 border border-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700 hover:bg-amber-100'
+                : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container hover:text-on-surface border border-surface-container'
+          "
+          @click="statusFilter = tab.key"
+        >
+          <span v-if="tab.icon" class="material-symbols-outlined text-[15px]">{{ tab.icon }}</span>
+          <span>{{ tab.label }}</span>
+          <span
+            v-if="tab.count !== undefined"
+            class="px-1.5 py-0.2 rounded-full text-[10px] font-bold"
+            :class="
+              statusFilter === tab.key
+                ? 'bg-white/20 text-white'
+                : tab.highlight
+                  ? 'bg-amber-200 text-amber-950 dark:bg-amber-900 dark:text-amber-100'
+                  : 'bg-surface-container-highest text-on-surface-variant'
+            "
+          >
+            {{ tab.count }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Quick Search -->
+      <div class="relative w-full sm:w-64">
+        <span class="material-symbols-outlined text-[17px] text-on-surface-variant absolute left-2.5 top-1/2 -translate-y-1/2">
+          search
+        </span>
+        <input
+          v-model="searchQuery"
+          type="search"
+          :placeholder="session.t('messages.searchPlaceholder')"
+          class="w-full rounded-lg border border-surface-container-high bg-surface-container-low pl-8 pr-3 py-1.5 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary"
+        />
+      </div>
     </div>
 
     <!-- Error State -->
@@ -162,7 +231,7 @@ onMounted(() => {
 
     <!-- Empty State -->
     <div
-      v-else-if="polls.length === 0"
+      v-else-if="filteredPolls.length === 0"
       data-testid="polls-empty-state"
       class="rounded-xl border border-dashed border-surface-container-high bg-surface-container-lowest p-10 text-center"
     >
@@ -180,7 +249,7 @@ onMounted(() => {
     <!-- Polls List -->
     <div v-else class="space-y-4" data-testid="polls-list">
       <article
-        v-for="poll in polls"
+        v-for="poll in filteredPolls"
         :key="poll.id"
         :data-testid="`poll-card-${poll.id}`"
         class="group cursor-pointer rounded-xl border border-surface-container bg-surface-container-lowest p-5 transition-all hover:border-primary/40 hover:shadow-xs"

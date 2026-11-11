@@ -528,6 +528,114 @@ onMounted(() => {
           </div>
         </div>
 
+        <!-- Lifecycle Progress Pipeline -->
+        <div
+          data-testid="issue-lifecycle-pipeline"
+          class="rounded-xl border border-surface-container bg-surface-container-low/70 p-4"
+        >
+          <div class="flex items-center justify-between text-xs font-semibold text-on-surface-variant mb-3">
+            <span class="inline-flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[16px] text-primary">timeline</span>
+              <span>{{ session.t('issues.detail.lifecycleTitle') }}</span>
+            </span>
+            <span class="font-normal">{{ session.t(`issues.statuses.${issue.status}`) }}</span>
+          </div>
+
+          <!-- Terminal state: DECLINED, DUPLICATE, WITHDRAWN -->
+          <div
+            v-if="['DECLINED', 'DUPLICATE', 'WITHDRAWN'].includes(issue.status)"
+            class="flex items-center gap-3 p-3 rounded-lg bg-surface-container text-xs"
+          >
+            <span class="material-symbols-outlined text-[20px] text-on-surface-variant">
+              {{ issue.status === 'DUPLICATE' ? 'content_copy' : issue.status === 'WITHDRAWN' ? 'undo' : 'block' }}
+            </span>
+            <div>
+              <span class="font-semibold text-on-surface">{{ session.t(`issues.statuses.${issue.status}`) }}</span>
+              <span v-if="issue.ended_at" class="text-on-surface-variant ml-2">({{ formatDateTime(issue.ended_at) }})</span>
+            </div>
+          </div>
+
+          <!-- Standard progression: Reported -> In Progress / Waiting -> Resolved -->
+          <div v-else class="grid grid-cols-3 gap-2 relative pt-1">
+            <!-- Step 1: Reported -->
+            <div class="flex flex-col items-center sm:items-start text-center sm:text-left gap-1">
+              <div class="flex items-center w-full">
+                <div
+                  class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all shrink-0"
+                  :class="
+                    ['IN_PROGRESS', 'WAITING_FOR_CONTRACTOR', 'RESOLVED'].includes(issue.status)
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-primary text-on-primary ring-4 ring-primary/20'
+                  "
+                >
+                  <span v-if="['IN_PROGRESS', 'WAITING_FOR_CONTRACTOR', 'RESOLVED'].includes(issue.status)" class="material-symbols-outlined text-[16px]">check</span>
+                  <span v-else>1</span>
+                </div>
+                <div
+                  class="hidden sm:block flex-1 h-0.5 ml-2 mr-2 rounded"
+                  :class="['IN_PROGRESS', 'WAITING_FOR_CONTRACTOR', 'RESOLVED'].includes(issue.status) ? 'bg-emerald-600' : 'bg-surface-container-high'"
+                ></div>
+              </div>
+              <span class="text-xs font-semibold mt-1 text-on-surface">
+                {{ session.t('issues.detail.lifecycleReported') }}
+              </span>
+            </div>
+
+            <!-- Step 2: In Progress / Waiting -->
+            <div class="flex flex-col items-center sm:items-start text-center sm:text-left gap-1">
+              <div class="flex items-center w-full">
+                <div
+                  class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all shrink-0"
+                  :class="
+                    issue.status === 'RESOLVED'
+                      ? 'bg-emerald-600 text-white'
+                      : ['IN_PROGRESS', 'WAITING_FOR_CONTRACTOR'].includes(issue.status)
+                        ? 'bg-amber-500 text-white ring-4 ring-amber-500/20'
+                        : 'bg-surface-container-high text-on-surface-variant'
+                  "
+                >
+                  <span v-if="issue.status === 'RESOLVED'" class="material-symbols-outlined text-[16px]">check</span>
+                  <span v-else-if="['IN_PROGRESS', 'WAITING_FOR_CONTRACTOR'].includes(issue.status)" class="material-symbols-outlined text-[16px]">handyman</span>
+                  <span v-else>2</span>
+                </div>
+                <div
+                  class="hidden sm:block flex-1 h-0.5 ml-2 mr-2 rounded"
+                  :class="issue.status === 'RESOLVED' ? 'bg-emerald-600' : 'bg-surface-container-high'"
+                ></div>
+              </div>
+              <span
+                class="text-xs font-semibold mt-1"
+                :class="['IN_PROGRESS', 'WAITING_FOR_CONTRACTOR', 'RESOLVED'].includes(issue.status) ? 'text-on-surface' : 'text-on-surface-variant'"
+              >
+                {{ issue.status === 'WAITING_FOR_CONTRACTOR' ? session.t('issues.statuses.WAITING_FOR_CONTRACTOR') : session.t('issues.detail.lifecycleInProgress') }}
+              </span>
+            </div>
+
+            <!-- Step 3: Resolved -->
+            <div class="flex flex-col items-center sm:items-start text-center sm:text-left gap-1">
+              <div class="flex items-center w-full">
+                <div
+                  class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all shrink-0"
+                  :class="
+                    issue.status === 'RESOLVED'
+                      ? 'bg-emerald-600 text-white ring-4 ring-emerald-600/20'
+                      : 'bg-surface-container-high text-on-surface-variant'
+                  "
+                >
+                  <span v-if="issue.status === 'RESOLVED'" class="material-symbols-outlined text-[16px]">check</span>
+                  <span v-else>3</span>
+                </div>
+              </div>
+              <span
+                class="text-xs font-semibold mt-1"
+                :class="issue.status === 'RESOLVED' ? 'text-emerald-700 dark:text-emerald-300' : 'text-on-surface-variant'"
+              >
+                {{ session.t('issues.detail.lifecycleResolved') }}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- Description -->
         <div
           class="rounded-xl border border-surface-container bg-surface-container-low/60 p-4 text-sm text-on-surface whitespace-pre-line"

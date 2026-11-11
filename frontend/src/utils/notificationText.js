@@ -165,6 +165,51 @@ export function buildNotificationDescriptor(item, lang = 'en') {
     }
   }
 
+  if (eventType === 'MAINTENANCE_DUE') {
+    const rawDueDate = String(params.due_date || '')
+    const formattedDueDate = rawDueDate
+      ? formatDate(rawDueDate.includes('T') ? rawDueDate : `${rawDueDate}T12:00:00Z`, lang)
+      : ''
+    const isOverdue = Boolean(params.overdue)
+    const reminderNumber = Number(params.reminder_number) || 0
+    const taskTitle =
+      typeof params.title === 'string' && params.title.trim()
+        ? params.title.trim()
+        : typeof params.task_title === 'string' && params.task_title.trim()
+          ? params.task_title.trim()
+          : ''
+
+    const key = isOverdue
+      ? taskTitle
+        ? 'notifications.events.MAINTENANCE_OVERDUE_WITH_TITLE'
+        : 'notifications.events.MAINTENANCE_OVERDUE'
+      : taskTitle
+        ? 'notifications.events.MAINTENANCE_DUE_WITH_TITLE'
+        : 'notifications.events.MAINTENANCE_DUE'
+
+    return {
+      key,
+      values: {
+        due_date: formattedDueDate,
+        reminder_number: reminderNumber,
+        title: taskTitle,
+      },
+      icon: isOverdue ? 'warning' : 'event_repeat',
+      variant: isOverdue ? 'emergency' : 'deadline',
+      route: subjectId ? `/maintenance/${subjectId}` : '/maintenance',
+    }
+  }
+
+  if (eventType === 'NOTICE_PUBLISHED') {
+    return {
+      key: 'notifications.events.NOTICE_PUBLISHED',
+      values: {},
+      icon: 'campaign',
+      variant: 'neutral',
+      route: subjectId ? `/forum/${subjectId}` : '/forum',
+    }
+  }
+
   return {
     key: 'notifications.events.UNKNOWN',
     values: {},

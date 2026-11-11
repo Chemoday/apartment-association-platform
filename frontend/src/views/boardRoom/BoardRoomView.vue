@@ -6,6 +6,7 @@ import { createBoardTopic, listBoardTopics } from '@/api/endpoints/communication
 import { formatDateTime, formatRelativeTime } from '@/utils/dates.js'
 import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
+import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const router = useRouter()
@@ -352,11 +353,17 @@ watch(
           </p>
 
           <div class="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-surface-container">
-            <AuthorBadge
-              v-if="topic.author_badge"
-              :badge="topic.author_badge"
-              :is-mine="topic.is_mine"
-            />
+            <div class="flex flex-wrap items-center gap-2">
+              <AuthorBadge
+                v-if="topic.author_badge"
+                :badge="topic.author_badge"
+                :is-mine="topic.is_mine"
+              />
+              <PostOriginBadge
+                :origin="topic.origin"
+                post-type="BOARD_TOPIC"
+              />
+            </div>
             <div class="inline-flex items-center gap-1.5 text-xs text-on-surface-variant font-medium">
               <span class="material-symbols-outlined text-[16px]">chat_bubble</span>
               <span>{{ session.t('boardRoom.commentsCount', { count: topic.comments_count || 0 }) }}</span>

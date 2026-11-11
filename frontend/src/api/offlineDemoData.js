@@ -25,6 +25,21 @@ import {
   updateIssueFollowInStore,
   withdrawIssueInStore,
 } from '../utils/issues.js'
+import {
+  applyLogEditInStore,
+  applyTaskDoneInStore,
+  applyTaskSkipInStore,
+  computeOccurrenceState,
+  createDefaultMaintenanceLogSeed,
+  createDefaultMaintenanceSeed,
+  getTodayDateInTallinn,
+  maxAllowedLeadDays,
+  publishMaintenanceTasksInStore,
+  queryMaintenanceLogStore,
+  queryTasksStore,
+  toTaskView,
+  validateTaskDraft,
+} from '../utils/maintenance.js'
 
 export const isOfflineDemoMode = ref(false)
 
@@ -32,6 +47,8 @@ let offlineNotificationsByUser = {}
 let offlinePreferencesByUser = {}
 let offlineSettings = cloneDefaultAssociationSettings()
 let offlineIssues = createDefaultIssuesSeed()
+let offlineMaintenance = createDefaultMaintenanceSeed()
+let offlineMaintenanceLog = createDefaultMaintenanceLogSeed()
 
 export function enableOfflineDemo() {
   isOfflineDemoMode.value = true
@@ -39,6 +56,8 @@ export function enableOfflineDemo() {
   offlinePreferencesByUser = {}
   offlineSettings = cloneDefaultAssociationSettings()
   offlineIssues = createDefaultIssuesSeed()
+  offlineMaintenance = createDefaultMaintenanceSeed()
+  offlineMaintenanceLog = createDefaultMaintenanceLogSeed()
 }
 
 export function disableOfflineDemo() {
@@ -691,6 +710,58 @@ const OFFLINE_POSTS = [
       },
     ],
   },
+  {
+    id: '018f0000-0000-7000-8000-000000000604',
+    post_type: 'OFFICIAL_NOTICE',
+    origin: 'MAINTENANCE',
+    category: 'MAINTENANCE',
+    title: 'Annual Fire Extinguisher Inspection',
+    body: 'Inspector will check all stairwell and common area fire safety equipment. No access to individual flats needed.\n\nPlanned date: 2026-11-05',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_badge: {
+      display_label: 'Peeter Tamm (Apt 01)',
+      role_badge: 'BOARD',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: false,
+    created_at: '2026-10-25T09:00:00Z',
+    comments: [],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000763',
+    post_type: 'BOARD_TOPIC',
+    origin: 'MAINTENANCE',
+    category: 'MAINTENANCE',
+    title: 'Maintenance: Inspect fire extinguishers, overdue since 05.11.2026',
+    body: 'Basement, technical rooms, and all 4 landings in both entrances. Certified technician needed.',
+    author_user_id: '018f0000-0000-7000-8000-000000000101',
+    author_badge: {
+      display_label: 'Oleg Sidorov',
+      role_badge: 'BOARD',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-25T09:00:00Z',
+    comments: [
+      {
+        id: '018f0000-0000-7000-8000-000000000764',
+        post_id: '018f0000-0000-7000-8000-000000000763',
+        body: 'Still not done: overdue since 05.11.2026 (reminder 1)',
+        author_user_id: '018f0000-0000-7000-8000-000000000101',
+        author_badge: {
+          display_label: 'Oleg Sidorov',
+          role_badge: 'BOARD',
+        },
+        created_at: '2026-11-06T09:00:00Z',
+      },
+    ],
+  },
 ]
 
 function getActingUser(actingUserId) {
@@ -1121,6 +1192,7 @@ export async function resolveOfflineDemoRequest(
       last_activity_at:
         p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
       acknowledged_at: p.acknowledged_at,
+      origin: p.origin || null,
     }))
   }
 
@@ -1203,6 +1275,7 @@ export async function resolveOfflineDemoRequest(
       created_at: p.created_at,
       last_activity_at:
         p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
+      origin: p.origin || null,
     }))
   }
 
@@ -1277,6 +1350,18 @@ export async function resolveOfflineDemoRequest(
       comments: [],
     }
     OFFLINE_POSTS.unshift(created)
+    if (created.post_type === 'OFFICIAL_NOTICE') {
+      dispatchMaintenanceAndNoticeNotifications({
+        event_type: 'NOTICE_PUBLISHED',
+        subject_type: 'post',
+        subject_id: created.id,
+        target_scope: created.target_scope,
+        target_entrance: created.target_entrance,
+        target_apartment_ids: created.target_apartment_ids,
+        author_user_id: user.user_id,
+        created_at: nowIso,
+      })
+    }
     return {
       ...created,
       is_mine: true,
@@ -1326,6 +1411,7 @@ export async function resolveOfflineDemoRequest(
         post.comments.length > 0
           ? post.comments[post.comments.length - 1].created_at
           : post.created_at,
+      origin: post.origin || null,
       comments: post.comments.map((c) => ({
         id: c.id,
         post_id: post.id,
@@ -1486,11 +1572,11 @@ export async function resolveOfflineDemoRequest(
     if (method === 'PUT') {
       const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
       const changes = Array.isArray(reqBody.preferences) ? reqBody.preferences : []
-      if (changes.length < 1 || changes.length > 40) {
+      if (changes.length < 1 || changes.length > 48) {
         throw makeOfflineError(
           422,
           'VALIDATION_ERROR',
-          'Provide between 1 and 40 preference changes.',
+          'Provide between 1 and 48 preference changes.',
         )
       }
       for (const chg of changes) {
@@ -2425,6 +2511,344 @@ export async function resolveOfflineDemoRequest(
     }
   }
 
+  // =========================================================================
+  // Maintenance Calendar (/maintenance) - #015 (E10/M1)
+  // =========================================================================
+  if (pathname === '/maintenance/tasks' || pathname.startsWith('/maintenance/tasks/')) {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only the chairman and board members can access maintenance tasks.')
+    }
+
+    const today = getTodayDateInTallinn()
+
+    // GET /maintenance/tasks
+    if (pathname === '/maintenance/tasks' && method === 'GET') {
+      const overdueReminderDays = Number(
+        readSettingFromStore(offlineSettings, 'maintenance.overdue_reminder_days', 7),
+      )
+      publishMaintenanceTasksInStore({
+        tasksStore: offlineMaintenance,
+        postsStore: OFFLINE_POSTS,
+        today,
+        overdueReminderDays,
+        onNotification: dispatchMaintenanceAndNoticeNotifications,
+      })
+
+      const statusParam = urlObj.searchParams.get('status') || undefined
+      const stateParam = urlObj.searchParams.get('state') || undefined
+      const limitParam = urlObj.searchParams.get('limit') ? Number(urlObj.searchParams.get('limit')) : 50
+      const offsetParam = urlObj.searchParams.get('offset') ? Number(urlObj.searchParams.get('offset')) : 0
+
+      return queryTasksStore(
+        offlineMaintenance,
+        { status: statusParam, state: stateParam, limit: limitParam, offset: offsetParam },
+        today,
+      )
+    }
+
+    // POST /maintenance/tasks
+    if (pathname === '/maintenance/tasks' && method === 'POST') {
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const validated = validateTaskDraft(reqBody, { today })
+      if (!validated.valid) {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Validation failed for maintenance task.', {
+          errors: validated.errors,
+        })
+      }
+
+      const p = validated.payload
+      const taskId = `task-${Date.now()}`
+      const occId = `occ-${Date.now()}`
+      const lead = p.lead_days
+      const dueDate = p.first_due_date
+      const occState = computeOccurrenceState(dueDate, lead, 'ACTIVE', today)
+
+      const newTask = {
+        id: taskId,
+        title: p.title,
+        instructions: p.instructions || '',
+        period_unit: p.period_unit,
+        period_count: p.period_count,
+        lead_days: lead,
+        anchor_date: dueDate,
+        status: 'ACTIVE',
+        notice: p.notice,
+        current: {
+          occurrence_id: occId,
+          due_date: dueDate,
+          publish_on: occState.publish_on,
+          state: occState.state,
+          published_at: null,
+          board_post_id: null,
+          notice_post_id: null,
+          notice_failed: false,
+          reminder_count: 0,
+        },
+        last_closed_on: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        archived_at: null,
+      }
+
+      offlineMaintenance.push(newTask)
+      return toTaskView(newTask, today)
+    }
+
+    // POST /maintenance/tasks/:taskId/pause
+    const pauseMatch = pathname.match(/^\/maintenance\/tasks\/([^/]+)\/pause$/)
+    if (pauseMatch && method === 'POST') {
+      const taskId = pauseMatch[1]
+      const found = offlineMaintenance.find((t) => t.id === taskId)
+      if (!found) {
+        throw makeOfflineError(404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.')
+      }
+      if (found.status === 'ARCHIVED') {
+        throw makeOfflineError(409, 'TASK_ARCHIVED', 'Task is archived.')
+      }
+      if (found.status !== 'ACTIVE') {
+        throw makeOfflineError(409, 'INVALID_TASK_TRANSITION', 'Task must be ACTIVE to pause.', {
+          status: found.status,
+        })
+      }
+      found.status = 'PAUSED'
+      found.updated_at = new Date().toISOString()
+      return toTaskView(found, today)
+    }
+
+    // POST /maintenance/tasks/:taskId/resume
+    const resumeMatch = pathname.match(/^\/maintenance\/tasks\/([^/]+)\/resume$/)
+    if (resumeMatch && method === 'POST') {
+      const taskId = resumeMatch[1]
+      const found = offlineMaintenance.find((t) => t.id === taskId)
+      if (!found) {
+        throw makeOfflineError(404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.')
+      }
+      if (found.status === 'ARCHIVED') {
+        throw makeOfflineError(409, 'TASK_ARCHIVED', 'Task is archived.')
+      }
+      if (found.status !== 'PAUSED') {
+        throw makeOfflineError(409, 'INVALID_TASK_TRANSITION', 'Task must be PAUSED to resume.', {
+          status: found.status,
+        })
+      }
+
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      if (reqBody.next_due_date) {
+        if (reqBody.occurrence_id && found.current?.occurrence_id && reqBody.occurrence_id !== found.current.occurrence_id) {
+          throw makeOfflineError(409, 'OCCURRENCE_CLOSED', 'Occurrence has already been closed.', {
+            current_occurrence_id: found.current.occurrence_id,
+          })
+        }
+        found.current.due_date = reqBody.next_due_date
+        found.anchor_date = reqBody.next_due_date
+      }
+
+      found.status = 'ACTIVE'
+      found.updated_at = new Date().toISOString()
+      return toTaskView(found, today)
+    }
+
+    // POST /maintenance/tasks/:taskId/archive
+    const archiveMatch = pathname.match(/^\/maintenance\/tasks\/([^/]+)\/archive$/)
+    if (archiveMatch && method === 'POST') {
+      const taskId = archiveMatch[1]
+      const found = offlineMaintenance.find((t) => t.id === taskId)
+      if (!found) {
+        throw makeOfflineError(404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.')
+      }
+      if (found.status === 'ARCHIVED') {
+        throw makeOfflineError(409, 'TASK_ARCHIVED', 'Task is already archived.')
+      }
+
+      found.status = 'ARCHIVED'
+      found.current = null
+      found.archived_at = new Date().toISOString()
+      found.updated_at = found.archived_at
+      return toTaskView(found, today)
+    }
+
+    // GET & PATCH /maintenance/tasks/:taskId
+    const detailMatch = pathname.match(/^\/maintenance\/tasks\/([^/]+)$/)
+    if (detailMatch && method === 'GET') {
+      const overdueReminderDays = Number(
+        readSettingFromStore(offlineSettings, 'maintenance.overdue_reminder_days', 7),
+      )
+      publishMaintenanceTasksInStore({
+        tasksStore: offlineMaintenance,
+        postsStore: OFFLINE_POSTS,
+        today,
+        overdueReminderDays,
+        onNotification: dispatchMaintenanceAndNoticeNotifications,
+      })
+
+      const taskId = detailMatch[1]
+      const found = offlineMaintenance.find((t) => t.id === taskId)
+      if (!found) {
+        throw makeOfflineError(404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.')
+      }
+      return toTaskView(found, today)
+    }
+
+    if (detailMatch && method === 'PATCH') {
+      const taskId = detailMatch[1]
+      const found = offlineMaintenance.find((t) => t.id === taskId)
+      if (!found) {
+        throw makeOfflineError(404, 'MAINTENANCE_TASK_NOT_FOUND', 'Maintenance task not found.')
+      }
+      if (found.status === 'ARCHIVED') {
+        throw makeOfflineError(409, 'TASK_ARCHIVED', 'Task is archived and cannot be edited.')
+      }
+
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+
+      if (reqBody.occurrence_id && found.current?.occurrence_id && reqBody.occurrence_id !== found.current.occurrence_id) {
+        throw makeOfflineError(409, 'OCCURRENCE_CLOSED', 'Occurrence has already been closed.', {
+          current_occurrence_id: found.current.occurrence_id,
+        })
+      }
+
+      // Check required pairing of period_unit and period_count
+      if (('period_unit' in reqBody && !('period_count' in reqBody)) || ('period_count' in reqBody && !('period_unit' in reqBody))) {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'period_unit and period_count must be updated together.')
+      }
+
+      const unit = reqBody.period_unit || found.period_unit
+      const count = reqBody.period_count !== undefined ? reqBody.period_count : found.period_count
+      const lead = reqBody.lead_days !== undefined ? reqBody.lead_days : found.lead_days
+
+      if (reqBody.title !== undefined) {
+        if (!reqBody.title || typeof reqBody.title !== 'string') {
+          throw makeOfflineError(422, 'VALIDATION_ERROR', 'Title cannot be empty.')
+        }
+        found.title = reqBody.title.trim()
+        for (const entry of offlineMaintenanceLog) {
+          if (entry.task_id === found.id) {
+            entry.task_title = found.title
+          }
+        }
+      }
+
+      if (reqBody.instructions !== undefined) {
+        found.instructions = reqBody.instructions || ''
+      }
+
+      if (reqBody.period_unit !== undefined && reqBody.period_count !== undefined) {
+        found.period_unit = unit
+        found.period_count = count
+      }
+
+      if (reqBody.lead_days !== undefined) {
+        const maxLead = maxAllowedLeadDays(unit, count)
+        if (lead < 0 || lead > maxLead) {
+          throw makeOfflineError(422, 'VALIDATION_ERROR', `lead_days must be between 0 and ${maxLead}.`)
+        }
+        found.lead_days = lead
+      }
+
+      if (reqBody.notice !== undefined) {
+        found.notice = reqBody.notice
+      }
+
+      if (reqBody.next_due_date !== undefined) {
+        if (found.current) {
+          found.current.due_date = reqBody.next_due_date
+          found.anchor_date = reqBody.next_due_date
+        }
+      }
+
+      found.updated_at = new Date().toISOString()
+      return toTaskView(found, today)
+    }
+
+    // POST /maintenance/tasks/:taskId/done
+    const doneMatch = pathname.match(/^\/maintenance\/tasks\/([^/]+)\/done$/)
+    if (doneMatch && method === 'POST') {
+      const taskId = doneMatch[1]
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const outcome = applyTaskDoneInStore({
+        tasksStore: offlineMaintenance,
+        logStore: offlineMaintenanceLog,
+        taskId,
+        body: reqBody,
+        user,
+        today,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(
+          outcome.status,
+          outcome.errorCode,
+          outcome.message,
+          outcome.extra || {},
+        )
+      }
+      return outcome.result
+    }
+
+    // POST /maintenance/tasks/:taskId/skip
+    const skipMatch = pathname.match(/^\/maintenance\/tasks\/([^/]+)\/skip$/)
+    if (skipMatch && method === 'POST') {
+      const taskId = skipMatch[1]
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const outcome = applyTaskSkipInStore({
+        tasksStore: offlineMaintenance,
+        logStore: offlineMaintenanceLog,
+        taskId,
+        body: reqBody,
+        user,
+        today,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(
+          outcome.status,
+          outcome.errorCode,
+          outcome.message,
+          outcome.extra || {},
+        )
+      }
+      return outcome.result
+    }
+  }
+
+  // =========================================================================
+  // Maintenance Log (/maintenance/log) - #016 (E10/M1)
+  // =========================================================================
+  if (pathname === '/maintenance/log' && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only the chairman, board members, and accountant can view the maintenance log.',
+      )
+    }
+    const outcome = queryMaintenanceLogStore(offlineMaintenanceLog, {
+      task_id: urlObj.searchParams.get('task_id'),
+      from: urlObj.searchParams.get('from'),
+      to: urlObj.searchParams.get('to'),
+      limit: urlObj.searchParams.get('limit'),
+      offset: urlObj.searchParams.get('offset'),
+    })
+    if (!outcome.ok) {
+      throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+    }
+    return outcome.items
+  }
+
+  const logEditMatch = pathname.match(/^\/maintenance\/log\/([^/]+)$/)
+  if (logEditMatch && method === 'PATCH') {
+    const entryId = logEditMatch[1]
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    const outcome = applyLogEditInStore({
+      logStore: offlineMaintenanceLog,
+      entryId,
+      body: reqBody,
+      user,
+    })
+    if (!outcome.ok) {
+      throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+    }
+    return outcome.entry
+  }
+
   return null
 }
 
@@ -3170,6 +3594,8 @@ const OFFLINE_NOTIFICATION_EVENTS = [
   'ISSUE_REPORTED',
   'ISSUE_URGENT',
   'ISSUE_STATUS_CHANGED',
+  'MAINTENANCE_DUE',
+  'NOTICE_PUBLISHED',
 ]
 const OFFLINE_NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
 
@@ -3180,7 +3606,9 @@ function getOfflineUserPreferences(userId) {
       for (const channel of OFFLINE_NOTIFICATION_CHANNELS) {
         const mandatory = event_type === 'EMERGENCY_PUBLISHED' || event_type === 'ISSUE_URGENT'
         const enabled =
-          event_type === 'APARTMENT_MESSAGE_TO_BOARD' || event_type === 'ISSUE_REPORTED'
+          event_type === 'APARTMENT_MESSAGE_TO_BOARD' ||
+          event_type === 'ISSUE_REPORTED' ||
+          event_type === 'MAINTENANCE_DUE'
             ? channel === 'in_app'
             : true
         list.push({
@@ -3287,6 +3715,20 @@ function getOfflineUserNotifications(userId) {
 
     if (isBoardUser) {
       base.splice(1, 0, {
+        id: '018f0000-0000-7000-8000-000000009109',
+        event_type: 'MAINTENANCE_DUE',
+        subject_type: 'maintenance_task',
+        subject_id: 'task-fire-extinguishers',
+        params: {
+          occurrence_id: 'occ-ext-2026',
+          due_date: '2026-11-08',
+          overdue: true,
+          reminder_number: 1,
+        },
+        created_at: '2026-11-09T09:00:00Z',
+        read_at: null,
+      })
+      base.splice(1, 0, {
         id: '018f0000-0000-7000-8000-000000009107',
         event_type: 'ISSUE_REPORTED',
         subject_type: 'issue',
@@ -3315,9 +3757,72 @@ function getOfflineUserNotifications(userId) {
       })
     }
 
+    if (userId !== '018f0000-0000-7000-8000-000000000103') {
+      base.splice(1, 0, {
+        id: '018f0000-0000-7000-8000-000000009110',
+        event_type: 'NOTICE_PUBLISHED',
+        subject_type: 'post',
+        subject_id: '018f0000-0000-7000-8000-000000000604',
+        params: {},
+        created_at: '2026-11-06T09:00:00Z',
+        read_at: null,
+      })
+    }
+
     offlineNotificationsByUser[userId] = base
   }
   return offlineNotificationsByUser[userId]
+}
+
+function getNoticeRecipientUserIds(notice, authorUserId) {
+  const recipients = new Set(['018f0000-0000-7000-8000-000000000101', '018f0000-0000-7000-8000-000000000105'])
+  const userApts = [
+    { userId: '018f0000-0000-7000-8000-000000000101', entrance: 1, aptId: '018f0000-0000-7000-8000-000000000301' },
+    { userId: '018f0000-0000-7000-8000-000000000105', entrance: 1, aptId: '018f0000-0000-7000-8000-000000000302' },
+    { userId: '018f0000-0000-7000-8000-000000000104', entrance: 1, aptId: '018f0000-0000-7000-8000-000000000302' },
+    { userId: '018f0000-0000-7000-8000-000000000102', entrance: 2, aptId: '018f0000-0000-7000-8000-000000000314' },
+  ]
+  for (const u of userApts) {
+    if (!notice.target_scope || notice.target_scope === 'ALL_BUILDING') {
+      recipients.add(u.userId)
+    } else if (notice.target_scope === 'ENTRANCE' && Number(notice.target_entrance) === u.entrance) {
+      recipients.add(u.userId)
+    } else if (
+      notice.target_scope === 'APARTMENT_LIST' &&
+      Array.isArray(notice.target_apartment_ids) &&
+      notice.target_apartment_ids.includes(u.aptId)
+    ) {
+      recipients.add(u.userId)
+    }
+  }
+  if (authorUserId) {
+    recipients.delete(authorUserId)
+  }
+  return Array.from(recipients)
+}
+
+function dispatchMaintenanceAndNoticeNotifications(notif) {
+  if (notif.event_type === 'MAINTENANCE_DUE') {
+    const recipientUserIds = ['018f0000-0000-7000-8000-000000000101', '018f0000-0000-7000-8000-000000000105']
+    emitOfflineIssueNotificationBatch({
+      recipientUserIds,
+      event_type: 'MAINTENANCE_DUE',
+      subject_type: 'maintenance_task',
+      subject_id: notif.subject_id,
+      params: notif.params,
+      created_at: notif.created_at || new Date().toISOString(),
+    })
+  } else if (notif.event_type === 'NOTICE_PUBLISHED') {
+    const recipientUserIds = getNoticeRecipientUserIds(notif, notif.author_user_id)
+    emitOfflineIssueNotificationBatch({
+      recipientUserIds,
+      event_type: 'NOTICE_PUBLISHED',
+      subject_type: 'post',
+      subject_id: notif.subject_id,
+      params: {},
+      created_at: notif.created_at || new Date().toISOString(),
+    })
+  }
 }
 
 function emitOfflineIssueNotificationBatch(batch) {

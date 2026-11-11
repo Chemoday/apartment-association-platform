@@ -199,6 +199,57 @@ test('buildNotificationDescriptor maps all 4 known event types and unknown safel
   assert.equal(issueMerged.key, 'notifications.events.ISSUE_STATUS_MERGED')
   assert.equal(issueMerged.route, '/issues/issue-original-99')
 
+  const maintDueDesc = buildNotificationDescriptor(
+    {
+      id: 'n15',
+      event_type: 'MAINTENANCE_DUE',
+      params: { occurrence_id: 'occ-1', due_date: '2026-11-15', overdue: false, reminder_number: 0, title: 'Clean roof gutters' },
+      subject_type: 'maintenance_task',
+      subject_id: 'task-gutters',
+      created_at: '2026-11-08T09:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(maintDueDesc.key, 'notifications.events.MAINTENANCE_DUE_WITH_TITLE')
+  assert.equal(maintDueDesc.route, '/maintenance/task-gutters')
+  assert.equal(maintDueDesc.variant, 'deadline')
+  assert.equal(maintDueDesc.icon, 'event_repeat')
+
+  const maintOverdueDesc = buildNotificationDescriptor(
+    {
+      id: 'n16',
+      event_type: 'MAINTENANCE_DUE',
+      params: { occurrence_id: 'occ-1', due_date: '2026-11-15', overdue: true, reminder_number: 2 },
+      subject_type: 'maintenance_task',
+      subject_id: 'task-gutters',
+      created_at: '2026-11-29T09:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(maintOverdueDesc.key, 'notifications.events.MAINTENANCE_OVERDUE')
+  assert.equal(maintOverdueDesc.route, '/maintenance/task-gutters')
+  assert.equal(maintOverdueDesc.variant, 'emergency')
+  assert.equal(maintOverdueDesc.icon, 'warning')
+
+  const noticePubDesc = buildNotificationDescriptor(
+    {
+      id: 'n17',
+      event_type: 'NOTICE_PUBLISHED',
+      params: {},
+      subject_type: 'post',
+      subject_id: 'post-notice-1',
+      created_at: '2026-11-06T09:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(noticePubDesc.key, 'notifications.events.NOTICE_PUBLISHED')
+  assert.equal(noticePubDesc.route, '/forum/post-notice-1')
+  assert.equal(noticePubDesc.icon, 'campaign')
+  assert.equal(noticePubDesc.variant, 'neutral')
+
   const unknown = buildNotificationDescriptor(
     {
       id: 'n5',
@@ -472,6 +523,104 @@ test('formatNotificationText formats human-readable text in English and Estonian
     issueStatRu,
     'Статус обращения, за которым вы следите (освещение, подъезд 1): в работе',
   )
+
+  // #018 MAINTENANCE_DUE and NOTICE_PUBLISHED localized text in en, et, and ru
+  setI18nLocale('en')
+  const maintDueWithTitleEn = formatNotificationText(
+    {
+      id: 'n15',
+      event_type: 'MAINTENANCE_DUE',
+      params: { due_date: '2026-11-15', overdue: false, reminder_number: 0, title: 'Clean gutters' },
+      subject_type: 'maintenance_task',
+      subject_id: 'task-gutters',
+      created_at: '2026-11-08T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.ok(maintDueWithTitleEn.startsWith('Maintenance due on '))
+  assert.ok(maintDueWithTitleEn.includes('Clean gutters'))
+
+  const maintOverdueWithTitleEn = formatNotificationText(
+    {
+      id: 'n16',
+      event_type: 'MAINTENANCE_DUE',
+      params: { due_date: '2026-11-15', overdue: true, reminder_number: 2, title: 'Clean gutters' },
+      subject_type: 'maintenance_task',
+      subject_id: 'task-gutters',
+      created_at: '2026-11-29T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.ok(maintOverdueWithTitleEn.startsWith('Maintenance overdue since '))
+  assert.ok(maintOverdueWithTitleEn.includes('(reminder 2)'))
+  assert.ok(maintOverdueWithTitleEn.includes('Clean gutters'))
+
+  const maintOverdueNoTitleEn = formatNotificationText(
+    {
+      id: 'n16b',
+      event_type: 'MAINTENANCE_DUE',
+      params: { due_date: '2026-11-15', overdue: true, reminder_number: 1 },
+      subject_type: 'maintenance_task',
+      subject_id: 'task-gutters',
+      created_at: '2026-11-22T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.ok(maintOverdueNoTitleEn.startsWith('Maintenance overdue since '))
+  assert.ok(maintOverdueNoTitleEn.includes('(reminder 1)'))
+
+  const noticePubEn = formatNotificationText(
+    {
+      id: 'n17',
+      event_type: 'NOTICE_PUBLISHED',
+      params: {},
+      subject_type: 'post',
+      subject_id: 'post-notice-1',
+      created_at: '2026-11-06T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.equal(noticePubEn, 'New notice from the board')
+
+  setI18nLocale('et')
+  const noticePubEt = formatNotificationText(
+    {
+      id: 'n17',
+      event_type: 'NOTICE_PUBLISHED',
+      params: {},
+      subject_type: 'post',
+      subject_id: 'post-notice-1',
+      created_at: '2026-11-06T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'et',
+  )
+  assert.equal(noticePubEt, 'Uus teade juhatuselt')
+
+  setI18nLocale('ru')
+  const noticePubRu = formatNotificationText(
+    {
+      id: 'n17',
+      event_type: 'NOTICE_PUBLISHED',
+      params: {},
+      subject_type: 'post',
+      subject_id: 'post-notice-1',
+      created_at: '2026-11-06T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'ru',
+  )
+  assert.equal(noticePubRu, 'Новое объявление от правления')
 
   setI18nLocale('en')
 })

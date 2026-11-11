@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
+import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import BaseChip from '@/components/base/BaseChip.vue'
 import { formatDateTime } from '@/utils/dates.js'
 
@@ -44,106 +45,92 @@ const categoryTone = computed(() => {
   if (props.post.category === 'MAINTENANCE' || props.post.category === 'WATER_SHUTOFF') return 'warning'
   return 'neutral'
 })
+
+const displayTimestamp = computed(() => {
+  return formatDateTime(props.post.last_activity_at || props.post.created_at, session.lang)
+})
 </script>
 
 <template>
   <article
-    class="rounded-xl p-6 transition-all cursor-pointer relative overflow-hidden group"
+    class="rounded-xl p-4 transition-all cursor-pointer relative overflow-hidden group border"
     :class="[
-      isPinnedNotice
-        ? 'bg-primary-container text-on-primary-container shadow-sm'
-        : 'bg-surface-container-lowest text-on-surface border border-surface-container-high hover:border-primary/40 shadow-xs',
-      selected ? 'ring-2 ring-primary' : '',
+      selected
+        ? 'bg-surface-container-lowest border-primary ring-2 ring-primary/20 shadow-sm'
+        : isPinnedNotice
+          ? 'bg-primary/5 border-primary/25 hover:border-primary/60 shadow-2xs'
+          : 'bg-surface-container-lowest/90 border-surface-container-high hover:bg-surface-container-lowest hover:border-primary/40 shadow-2xs',
     ]"
     @click="emit('select', post)"
   >
-    <div v-if="isPinnedNotice" class="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
-      <span class="material-symbols-outlined text-6xl">campaign</span>
-    </div>
-
-    <div class="relative z-10">
-      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <div class="flex items-center gap-2">
-          <span
-            v-if="isPinnedNotice"
-            class="px-2.5 py-0.5 bg-secondary-fixed text-on-secondary-fixed text-[11px] font-bold uppercase tracking-wider rounded"
-          >
-            {{ categoryLabel }}
-          </span>
-          <BaseChip v-else :tone="categoryTone">
-            {{ categoryLabel }}
-          </BaseChip>
-          <span
-            class="text-xs font-mono"
-            :class="isPinnedNotice ? 'text-on-primary-container/75' : 'text-on-surface-variant'"
-          >
-            {{ formatDateTime(post.created_at, session.lang) }}
-          </span>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <button
-            v-if="canDeleteForumTopic && post.post_type === 'FORUM_TOPIC'"
-            type="button"
-            class="text-xs font-semibold inline-flex items-center gap-1 px-2 py-1 rounded text-error hover:bg-error-container/40 transition-colors"
-            @click.stop="emit('delete-post', post)"
-          >
-            <span class="material-symbols-outlined text-[15px]">delete</span>
-            <span>{{ session.t('common.delete') }}</span>
-          </button>
-
-          <button
-            type="button"
-            class="text-xs font-semibold inline-flex items-center gap-1 px-2 py-1 rounded transition-colors"
-            :class="isPinnedNotice ? 'text-secondary-fixed hover:bg-white/10' : 'text-primary hover:bg-primary/5'"
-            @click.stop="emit('open-detail', post)"
-          >
-            <span>{{ session.t('forum.fullThreadBtn') }}</span>
-            <span class="material-symbols-outlined text-[15px]">open_in_new</span>
-          </button>
-        </div>
+    <div class="flex items-center justify-between gap-2 mb-1.5">
+      <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+        <BaseChip :tone="categoryTone">
+          <span v-if="isPinnedNotice" class="material-symbols-outlined text-[13px] mr-0.5">campaign</span>
+          <span>{{ categoryLabel }}</span>
+        </BaseChip>
+        <PostOriginBadge
+          :origin="post.origin"
+          :post-type="post.post_type"
+        />
       </div>
 
-      <h3
-        class="text-lg font-bold mb-2 leading-snug"
-        :class="isPinnedNotice ? 'text-white' : 'text-on-surface group-hover:text-primary transition-colors'"
-      >
-        {{ post.title }}
-      </h3>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <span class="text-[11px] font-mono text-on-surface-variant">
+          {{ displayTimestamp }}
+        </span>
 
-      <p
-        class="text-sm leading-relaxed mb-4 line-clamp-3 whitespace-pre-line"
-        :class="isPinnedNotice ? 'text-on-primary-container/90' : 'text-on-surface-variant'"
-      >
-        {{ post.body }}
-      </p>
+        <button
+          v-if="canDeleteForumTopic && post.post_type === 'FORUM_TOPIC'"
+          type="button"
+          class="p-1 rounded text-on-surface-variant hover:text-error hover:bg-error-container/30 transition-colors"
+          :title="session.t('common.delete')"
+          @click.stop="emit('delete-post', post)"
+        >
+          <span class="material-symbols-outlined text-[15px]">delete</span>
+        </button>
+
+        <button
+          type="button"
+          class="p-1 rounded text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
+          :title="session.t('forum.fullThreadBtn')"
+          @click.stop="emit('open-detail', post)"
+        >
+          <span class="material-symbols-outlined text-[15px]">open_in_new</span>
+        </button>
+      </div>
+    </div>
+
+    <h3
+      class="text-sm sm:text-base font-bold mb-1 leading-snug line-clamp-1 transition-colors"
+      :class="selected ? 'text-primary' : 'text-on-surface group-hover:text-primary'"
+    >
+      {{ post.title }}
+    </h3>
+
+    <p class="text-xs text-on-surface-variant leading-relaxed mb-2.5 line-clamp-2 whitespace-pre-line">
+      {{ post.body }}
+    </p>
+
+    <div class="flex items-center justify-between gap-2 pt-2 border-t border-surface-container-high/80 text-xs">
+      <div class="min-w-0 truncate">
+        <AuthorBadge
+          v-if="post.author_badge"
+          :badge="post.author_badge"
+          :is-mine="post.is_mine"
+        />
+      </div>
 
       <div
-        class="flex flex-wrap items-center justify-between gap-3 pt-3 border-t"
-        :class="isPinnedNotice ? 'border-white/15' : 'border-surface-container-high'"
+        class="inline-flex items-center gap-1 font-mono text-xs shrink-0 px-2 py-0.5 rounded-md"
+        :class="
+          (post.comments_count ?? 0) > 0
+            ? 'bg-primary/10 text-primary font-semibold'
+            : 'text-on-surface-variant'
+        "
       >
-        <div class="flex items-center gap-2">
-          <AuthorBadge
-            v-if="!isPinnedNotice && post.author_badge"
-            :badge="post.author_badge"
-            :is-mine="post.is_mine"
-          />
-          <div v-else-if="post.author_badge" class="flex items-center gap-2 text-xs text-white/90 font-semibold">
-            <span class="material-symbols-outlined text-[16px] text-secondary-fixed">verified</span>
-            <span>{{ post.author_badge.display_label }}</span>
-            <span class="opacity-60">•</span>
-            <span class="text-[11px] uppercase tracking-wider text-secondary-fixed">{{ post.author_badge.role_badge }}</span>
-          </div>
-        </div>
-
-        <div
-          class="flex items-center gap-1.5 text-xs font-semibold"
-          :class="isPinnedNotice ? 'text-white/90' : 'text-on-surface-variant'"
-        >
-          <span class="material-symbols-outlined text-[16px]">chat_bubble</span>
-          <span class="font-mono tabular-nums">{{ post.comments_count ?? 0 }}</span>
-          <span>{{ session.t('forum.commentsCountLabel') }}</span>
-        </div>
+        <span class="material-symbols-outlined text-[14px]">chat_bubble</span>
+        <span class="tabular-nums">{{ post.comments_count ?? 0 }}</span>
       </div>
     </div>
   </article>
