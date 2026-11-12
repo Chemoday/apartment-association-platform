@@ -97,7 +97,7 @@ cannot be deleted.
 ## B-3. Database backups and durable storage
 
 - **Status:** open, not part of the MVP. Target: before the first real association uses the
-  platform.
+  platform. Designed further on 2026-11-12 (below); nothing is set up yet.
 - **Raised:** 2026-10-25.
 
 ### Problem
@@ -126,10 +126,78 @@ Where the data lives today:
 4. **Off-server copy** (later): the dumps also leave the VPS, e.g. to object storage, encrypted.
 5. **Locally** keep the named volume and document that `docker compose down -v` deletes the data.
 
+### Design after the file storage session (2026-11-12)
+Record: [docs/cli_planning/2026-11-12-file-storage-and-backups.md](cli_planning/2026-11-12-file-storage-and-backups.md).
+With the file storage of epic E11 ([epics/E11_FILE_STORAGE.md](epics/E11_FILE_STORAGE.md)) a
+backup is more than the database. Steps 1, 3 and 5 above stay; steps 2 and 4 are replaced by
+what follows.
+
+- **What, per instance and separately for each:** (1) the database dump; (2) the files
+  directory (`files/blobs`); (3) the environment file of the instance. The secrets are part of
+  the backup: without `AUTH_HASH_SECRET` a restored database has lost every session, link,
+  invitation and password. The password of the backup repository and the secrets are also kept
+  in the operator's password manager; a backup nobody can decrypt is no backup.
+- **Tool:** `restic` (one binary; it encrypts on the client, so the storage provider sees only
+  ciphertext; it removes duplicates and compresses). The dump is written uncompressed
+  (`pg_dump -Fc -Z0`) into restic's standard input, so the difference between two runs is a few
+  MB. The run must fail when `pg_dump` fails (`--stdin-from-command`, or `pipefail`); otherwise
+  a cut-off dump is recorded as a success. Blobs never change after they are written (E11), so
+  they are stored once however many snapshots refer to them. Plain nightly archives would
+  multiply the files by the days kept.
+- **How:** one script on the host (a systemd timer), not in the app, so it works when a
+  container is broken. Instances are handled one after another at low priority (`nice`,
+  `ionice`), so no two dumps run together.
+- **How often:** every 6 hours, the dump first and the files right after it, in that order. So
+  every dump has a files snapshot taken after it, and at most 6 hours of either are lost; this
+  matters on the days of an official vote, because the signed ballots are files. Only new blobs
+  are uploaded, so a run is cheap. Files are erased 14 days after they are deleted (E11), so a
+  file deleted between the dump and the snapshot is still there.
+- **Kept:** every snapshot of the last 7 days, then 4 weekly and 12 monthly ones. Deleted
+  personal data therefore lives up to 12 more months in the backups; the privacy notice must
+  say so.
+- **On the VPS itself:** one compressed dump per night in `/opt/aap/<env>/backups`, kept for 7
+  days (tens of MB), for a quick restore without the network. Files are not kept twice on the
+  same disk: delayed deletion is the local window for undoing a mistake, and the copy outside
+  the VPS holds the history.
+- **Outside the VPS:** S3-compatible storage in the EU at **a provider other than the one of
+  the VPS**, so that a blocked account or a lost data centre does not take both copies.
+  Candidates: Backblaze B2 (an EU region, pay per use), Cloudflare R2 (a free allowance, no
+  charge for downloads), Hetzner Storage Box (a flat price for 1 TB, SFTP, its own snapshots).
+  With pay-per-use pricing the expected cost is under one euro a month in the first year and a
+  few euros a month for 30 associations (about 90 GB); check the current prices when choosing.
+  A machine at home is at best a third copy.
+- **A break-in must not destroy the backups:** the bucket keeps versions (or uses object lock);
+  the key on the VPS can write but cannot remove versions; `restic forget --prune` runs from a
+  trusted machine only. A lifecycle rule may remove only non-current versions after some days,
+  never live objects: restic's pack files are shared by all snapshots, so expiring objects by
+  age would destroy the repository. For an SFTP target the provider's own snapshots play this
+  role.
+- **Verified:** monthly and automatically, the newest dump is restored into a scratch database
+  and checked with sanity queries, every `core_files` row of that dump is looked up in the
+  files snapshot of the same run, and a sample of the repository is read back
+  (`restic check --read-data-subset`). An alert fires when the last successful run is older
+  than 8 hours.
+- **One repository per association:** a restore touches one instance; when an association
+  leaves, its project, its directory and its repository are deleted.
+
+| What happens | What saves the data |
+| :--- | :--- |
+| A file or a record is deleted by mistake | the 14 days of delayed deletion; a dump for a record |
+| A bug or a bad migration damages the database | the newest dump (at most 6 hours lost) |
+| `docker volume prune` or `down -v` on the host | host directories instead of named volumes (step 1) |
+| The disk, the VPS or the provider's account is lost | the copy outside the VPS: a new VPS, `bootstrap.sh`, the restore script (hours) |
+| The VPS is broken into | the copy outside the VPS that the VPS cannot destroy; new secrets |
+| A backup is restored into the wrong instance | the instance marker of B-4 |
+
 ### Open questions
-- How many days or versions to keep, and is a copy outside the VPS needed from the start?
-- Should backups be a feature of the product (the chairman downloads one) or only operations?
-- Point-in-time recovery (WAL archiving) or are nightly dumps enough for an association?
+- Which provider holds the copy outside the VPS (an account of the owner is needed).
+- Point-in-time recovery (WAL archiving) for a managed cloud; dumps every 6 hours are enough
+  for now.
+- An export of everything an association has, for one that leaves the platform: created by the
+  operator on request. A download for the chairman is not planned (a multi-GB archive is itself
+  a heavy operation).
+- How long signed ballots and records of voting must legally be kept (E3 part B); the backups
+  must keep them at least as long.
 
 ---
 
@@ -162,6 +230,9 @@ There is no check inside the data itself.
    line; `/health/ready` fails, so `deploy.sh` rolls back automatically.
 3. Deliberately moving data (e.g. copying prod into dev for debugging) is an explicit command that
    rewrites the marker, ideally after anonymising the copy.
+4. The files directory of epic E11 carries the same marker (a file `files/INSTANCE`): the files
+   of another instance, or an empty directory next to a database that has files, also stop the
+   service at startup.
 
 ### Open questions
 - Is `ENVIRONMENT` enough, or does each instance need its own id (several associations on one
@@ -288,3 +359,70 @@ outside the system meanwhile.
   "four eyes" principle); a board of one waits a period instead.
 - Co-owners and shares, inheritance (a flat without an owner for months), and what the auditor or
   the general meeting sees.
+
+## B-11. Disk hygiene on the host
+
+- **Status:** open; small and independent of the other entries. **Raised:** 2026-11-12, by the
+  file storage session (docs/cli_planning/2026-11-12-file-storage-and-backups.md).
+
+### Problem
+Several things grow on the VPS without a limit, long before any user file exists. Measured on
+2026-11-12 (193 GB disk, 157 GB free):
+- **Container logs are not rotated.** The services use the default log driver without a size
+  limit; one log file had reached 101 MB in two weeks.
+- **Images of old releases are never removed.** `deploy/deploy.sh` runs `docker image prune`,
+  which removes only untagged images, and every image of the project is tagged with its commit.
+  42 images (354-390 MB each) were on the host, about 4.6 GB of them reclaimable; every deploy
+  adds one. The directories in `/opt/aap/releases` are never removed either (they are tiny).
+- **The write-ahead log of PostgreSQL** may grow to 1 GB per instance with the default
+  `max_wal_size`, which matters once many instances share the disk.
+- **Free space needs an alert.** A full disk stops the databases of every instance and the
+  unrelated services of the host, so somebody must be told well before it happens.
+- The system journal of the host holds 3.9 GB (not ours to change without the owner).
+
+### Suggested direction
+1. Log rotation for every service in `deploy/docker-compose.deploy.yml` and
+   `deploy/edge/docker-compose.yml` (`max-size` 10 MB, 3 files).
+2. `deploy.sh` removes the project's images and release directories whose commit is neither the
+   current nor the previous one of any environment (the rollback needs the previous one).
+3. `max_wal_size=256MB` (a soft limit) and `temp_file_limit=512MB` (per session) for the
+   database service.
+4. A check on the host (cron or a systemd timer): an alert at 70% and 85% of the disk budget of
+   the platform and when the host has less than 20% free. The budget and how it was derived:
+   docs/epics/E11_FILE_STORAGE.md, section 10.
+5. With the owner: a size limit for the system journal (`SystemMaxUse`).
+6. If logs, traces or metrics are ever stored on the VPS, their retention limits come first.
+
+### Open questions
+- Where the alert goes (the on-call webhook of docs/OBSERVABILITY.md, e-mail or a messenger).
+
+## B-12. Resource limits per instance
+
+- **Status:** open; needed before the first upload route (epic E11, task F0) and before a second
+  association shares the host. **Raised:** 2026-11-12, by the same session.
+
+### Problem
+Containers should carry memory, CPU and process limits, so that a fault in one instance cannot
+affect its neighbours: the other instances and the unrelated services of the host. Decoding
+images (E11) raises the need.
+
+Measured on 2026-11-12 (6 vCPU, 12 GB): an idle instance uses 80-100 MB for the backend and
+45-60 MB for PostgreSQL; its background loops use about 0.25% of one CPU.
+
+### Suggested direction
+1. In `deploy/docker-compose.deploy.yml`: backend `mem_limit` 512 MB, a CPU limit and a
+   process limit; database `mem_limit` 384 MB. Two password hashes at a time need 128 MB and a
+   decoded photo up to about 100 MB (E11 caps the pixels for that), so the backend limit leaves
+   room for both. The CPU limit is to be measured: the event loop must stay responsive while a
+   worker thread encodes a photo (a CPU weight, or 1.5-2 CPUs, instead of a hard limit of one).
+2. A read-only root filesystem for the backend with a small tmpfs for `/tmp`: nothing can grow
+   inside the container layer, and uploads go only to the files volume (E11).
+3. With the owner: swap on the host as a cushion (2-4 GB).
+4. **Capacity rule:** about 200 MB of memory and about 3 GB of disk per association with a full
+   file quota (E11, section 10). On the current host that is about 40-50 instances by memory
+   and about 37 by disk if every quota were full.
+
+### Later, for a managed cloud
+- A hard wall on disk per instance (a filesystem of its own or project quotas) instead of the
+  quota inside the app alone, when associations of third parties share a host.
+- Fewer background loops per idle instance (a worker role, longer idle intervals).
