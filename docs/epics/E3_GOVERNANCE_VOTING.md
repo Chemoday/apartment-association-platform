@@ -177,6 +177,23 @@ apartment field), elections of the board (B-9), and the legal weight of an elect
 - Board decisions without a meeting: the same vote, with board members as voters.
 - A tie ends with "no decision" (no forced lottery).
 
+### 4.1 Input from the file storage session (2026-11-12)
+
+Not decisions yet; input for the planning session of part B
+(docs/cli_planning/2026-11-12-file-storage-and-backups.md).
+- **The owner's flow:** the chairman or the board creates an official vote with a title and a
+  description; the server creates two or three PDF ballots (for, against, abstain) and records
+  the hash of each; an owner downloads one, signs it and uploads the signed container; the
+  server verifies the signature and that the signed file is one of the ballots of this vote;
+  the voter is counted for that choice. Nobody uploads a PDF of their own.
+- **Storage, limits and the checks on an uploaded container** (keep the containers and the
+  ballots, one container per meeting, how to verify, changing a vote): section 9 of
+  [E11_FILE_STORAGE.md](E11_FILE_STORAGE.md).
+- **Open for that session:** how long signed containers must legally be kept; how they are
+  treated as personal data (the signer's certificate carries the full name and the personal
+  code) and who may download them; whether our own verification is enough or the state
+  validation service is required; where a proxy document comes from.
+
 ## 5. Tasks (part A)
 
 | Task | What | Done when |
