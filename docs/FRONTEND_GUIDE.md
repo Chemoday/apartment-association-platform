@@ -104,6 +104,9 @@ Every error has the same JSON body (`ErrorResponse` in the contract):
 - **`404` also means "not visible to you".** A post that does not target the caller, or was deleted
   by the chairman, is `404 POST_NOT_FOUND`, the same as an unknown id. Remove such items from lists
   instead of showing a broken page.
+- **`413` with an empty body** comes from the edge proxy of the deployed environments: a request
+  body over 1 MB (more only on upload routes, docs/API.md section 0). It has no `error_code`;
+  treat a bare `413` as "too large" and never parse its body. Normal forms never get near it.
 - **`500 INTERNAL_SERVER_ERROR`** carries `trace_id`. Show it in the error message ("Error code:
   …"), so a report can be matched to the backend logs. Every response also has an `X-Trace-Id`
   header; log it with failed requests.

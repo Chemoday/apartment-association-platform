@@ -31,6 +31,15 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
 | other | `HTTP_<status>` | Any other framework-level HTTP error |
 
+**Request body limits (deployed environments).** The edge proxy in front of the backend
+(docs/DEPLOYMENT.md, "Resource limits and disk hygiene") accepts at most **1 MB** (1,000,000
+bytes) of request body on every route, and more only on upload routes (4 MB for
+`POST /api/v1/issues/{id}/photos`, epic E11). A larger body is cut off at the limit and answered
+`413` with an **empty, non-JSON body** (no `error_code`, no `trace_id`), because the backend never
+gets to answer it. Upload routes check `Content-Length` themselves before reading and answer
+their own JSON errors below the edge limit; every backend cap stays at or below the edge limit in
+decimal bytes. Local Docker has no edge and no such limit.
+
 Section 7 adds `INVALID_CREDENTIALS`, `SESSION_EXPIRED` (401), `CSRF_CHECK_FAILED`, `REAUTHENTICATION_REQUIRED` (403), `SESSION_NOT_FOUND`, `INVITATION_NOT_FOUND`, `USER_NOT_FOUND` (404), `EMAIL_ALREADY_REGISTERED`, `TENANT_LIMIT_REACHED`, `INVITATION_ALREADY_PENDING`, `INVITATION_ACCEPTED`, `INVITATION_NO_LONGER_VALID`, `LAST_CHAIRMAN` (409) and `PASSWORD_TOO_WEAK` (422); it reuses `RATE_LIMITED` (429) of section 6. `INVALID_CREDENTIALS`, `REAUTHENTICATION_REQUIRED` and `PASSWORD_TOO_WEAK` exist since A5.
 
 ### Author badge rules (`property.policies.format_author_badge`)

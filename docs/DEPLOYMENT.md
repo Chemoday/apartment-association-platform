@@ -13,8 +13,8 @@ Work goes into `main` through pull requests (AGENTS.md, section 4); a pull reque
 on dev before merging with the label `deploy-dev`.
 
 > **Port 8443 is temporary.** Port `443` on the VPS is still used by an Outline VPN server. Once
-> it moves, the switch to `443` is a re-run of `bootstrap.sh` with `HTTPS_PORT=443` plus an update
-> of the `DEV_URL` / `PROD_URL` repository variables. Certificates are issued over port `80`
+> it moves, the switch to `443` is a change of `HTTPS_PORT` in `deploy/hosts/vps1.env`, a re-run
+> of `bootstrap.sh` and an update of the `DEV_URL` / `PROD_URL` repository variables. Certificates are issued over port `80`
 > (HTTP-01), so HTTPS works on either port.
 
 ## Topology
@@ -37,9 +37,14 @@ Server layout (`/opt/aap`):
 
 | Path | Owner | Contents |
 | :--- | :--- | :--- |
-| `aap.conf`, `bin/ssh-gate`, `edge/` | root | Installed by `bootstrap.sh`; the CI key cannot change them |
-| `dev/`, `prod/` | deploy | `.env` (database secret, mode 600), `current_sha`, `previous_sha`, `history` |
-| `releases/<sha>/deploy/` | deploy | The `deploy/` directory of each deployed commit |
+| `aap.conf`, `bin/ssh-gate`, `bin/aap-disk-check`, `edge/`, `host-history` | root | Installed by `bootstrap.sh`; the CI key cannot change them. `host-history` lists every run of `bootstrap.sh` |
+| `dev/`, `prod/` | deploy | `.env` (secrets, mode 600), `current_sha`, `previous_sha`, `history` |
+| `dev/files/`, `prod/files/` | uid 1000 (the backend) | Uploaded files (epic E11), mode 700. On a host whose first account got uid 1000 (often `deploy` itself) that account owns them too; `/opt/aap/<env>` is 750 and `deploy` is in the `docker` group anyway |
+| `releases/<sha>/deploy/` | deploy | The `deploy/` directory of the current and the previous release of each environment; older ones are removed by `deploy/cleanup.sh` |
+
+Outside `/opt/aap`: the systemd units `aap-disk-check.service` and `.timer` in
+`/etc/systemd/system`, and only when the host file asks for them, a swap file and
+`/etc/systemd/journald.conf.d/aap.conf`.
 
 ## Pipeline
 
@@ -80,6 +85,34 @@ Both environments run with `DEMO_MODE_ENABLED=true` and `SEED_DEMO_DATA=true`
 nothing on every later start, or when the database already has a building. To start the demo
 over on dev, the dev database has to be emptied; prod is never reset by a deploy.
 
+## Resource limits and disk hygiene
+
+Several instances and unrelated services share the host, so nothing may grow without a bound
+(docs/BACKLOG.md B-11, B-12; docs/epics/E11_FILE_STORAGE.md, sections 7-8).
+
+| What | Where | Limit |
+| :--- | :--- | :--- |
+| Request bodies | `deploy/edge/Caddyfile` | 1 MB (decimal) for every route; 4 MB for `POST /api/v1/issues/{id}/photos`; the backend never receives more than the limit, and the client gets a bare 413 (docs/API.md, section 0). Refusing a large `Content-Length` before reading is the upload route's own job (E11) |
+| Slow clients | `deploy/edge/Caddyfile` | 10 s for the headers, 3 min for a body, 2 min idle |
+| Backend | `deploy/docker-compose.deploy.yml` | 512 MB of memory, 2 CPUs, 200 processes; read-only root filesystem with a 64 MB `/tmp` |
+| Database | `deploy/docker-compose.deploy.yml` | 384 MB of memory, 200 processes; `max_wal_size=256MB`, `temp_file_limit=512MB` |
+| Edge proxy | `deploy/edge/docker-compose.yml` | 256 MB of memory, 200 processes |
+| Container logs | both compose files | 3 files of 10 MB per container |
+| Images and releases | `deploy/cleanup.sh`, run by `deploy.sh` after a healthy deploy | only the current and the previous release of each environment are kept; images of other services are never touched |
+| Disk | `aap-disk-check.timer` (hourly) | a warning in the journal (tag `aap-disk-check`) and a failed unit at 70% and 85% of `DISK_BUDGET_GB`, or below 20% free on the host; image sizes are summed per image, so the estimate errs on the high side |
+
+- The limits of the app containers arrive with a deploy (they are part of the release); the edge
+  limits, the disk check and the host-wide settings arrive with `bootstrap.sh`.
+- A deploy holds a shared lock on `/opt/aap/releases/.deploy.lock` while it pulls and starts its
+  image; the clean-up runs only when it gets the exclusive lock at once. It also keeps every
+  release whose directory changed in the last two hours (`ssh-gate.sh` downloads or touches it
+  before the deploy starts), so neither the image nor the directory of a deploy of the other
+  environment, or of a rollback to an old release, is removed while it runs.
+- Images of an earlier repository name are removed only when the host file lists them in
+  `REMOVE_IMAGES_OF` (a rollback to a commit before the rename needs them).
+- Where a disk warning goes beyond the journal is open (B-11). Check it with
+  `systemctl --failed` or `journalctl -t aap-disk-check`.
+
 ## Rollback
 
 - **Automatic.** `deploy.sh` starts the new release with `docker compose up --wait`. The backend
@@ -93,23 +126,78 @@ over on dev, the dev database has to be emptied; prod is never reset by a deploy
   the image (a rollback), it logs `migrations_skipped_schema_ahead` and skips the upgrade instead
   of crashing.
 
-## One-time setup
+## Host configuration as code
 
-1. **VPS** (as root, from a copy of `deploy/`):
-   ```bash
-   PUBLIC_IP=164.68.121.228 HTTPS_PORT=8443 DEPLOY_PUBKEY_FILE=./ci_deploy.pub bash bootstrap.sh
-   ```
-   This creates the `deploy` user and the `/opt/aap` layout, generates a random database password
-   and the login secrets (`JWT_SECRET_KEY`, `AUTH_HASH_SECRET`) per environment, creates the
-   `aap-edge` network and starts Caddy. Re-running it is safe: existing secrets, deploy state and
-   certificates are kept, and missing secrets are added.
-2. **GitHub repository settings**:
-   - Secrets: `DEPLOY_SSH_KEY` (private half of the CI key) and `DEPLOY_KNOWN_HOSTS` (the VPS
-     ed25519 host key, verified against `/etc/ssh/ssh_host_ed25519_key.pub`).
-   - Variables: `DEPLOY_HOST`, `DEV_URL`, `PROD_URL`, `FRONTEND_REPOSITORY` (frontend sync).
-   - Secret `FRONTEND_SYNC_TOKEN`: a token that reads the frontend repository and writes this
-     one (pushes and pull requests of the Frontend sync workflow must start CI).
-   - Environments: `dev`, and `production` restricted to the `main` branch.
+A VPS is set up and changed only from the repository, so that a new one can be built without
+anybody's memory (owner rule, 2026-11-13; AGENTS.md, section 3).
+
+- **Nothing is changed on a VPS by hand.** A change is a commit in `deploy/` plus the script that
+  applies it; the scripts are idempotent, so a re-run is always safe. Releases of the app arrive
+  by the deploy pipeline; everything outside a release (the edge proxy, systemd units, host-wide
+  settings, the directory layout) is applied by `bootstrap.sh` as root.
+- **Secrets never enter the repository.** `bootstrap.sh` generates them on the host into
+  `/opt/aap/<env>/.env`; this document lists their names only. The owner keeps a copy in a
+  password manager (docs/BACKLOG.md B-3).
+- **One file per host, without secrets:** `deploy/hosts/<name>.env` (`PUBLIC_IP`, `HTTPS_PORT`,
+  `DISK_BUDGET_GB` and the host-wide flags). The current VPS is `vps1`.
+- **Host-wide settings are opt-in.** Swap (`HOST_SWAP_SIZE`) and the size of the system journal
+  (`HOST_JOURNAL_MAX`) affect every service on the host, so they are applied only when the host
+  file sets them. Containers and files of the project are always configured.
+- **A log of what was applied:** `deploy/HOST_CHANGELOG.md` in the repository (date, host,
+  commit, action, who, result) and `/opt/aap/host-history` on the host (every run of
+  `bootstrap.sh`).
+- **A drift check:** `deploy/host/check.sh --host hosts/<name>.env` (as root, read-only) compares
+  the host with the repository: the installed edge files, scripts and units, the HTTPS port, the
+  disk budget, the secrets being present, the files directories, the limits and log rotation of
+  the running containers, the host-wide settings. Every `DIFF` is fixed by re-running
+  `bootstrap.sh`.
+
+### Applying a change to a host
+
+As root on the VPS, from the `deploy/` directory of a commit on `main`:
+
+```bash
+sha=<commit on main>
+rm -rf /root/aap-deploy && mkdir -p /root/aap-deploy
+curl -fsSL "https://codeload.github.com/Chemoday/apartment-association-platform/tar.gz/$sha" \
+  | tar -xz -C /root/aap-deploy --strip-components=1 --wildcards '*/deploy/*'
+cd /root/aap-deploy/deploy
+bash bootstrap.sh --host hosts/vps1.env --source-sha "$sha"
+bash host/check.sh --host hosts/vps1.env
+```
+
+`bootstrap.sh` validates the new Caddyfile before it replaces the running one. When the edge
+compose file changed, the edge container is recreated: dev and prod are unreachable for a few
+seconds. Then add a line to `deploy/HOST_CHANGELOG.md`.
+
+### A new VPS from scratch
+
+1. A VPS with Ubuntu 24.04 (systemd, `flock` from util-linux), Docker with the Compose plugin,
+   `curl`, `python3`, `openssl`.
+2. A host file `deploy/hosts/<name>.env` (copy `vps1.env`), committed to `main`.
+3. A new CI key pair: the private half goes into the repository secret `DEPLOY_SSH_KEY`, the
+   public half to the host as `ci_deploy.pub`.
+4. As root, the commands of "Applying a change to a host" with
+   `DEPLOY_PUBKEY_FILE=/root/ci_deploy.pub` in front of `bash bootstrap.sh`. This creates the
+   `deploy` user and the `/opt/aap` layout, generates the database password and the login
+   secrets (`JWT_SECRET_KEY`, `AUTH_HASH_SECRET`) per environment, creates the files directories
+   and the `aap-edge` network, starts Caddy, installs the disk check and applies the host-wide
+   settings the host file asks for. Re-running it is safe: existing secrets, deploy state and
+   certificates are kept, missing secrets are added, and the CI key is kept unless a new one is
+   passed.
+5. GitHub repository settings (below), with `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS` of the new host.
+6. Deploy a commit to dev, then promote it to prod (Pipeline). Restoring the data of an old host
+   needs the backups of docs/BACKLOG.md B-3, which do not exist yet.
+7. A line in `deploy/HOST_CHANGELOG.md`.
+
+### GitHub repository settings
+
+- Secrets: `DEPLOY_SSH_KEY` (private half of the CI key) and `DEPLOY_KNOWN_HOSTS` (the VPS
+  ed25519 host key, verified against `/etc/ssh/ssh_host_ed25519_key.pub`).
+- Variables: `DEPLOY_HOST`, `DEV_URL`, `PROD_URL`, `FRONTEND_REPOSITORY` (frontend sync).
+- Secret `FRONTEND_SYNC_TOKEN`: a token that reads the frontend repository and writes this one
+  (pushes and pull requests of the Frontend sync workflow must start CI).
+- Environments: `dev`, and `production` restricted to the `main` branch.
 
 ## Notes
 
@@ -125,18 +213,11 @@ over on dev, the dev database has to be emptied; prod is never reset by a deploy
 - **Login secrets (epic E7):** the backend refuses to start without `JWT_SECRET_KEY` and
   `AUTH_HASH_SECRET` (at least 32 bytes each), and `docker-compose.deploy.yml` refuses to start
   without them in `/opt/aap/<env>/.env`. A deploy without them fails its health check and rolls
-  back. **Before the first deploy that contains E7/A2** (including a pull request labelled
-  `deploy-dev`), add them as root on the VPS:
-  ```bash
-  for e in dev prod; do f=/opt/aap/$e/.env; [ -z "$(tail -c1 "$f")" ] || echo >> "$f"
-    for k in JWT_SECRET_KEY AUTH_HASH_SECRET; do
-      grep -q "^$k=" "$f" || printf '%s=%s\n' "$k" "$(openssl rand -hex 32)" >> "$f"; done; done
-  ```
-  - Re-running `bootstrap.sh` adds them too, but only with exactly the parameters of step 1
-    (`HTTPS_PORT=8443`): with the default port it would move the edge proxy onto 443, which
-    another service on this VPS uses.
+  back. `bootstrap.sh` generates them, and a re-run adds any that are missing (section "Applying
+  a change to a host"); they are never written by hand.
   - Never rotate `AUTH_HASH_SECRET` casually: it signs everyone out and voids all open links and
     invitations.
 - Troubleshooting (as root on the VPS):
   `docker compose -p aap-dev logs -f backend`, `cat /opt/aap/dev/history`,
-  `docker logs aap-edge-caddy-1`.
+  `docker logs aap-edge-caddy-1`, `journalctl -t aap-disk-check`,
+  `bash host/check.sh --host hosts/vps1.env` from a copy of `deploy/`.

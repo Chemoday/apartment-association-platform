@@ -27,6 +27,7 @@ All AI coding, testing, and on-call agents operating in this repository MUST fol
 - **Precision:** Use `Decimal` / `Numeric(12, 3)` for all meter values. Never use `float`.
 - **Zero PII Leak:** Never return raw `User.full_name`, `email`, or `phone` in `communication` endpoints; always resolve through the privacy badge masker. The exceptions (owner decisions, epics E8 and E10): authors of `BOARD_TOPIC` posts and their comments are shown to the board by full name, and so is who recorded a maintenance log entry (to the board and the accountant), both resolved by `PropertyService.get_named_author_badges`. Never log PII in OpenTelemetry spans or logs.
 - **Single-Command Execution:** All changes must keep `docker compose up --build` and `pytest` passing without manual intervention.
+- **Host Configuration as Code:** Nothing is changed on a VPS by hand. Everything applied to a host lives in `deploy/` with an idempotent script that applies it (`bootstrap.sh`), host parameters without secrets in `deploy/hosts/<name>.env`, and every application is logged in `deploy/HOST_CHANGELOG.md`, so a new VPS can be set up from the repository alone (docs/DEPLOYMENT.md, "Host configuration as code"). Secrets never enter the repository.
 
 ## 4. Change Workflow
 - One issue per task; one branch and one pull request per large feature (an epic, or a part of
