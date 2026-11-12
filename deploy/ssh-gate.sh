@@ -40,7 +40,11 @@ sys.exit(not ok)' "$sha" "$REPO"
 fetch_release() {
     # Download deploy/ of that exact commit, so config and image always come from the same SHA.
     local sha=$1 release_dir="$AAP_ROOT/releases/$1"
-    [[ -f "$release_dir/deploy/deploy.sh" ]] && return 0
+    if [[ -f "$release_dir/deploy/deploy.sh" ]]; then
+        # A fresh mtime keeps the release from deploy/cleanup.sh while this deploy starts.
+        touch "$release_dir"
+        return 0
+    fi
     local tmp
     tmp=$(mktemp -d "$AAP_ROOT/releases/.incoming.XXXXXX")
     if ! curl -fsSL --retry 3 "https://codeload.github.com/${REPO}/tar.gz/${sha}" \

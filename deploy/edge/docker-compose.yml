@@ -4,6 +4,13 @@ services:
   caddy:
     image: caddy:2.8.4-alpine
     restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 200
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     ports:
       - "80:80"
       - "${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"
