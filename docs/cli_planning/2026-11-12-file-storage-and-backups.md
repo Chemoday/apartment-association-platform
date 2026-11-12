@@ -82,3 +82,24 @@ documentation only.
 F0 limits at the edge and per container -> F1 the store -> F2 photos of issue reports -> F3
 documents of the board -> F4 usage and quota notifications. B-11 is independent and small; B-3
 should be done before the first real association stores files.
+
+## 9. Follow-up on 2026-11-13: towards the implementation
+- The design was merged (#120) and scheduled: epic #125, tasks F0 #121, F1 #122, F2 #103, F3
+  #123, F4 #124; three pull requests (F0; F1 with F2; F3 with F4).
+- **What the client takes over.** The owner asked which work belongs to the client. The rule:
+  the client takes what saves traffic, server CPU or helps the person (scaling, converting,
+  checks before sending, a preview, the progress, retrying one photo); everything that protects
+  the server stays there and is checked again, because a request can bypass any client.
+- **Decompression bombs.** The owner was worried about PNG bombs and the memory of decoding. The
+  size is read from the header before decoding and the pixel limit bounds the memory, but a PNG
+  cannot be decoded already reduced. The owner noted that a future native phone app can scale
+  photos just as well as a browser. Decision: the server accepts only JPEG of at most 2560 px,
+  every client scales and converts, and the server opens no other decoder.
+- **Demo mode:** uploads only with `FILES_IN_DEMO=true` on dev (a small demo quota, a short
+  retention); prod refuses them.
+- **Retries:** an `Idempotency-Key` on photo uploads.
+- **Instance marker:** waits for B-4.
+- **Host configuration as code.** The owner asked that every configuration applied to the VPS be
+  kept in the repository, with the scripts that apply it and a log of what was applied, so that
+  a new VPS can be set up without anybody's memory. It becomes a rule in AGENTS.md and is
+  introduced by task F0.
