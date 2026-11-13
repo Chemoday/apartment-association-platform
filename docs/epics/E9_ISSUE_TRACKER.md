@@ -186,7 +186,7 @@ changed in the app, not in the server's `.env`.
 | I1 ([#100](https://github.com/Chemoday/apartment-association-platform/issues/100)) | Module `issues`: report, list, detail, edit and withdraw, "+1", visibility; the contract | residents report and "+1", see every issue of the building and nothing about who reported; the board sees the reporter badge; another building gets 404; limits; tests |
 | I2 ([#101](https://github.com/Chemoday/apartment-association-platform/issues/101)) | The board's work: statuses, the timeline and action log, duplicates merged, declined, reopen, clear urgent | every transition and its rules; followers move to the original once; tests |
 | I3 ([#102](https://github.com/Chemoday/apartment-association-platform/issues/102)) | Notifications `ISSUE_REPORTED`, `ISSUE_URGENT`, `ISSUE_STATUS_CHANGED` and the merge notice, subject `issue`; frontend handoff | the right people are told once, never the actor; urgent is mandatory; texts in en, ru, et; tests |
-| I4 ([#103](https://github.com/Chemoday/apartment-association-platform/issues/103), later) | Photos, after the shared file storage (epic E11, task F2) | up to 3 images per report, re-encoded, metadata removed |
+| I4 ([#103](https://github.com/Chemoday/apartment-association-platform/issues/103)) | Photos on the shared file storage (epic E11, task F2; contract docs/API.md section 10) | up to 3 images per report, re-encoded, metadata removed |
 
 I0-I3 go into one pull request (owner decision 2026-11-08: one pull request per large feature),
 with the contract and the code of each task in their own commits.

@@ -644,6 +644,11 @@ and per cleared urgent flag.)*
 - A status change locks the issue (`FOR UPDATE`); marking a duplicate also locks the original, the
   two rows in id order, so two board members merging in opposite directions cannot deadlock or
   make a cycle.
+- **Photos** (task I4, epic E11 F2) are rows of `core_files` (section 12) with `purpose`
+  `issue_photo` and `owner_ref` = the issue's id; the module has no table of its own for them.
+  Adding a photo locks the issue (`FOR UPDATE`) and counts its photos again, so two parallel
+  uploads cannot make a fourth. The module sets `delete_after` when the issue ends (`ended_at` +
+  `issues.photo_retention_months`) and clears it when the issue is reopened.
 
 ---
 

@@ -1729,6 +1729,7 @@ Every endpoint needs a signed-in user of the building.
 | `issues.reports_per_apartment_per_day` | `INTEGER` | 3 | 1..20 | Issue reports one apartment may file in 24 hours (epic E9) |
 | `issues.urgent_enabled` | `BOOLEAN` | `false` | | Residents may mark an issue report urgent |
 | `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
+| `issues.photo_retention_months` | `INTEGER` | 12 | 1..60 | How long the photos of an issue are kept after it ended (epic E11); a change applies to issues that end afterwards |
 | `maintenance.overdue_reminder_days` | `INTEGER` | 7 | 1..30 | Days between the reminders of an overdue maintenance task (epic E10) |
 
 ### `GET /api/v1/settings` (chairman and board)
@@ -1795,7 +1796,11 @@ Every endpoint needs a signed-in user.
   "updated_at": "2026-11-08T18:00:00Z",
   "ended_at": null,
   "timeline": [{"status": "REPORTED", "at": "2026-11-08T18:00:00Z"}],
-  "reporter": null
+  "reporter": null,
+  "photos": [
+    {"id": "uuid", "width": 1920, "height": 1440, "created_at": "2026-11-08T18:01:00Z", "mine": false, "can_delete": false}
+  ],
+  "can_add_photo": false
 }
 ```
 - `category`: `LIGHTING`, `DOORS_AND_LOCKS`, `LIFT`, `HEATING`, `WATER_AND_SEWAGE`, `ELECTRICITY`,
@@ -1821,7 +1826,13 @@ Every endpoint needs a signed-in user.
   `{"badge": AuthorBadge, "apartment_id": "uuid" | null}`. The badge is the privacy badge of
   section 0 (the reporter's mode in that apartment), never a raw name or contacts;
   `apartment_id` links to the apartment's card and thread (epic E8).
-- Never in a payload: who reported (except `reporter` for the board), who follows.
+- `photos` (task I4 / E11 F2): at most 3, oldest first; `width`/`height` of the display size.
+  `mine`: the caller uploaded it; `can_delete`: the caller may delete it (below). Who uploaded a
+  photo is never in a payload. `can_add_photo`: the caller may upload one now (the reporter or the
+  board, the issue is open, fewer than 3 photos, and uploads are switched on: never in a demo
+  without uploads).
+- Never in a payload: who reported (except `reporter` for the board), who follows, who uploaded a
+  photo.
 
 ### `GET /api/v1/issues/form`
 What the report form needs: `{"urgent_enabled": false, "apartment_ids": ["uuid"], "entrances": [1, 2]}`.
@@ -1915,6 +1926,32 @@ Clears the urgent flag (a false alarm); returns the `IssueView`. Logged as an `U
 entry. The report still counts as urgent for the apartment's urgent limit. Already not urgent:
 changes nothing. On an ended issue: `409 ISSUE_ENDED`.
 
+### Photos of an issue (task I4, epic E11 task F2)
+Upload rules, limits and errors shared by every upload: section 12.
+
+**`POST /api/v1/issues/{issue_id}/photos`** with the photo as the body
+(`Content-Type: image/jpeg`, `Content-Length`, at most 4,000,000 bytes, at most 2560 px on either
+edge) and optionally `Idempotency-Key`. Answers the stored `IssuePhoto` (an element of `photos`):
+`201`, or `200` for a repeat with the same key.
+- Who: the reporter and the chairman or the board, while the issue is open (`409 ISSUE_ENDED`
+  after); anyone else who sees it `403 FORBIDDEN`; not visible `404 ISSUE_NOT_FOUND`.
+- At most 3 photos per issue: `409 PHOTO_LIMIT_REACHED` (a deleted photo frees its place).
+- The photo is re-encoded (orientation applied, location and every other metadata removed) and
+  stored as WebP in two sizes.
+
+**`GET /api/v1/issues/{issue_id}/photos/{photo_id}?variant=display|thumb`**: the image
+(`image/webp`; `thumb` at most 320 px for lists, `display` at most 1920 px; default `display`) to
+everyone who sees the issue, with the headers of section 12. Unknown, deleted, of another issue,
+or its file is missing on the server: `404 PHOTO_NOT_FOUND`.
+
+**`DELETE /api/v1/issues/{issue_id}/photos/{photo_id}`**: `204`. The one who uploaded it while the
+issue is open, the chairman and the board at any time; anyone else `403 FORBIDDEN`. The photo
+disappears at once and is erased from the server after 14 days.
+
+**Retention:** when an issue ends, its photos are kept for `issues.photo_retention_months`
+(section 9, default 12; never less than the 30 days in which the issue can be reopened) and then
+deleted; reopening the issue keeps them again. In demo mode a photo is deleted after about a day.
+
 ### Domain events
 Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (task I3):
 - `IssueReported`: `issue_id`, `building_id`, `reporter_user_id`, `urgent`; drives
@@ -1928,11 +1965,14 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (ta
 ### Error codes of this section
 | Status | `error_code` |
 | :--- | :--- |
-| 403 | `FORBIDDEN` |
-| 404 | `ISSUE_NOT_FOUND` |
-| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` |
-| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE` |
+| 400 | `UPLOAD_INTERRUPTED` (photos, section 12) |
+| 403 | `FORBIDDEN`, `UPLOADS_DISABLED` |
+| 404 | `ISSUE_NOT_FOUND`, `PHOTO_NOT_FOUND` |
+| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED` |
+| 411, 413, 415 | `LENGTH_REQUIRED`, `FILE_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` (photos, section 12) |
+| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE`, `INVALID_IMAGE`, `IMAGE_TOO_LARGE` |
 | 429 | `RATE_LIMITED` |
+| 507 | `STORAGE_QUOTA_EXCEEDED`, `STORAGE_LOW_DISK` (photos, section 12) |
 
 ## 11. Maintenance calendar and log (`maintenance`), epic E10
 
