@@ -453,7 +453,7 @@ async def test_no_resident_facing_response_names_the_reporter_or_the_board(
     summary = resident_calls[0].json()[0]
     assert set(summary) == SUMMARY_FIELDS
     detail = resident_calls[2].json()
-    assert set(detail) == SUMMARY_FIELDS | {"description", "timeline"}
+    assert set(detail) == SUMMARY_FIELDS | {"description", "timeline", "photos", "can_add_photo"}
     for entry in detail["timeline"]:
         assert set(entry) == {"status", "at", "action", "changed_by"}
 

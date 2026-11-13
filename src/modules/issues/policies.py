@@ -4,6 +4,7 @@ docs/API.md section 10 and docs/epics/E9_ISSUE_TRACKER.md. The board's transitio
 add their rules here.
 """
 
+import calendar
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -21,6 +22,10 @@ RECENTLY_ENDED = timedelta(days=30)
 LIMIT_WINDOW = timedelta(hours=24)
 
 BOARD_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
+# Photos per issue (task I4, epic E11 F2); the request body cap of the photo route (also the edge
+# limit of deploy/edge/Caddyfile, in decimal bytes).
+MAX_PHOTOS_PER_ISSUE = 3
+PHOTO_MAX_BYTES = 4_000_000
 
 
 def is_board(role: BuildingRole) -> bool:
@@ -29,6 +34,26 @@ def is_board(role: BuildingRole) -> bool:
 
 def is_open(status: IssueStatus) -> bool:
     return status in OPEN_STATUSES
+
+
+def may_add_photo(*, is_reporter: bool, board: bool, status: IssueStatus, photos: int) -> bool:
+    return (is_reporter or board) and is_open(status) and photos < MAX_PHOTOS_PER_ISSUE
+
+
+def may_delete_photo(*, uploaded_by_caller: bool, board: bool, status: IssueStatus) -> bool:
+    return board or (uploaded_by_caller and is_open(status))
+
+
+def photo_retention_end(ended_at: datetime | None, months: int) -> datetime | None:
+    """When the photos of an issue that ended at `ended_at` are deleted; None while it is open.
+    Months are calendar months; a day that the target month lacks becomes its last day. Never
+    before the reopen window closes: a reopened issue must still have its photos."""
+    if ended_at is None:
+        return None
+    month_index = ended_at.month - 1 + months
+    year, month = ended_at.year + month_index // 12, month_index % 12 + 1
+    day = min(ended_at.day, calendar.monthrange(year, month)[1])
+    return max(ended_at.replace(year=year, month=month, day=day), ended_at + REOPEN_WINDOW)
 
 
 def statuses_for(status_filter: StatusFilter | None) -> frozenset[IssueStatus] | None:

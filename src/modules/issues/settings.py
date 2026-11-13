@@ -13,4 +13,14 @@ URGENT_PER_APARTMENT_PER_DAY = IntSetting(
     "issues.urgent_per_apartment_per_day", default=1, minimum=1, maximum=5
 )
 
-SETTINGS = (REPORTS_PER_APARTMENT_PER_DAY, URGENT_ENABLED, URGENT_PER_APARTMENT_PER_DAY)
+# How long the photos of an issue are kept after it ended (epic E11, task F2).
+PHOTO_RETENTION_MONTHS = IntSetting(
+    "issues.photo_retention_months", default=12, minimum=1, maximum=60
+)
+
+SETTINGS = (
+    REPORTS_PER_APARTMENT_PER_DAY,
+    URGENT_ENABLED,
+    URGENT_PER_APARTMENT_PER_DAY,
+    PHOTO_RETENTION_MONTHS,
+)
