@@ -34,6 +34,18 @@
 		reverse_proxy {args[0]}:8000
 	}
 
+	# Documents of the association (E11 F3): PDF of at most 20 MB, uploaded by staff.
+	@document_upload {
+		method POST
+		path /api/v1/documents
+	}
+	handle @document_upload {
+		request_body {
+			max_size 20MB
+		}
+		reverse_proxy {args[0]}:8000
+	}
+
 	handle {
 		request_body {
 			max_size 1MB

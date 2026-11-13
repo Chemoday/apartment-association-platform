@@ -603,8 +603,10 @@ photo before sending it.**
   is open and deleted 30 days after it is resolved, to save space." On a resolved issue with
   photos, show "Photos will be deleted on {photos_delete_at}". When the board marks an issue as a
   duplicate or declines it, warn in the confirmation: "Its photos will be deleted".
-- **Errors:** `400 UPLOAD_INTERRUPTED`: retry that photo; `409 IDEMPOTENCY_KEY_REUSED`: a bug
-  of the client (a key used twice), retry with a new key; `403 UPLOADS_DISABLED` "Photos are
+- **Errors:** `400 UPLOAD_INTERRUPTED`, `408 UPLOAD_TIMEOUT`: retry that photo with the same key
+  (upload at most 2 files at once); `409 UPLOAD_REMOVED`: "This photo was removed" (never send
+  it again, also not with a new key); `409 IDEMPOTENCY_KEY_REUSED`: a bug of the client (a key
+  used for two files): fix the client, do not retry blindly; `403 UPLOADS_DISABLED` "Photos are
   switched off in this demo"; `409
   PHOTO_LIMIT_REACHED` "At most 3 photos"; `409 ISSUE_ENDED` "This issue is closed"; `413` (also a
   bare 413 from the edge, docs/API.md section 0), `422 IMAGE_TOO_LARGE`: scale again, smaller;
@@ -613,3 +615,51 @@ photo before sending it.**
   photos now; tell the board".
 - A future native app does the same with the image tools of the system (scale on decoding,
   convert to JPEG) and the same `Idempotency-Key`; the contract is the same for every client.
+
+## 18. Documents of the association (epic E11)
+
+Contract: docs/API.md section 13 (and section 12 for the upload rules).
+
+- **Page "Documents"** for everyone with access (residents, the chairman, the board, the
+  accountant): a list with title, category, date, size; a filter by category; a download button
+  (`GET .../file`, with the access token, saved from a blob; the server always sends it as an
+  attachment). Translate the categories in every locale; show an unknown one as "Other".
+- **Uploading** (the chairman, the board, the accountant): pick a PDF (`accept="application/pdf"`),
+  enter the title (prefilled from the file name), the category, the audience and optionally the
+  date of the document; send the file itself as the body (`Content-Type: application/pdf`) with
+  the other values in the query and a fresh `Idempotency-Key`; show the progress. The accountant
+  sees only the audience "Board and accountant". Check the size (at most 20 MB) before sending.
+- **Audience labels:** `EVERYONE` "Everyone in the building", `BOARD_AND_ACCOUNTANT` "Board and
+  accountant", `BOARD` "Board only". Staff see the audience on every document; residents only
+  ever see `EVERYONE` ones, so hide it for them.
+- **Editing** (the chairman and the board, `can_edit`): title, category, audience, date.
+- **Deleting** (the chairman, `can_delete`): confirm "Delete this document for everyone?".
+- `uploaded_by` (staff only) is a badge, never a name.
+- **Before the form:** `GET /documents/upload-options` says whether to show "Upload" at all
+  (`can_upload`), which audiences to offer and the size limit. Prefill the title from the file
+  name without the folder and without ".pdf".
+- **Editing:** send only the fields the person changed (`PATCH` changes only those), so two board
+  members editing different fields at once do not overwrite each other.
+- **Errors (their own texts, not the photo ones):** `413` "The file is larger than 20 MB";
+  `415 UNSUPPORTED_MEDIA_TYPE` "Only PDF files"; `400 UPLOAD_INTERRUPTED`, `408 UPLOAD_TIMEOUT`
+  "The upload broke off; try again" (same key); `409 UPLOAD_REMOVED` "This document was removed
+  meanwhile"; `422` on `title` or `document_date` next to the field; `403 UPLOADS_DISABLED`
+  "Uploads are switched off in this demo"; `507` "The association's storage is full: delete old
+  documents or ask the operator"; `404 DOCUMENT_NOT_FOUND` "This document is not available".
+
+## 19. Storage used by the association (epic E11 task F4)
+
+Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
+(`STORAGE_ALMOST_FULL`).
+
+- **For the chairman and the board:** on the association settings page (section 14) a block
+  "Storage": a bar `used_percent` of the quota, the used and total size, and a line per category
+  ("Photos", "Documents"; translate, show an unknown one by its name) with its bytes. Mention
+  `pending_deletion_bytes` as "Deleted files waiting to be erased (within 14 days)" when it is
+  not zero; they are not part of the used room.
+- **The notification** `STORAGE_ALMOST_FULL` (`subject_type` `storage`, open the storage block):
+  "The association's files use {used_percent}% of its storage. Delete old documents or ask the
+  operator of the server for more room." It comes at 70% and 90% of the
+  room for files, before uploads are refused. Show it to the chairman and the board only in the
+  preferences; the matrix now has **52** rows (it had 48).
+

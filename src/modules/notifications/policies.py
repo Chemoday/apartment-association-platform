@@ -74,6 +74,11 @@ DEFAULT_PREFERENCES: Mapping[tuple[NotificationEventType, Channel], bool] = {
     (_E.NOTICE_PUBLISHED, _C.EMAIL): True,
     (_E.NOTICE_PUBLISHED, _C.TELEGRAM): True,
     (_E.NOTICE_PUBLISHED, _C.WEBPUSH): True,
+    # Rare and operational: in the app and by e-mail, so the board does not miss it (E11 F4).
+    (_E.STORAGE_ALMOST_FULL, _C.IN_APP): True,
+    (_E.STORAGE_ALMOST_FULL, _C.EMAIL): True,
+    (_E.STORAGE_ALMOST_FULL, _C.TELEGRAM): False,
+    (_E.STORAGE_ALMOST_FULL, _C.WEBPUSH): False,
 }
 
 ISSUE_REPORT_EVENTS = frozenset(
@@ -224,6 +229,11 @@ def maintenance_due_key(occurrence_id: uuid.UUID, due_date: date, reminder_numbe
 
 def notice_published_key(post_id: uuid.UUID) -> str:
     return f"notice_published:{post_id}"
+
+
+def storage_alert_key(event_id: uuid.UUID) -> str:
+    """One per reached threshold (a threshold reached again later is a new event)."""
+    return f"storage_alert:{event_id}"
 
 
 def issue_status_key(change_id: uuid.UUID) -> str:

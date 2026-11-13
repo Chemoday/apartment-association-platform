@@ -137,6 +137,11 @@ def compose(
             )
         else:
             text = catalog.render("text.MAINTENANCE_DUE", locale, **values)
+    elif event_type == E.STORAGE_ALMOST_FULL:
+        subject = catalog.render(subject_key, locale, used_percent=params["used_percent"])
+        text = catalog.render(
+            "text.STORAGE_ALMOST_FULL", locale, used_percent=params["used_percent"]
+        )
     elif event_type == E.NOTICE_PUBLISHED:  # only that there is a notice, never its text
         subject = catalog.render(subject_key, locale)
         text = catalog.render("text.NOTICE_PUBLISHED", locale)

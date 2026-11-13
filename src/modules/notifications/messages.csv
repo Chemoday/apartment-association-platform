@@ -26,6 +26,8 @@ text.MAINTENANCE_DUE,"The maintenance task ""{title}"" is due on {due_date}. Ope
 text.MAINTENANCE_DUE.OVERDUE,"The maintenance task ""{title}"" is overdue since {due_date} (reminder {number}). Mark it done or skip it in the maintenance calendar.",Задача обслуживания «{title}» просрочена с {due_date} (напоминание {number}). Отметьте выполнение или пропуск в календаре обслуживания.,"Hooldustöö ""{title}"" tähtaeg möödus {due_date} (meeldetuletus {number}). Märkige see hoolduskalendris tehtuks või jätke vahele."
 subject.NOTICE_PUBLISHED,New notice from the board,Новое объявление правления,Uus teade juhatuselt
 text.NOTICE_PUBLISHED,The board published a notice. Open it on the site to read it.,"Правление опубликовало объявление. Откройте его на сайте, чтобы прочитать.",Juhatus avaldas teate. Lugemiseks avage see veebilehel.
+subject.STORAGE_ALMOST_FULL,The association's storage is {used_percent}% full,Хранилище товарищества заполнено на {used_percent}%,Ühistu failiruum on {used_percent}% täis
+text.STORAGE_ALMOST_FULL,"The association's files use {used_percent}% of its storage. Delete old documents, or ask the operator of the server for more room; see the storage page on the site.","Файлы товарищества занимают {used_percent}% его хранилища. Удалите старые документы или попросите оператора сервера увеличить место; подробности на странице хранилища на сайте.","Ühistu failid kasutavad {used_percent}% failiruumist. Kustutage vanu dokumente või paluge serveri haldajalt rohkem ruumi; vaadake veebilehe failiruumi lehte."
 issue.category.LIGHTING,lighting,освещение,valgustus
 issue.category.DOORS_AND_LOCKS,doors and locks,двери и замки,uksed ja lukud
 issue.category.LIFT,lift,лифт,lift

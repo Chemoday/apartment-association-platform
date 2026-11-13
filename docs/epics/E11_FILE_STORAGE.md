@@ -56,6 +56,15 @@ the contract wins. All sizes below are estimates to be measured again in the fir
   (docs/DEPLOYMENT.md). Task F0 introduces it.
 - **Three pull requests:** F0 alone; F1 with F2 (the store and its first consumer); F3 with F4.
 
+**Documents of the association (task F3), owner decisions of 2026-11-13:**
+- Kept until the chairman deletes them; **only the chairman deletes** (the file is hidden at once
+  and erased after 14 days, the record of the document stays with who deleted it).
+- A **fixed list of categories** in code (the client translates them).
+- Every document has an **audience**: everyone (residents, board, accountant), the board and the
+  accountant, or the board only (the chairman and the board members).
+- The chairman and the board upload into any audience; **the accountant uploads too**, but only
+  into "the board and the accountant" (invoices, reports).
+
 Still open: how signed containers, which hold personal data, are kept (section 9).
 
 ## 2. Principles
@@ -201,7 +210,9 @@ network only the photo is retried.
 - The check runs before the body is read and reserves the cap of the route; the row then
   records the size as stored (a 4 MB photo counts as about 0.3 MB). Reservations are counted,
   so parallel requests cannot overshoot. A refusal has the code `STORAGE_QUOTA_EXCEEDED`.
-- The board sees "used / quota / by category" and is notified at 80% and at 95%.
+- The board sees "used / quota / by category" and is notified at 70% and at 90% of the room for
+  files (the quota minus the votes reserve; task F4 moved them down from 80% and 95%, which
+  coincide with the class limits and so would come only when uploads were already refused).
 - **Rates:** the existing limits of reports per apartment and day (E9), and a limit of stored
   bytes per apartment and day (about 20 MB, far above what the allowed photos need after
   re-encoding).
@@ -356,7 +367,7 @@ managed cloud is in the roadmap).
 | F1 | Core `FileStore`: `core_files`, the local disk implementation, the photo pipeline, the janitor loop, quotas, the low disk guard, the refusal in demo mode; the contract | a module stores, serves and deletes a file through the port; caps, quota and retention are enforced; crash points leave no row without a blob; memory of decoding measured for baseline and progressive files; tests |
 | F2 | Photos of issue reports (E9 I4, [#103](https://github.com/Chemoday/apartment-association-platform/issues/103)); frontend handoff with the client-side scaling | up to 3 photos per report, re-encoded, without metadata; visible to whoever sees the issue; another building gets 404; tests |
 | F3 | Documents of the board (a small module of its own) | the board uploads, lists and deletes PDF documents; residents download them as attachments; tests |
-| F4 | Usage for the board and the quota notifications | the board sees used space by category; it is notified at 80% and 95%; texts in en, ru, et; tests |
+| F4 | Usage for the board and the quota notifications | the board sees used space by category; it is notified at 70% and 90% of the room for files; texts in en, ru, et; tests |
 
 Photos of meters come with E6, signed containers with E3 part B, attachments of the maintenance
 log with E10 part B; each uses the store of F1. Backups of the files are part of B-3 and should
@@ -373,6 +384,10 @@ exist before the first real association stores files.
 - A row without a blob after a restore from backups: the file is shown as unavailable and
   reported, never a server error.
 - An S3 implementation of the store and a hard disk wall per instance for a managed cloud.
+- Before a third upload route (signed containers, E3 part B): one `FileStore.receive(...)` that
+  owns the sequence every upload must follow (admission, content type, length, commit before the
+  body, reservation, gate, receive, store), and one lookup by `Idempotency-Key` instead of
+  `find_repeat` and `find_by_key` (the audit of #129).
 - Images in forum posts and in the threads between the board and an apartment.
 - An export of everything an association has (database and files) when it leaves the platform:
   created by the operator on request, not a self-service download (a multi-GB archive is itself

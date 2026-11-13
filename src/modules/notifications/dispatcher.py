@@ -181,7 +181,11 @@ def _collapse_key(row: Claimed) -> str:
 _BOARD_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
 # Not urgent, no deadline: external messages of these wait for 09:00 when it is night.
 _DAYTIME_EVENTS = frozenset(
-    {NotificationEventType.MAINTENANCE_DUE, NotificationEventType.NOTICE_PUBLISHED}
+    {
+        NotificationEventType.MAINTENANCE_DUE,
+        NotificationEventType.NOTICE_PUBLISHED,
+        NotificationEventType.STORAGE_ALMOST_FULL,
+    }
 )
 
 
@@ -381,6 +385,11 @@ class Dispatcher:
             user = await properties.get_current_user(row.user_id)
             communication = CommunicationService(session, properties)
             if user is None or not await communication.can_read_post(user, row.subject_id):
+                return skip("SUBJECT_NOT_FOUND")
+        elif row.event_type == NotificationEventType.STORAGE_ALMOST_FULL:
+            # Only the board is told; someone who left the board meanwhile is skipped.
+            user = await properties.get_current_user(row.user_id)
+            if user is None or user.building_role not in _BOARD_ROLES:
                 return skip("SUBJECT_NOT_FOUND")
         elif row.subject_type == SubjectType.MAINTENANCE_TASK:
             # Closed or paused meanwhile: the reminder is outdated. The title is read now, so a

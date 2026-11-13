@@ -23,6 +23,7 @@ from src.core.database import DbSession
 from src.core.domain_events import SessionFactory
 from src.core.event_bus import EventBus
 from src.core.exceptions import DomainError
+from src.core.file_events import StorageUsageHigh
 from src.modules.auth.events import UserAccountClosed
 from src.modules.communication.events import (
     ApartmentMessagePosted,
@@ -58,6 +59,7 @@ from src.modules.notifications.policies import (
     poll_opened_key,
     priority_for,
     split_message_recipients,
+    storage_alert_key,
     unsubscribe_delivery_id,
 )
 from src.modules.notifications.schemas import (
@@ -428,6 +430,7 @@ class NotificationsSubscriber:
         bus.subscribe(IssueMerged, self.on_issue_merged)
         bus.subscribe(MaintenanceTaskDue, self.on_maintenance_due)
         bus.subscribe(OfficialNoticePublished, self.on_notice_published)
+        bus.subscribe(StorageUsageHigh, self.on_storage_usage_high)
         bus.subscribe(UserAccountClosed, self.on_account_closed)
 
     async def on_account_closed(self, event: UserAccountClosed) -> None:
@@ -714,6 +717,20 @@ class NotificationsSubscriber:
                     "overdue": event.overdue,
                     "reminder_number": event.reminder_number,
                 },
+            )
+            await session.commit()
+
+    async def on_storage_usage_high(self, event: StorageUsageHigh) -> None:
+        """The association's files reached a threshold of its quota: the chairman and the board."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            await self.notify(
+                session,
+                await properties.users_with_roles(event.building_id, _MAINTENANCE_ROLES),
+                event_type=NotificationEventType.STORAGE_ALMOST_FULL,
+                dedup_key=storage_alert_key(event.event_id),
+                subject=(SubjectType.STORAGE, event.building_id),
+                params={"threshold": event.threshold, "used_percent": event.used_percent},
             )
             await session.commit()
 

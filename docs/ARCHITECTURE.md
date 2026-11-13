@@ -406,11 +406,16 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
   applied, all metadata is dropped and the photo is written as WebP (1920 px display, 320 px
   preview). The work runs in a worker thread behind a semaphore of one with a short queue (429
   when it is full), like the password hashes of E7; at most a few bodies are received at once.
-- **Quota and limits** (per building): photos may not use the last 20% of `FILES_QUOTA_MB`. A
+- **Quota and limits** (per building): photos may not use the last 20% of `FILES_QUOTA_MB`;
+  documents may use everything except the reserve for official votes (5% of the quota, at least
+  100 MB, at most 20%). A
   route's cap is reserved in memory while its body is read (the backend is one process), and the
   final check runs again under a transaction-scoped advisory lock on the building
   (`core:files:<building_id>`) when the row is inserted, so parallel uploads cannot overshoot.
-  Each user stores at most `FILES_USER_MB_PER_DAY` a day. Uploads stop when the disk of
+  Each user stores at most `FILES_USER_MB_PER_DAY` a day. The quota counts live files; deleted
+  ones not yet purged may use at most the quota once more. At most 16 bodies are received at once
+  and 2 of one account, each within 3 minutes (408), so one account cannot block the uploads of
+  everyone. Uploads stop when the disk of
   `FILES_DIR` has less than `FILES_MIN_FREE_MB` free.
 - **Demo mode:** uploads are refused (403 `UPLOADS_DISABLED`) unless `FILES_IN_DEMO` (only for
   `ENVIRONMENT` local, dev or test; `deploy.sh` sets it for dev), which also caps the quota at
@@ -425,5 +430,31 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
 - **Startup:** `create_app` creates `blobs/` and `tmp/`; the lifespan empties `tmp/` and refuses
   to start when `FILES_DIR` is not writable (a deploy then rolls back). Emptying `tmp/` never
   happens at import, so a one-off command in the running container cannot break an upload.
+- **Usage and alerts** (task F4): `GET /api/v1/files/usage` (core router, the chairman and the
+  board). When a stored file brings a building to 70% or 90% of its room for files (the quota
+  minus the votes reserve) or of its room for photos, whichever is fuller, so both fire before
+  uploads are refused, the store inserts a
+  `core_file_alerts` row and adds the durable event `StorageUsageHigh` (`src/core/file_events.py`)
+  to the request's outbox; `notifications` turns it into `STORAGE_ALMOST_FULL` for the chairman
+  and the board. The janitor deletes the row when the usage is 10 points below the threshold,
+  so a later rise is told again.
 - **Privacy:** the store never returns `created_by_user_id`; logs and spans carry the file id,
   the purpose and sizes, never a file name or content.
+
+## 11. Module `documents` (epic E11, task F3)
+
+Design: docs/epics/E11_FILE_STORAGE.md section 1a. Table: docs/SCHEMA.md section 13. API:
+docs/API.md section 13.
+
+- **Place:** owns `doc_documents`; the PDF goes through the core `FileStore` (purpose
+  `document`, owner = the document). Users, roles and badges come from `PropertyService`. No
+  other module imports it, and it publishes no events.
+- **Rules as pure functions** in `documents/policies.py`: who sees an audience, who uploads into
+  it, who edits and who deletes.
+- **Uploads are streamed to disk:** a PDF (at most 20,000,000 bytes) is written to `tmp/` while it
+  is counted and hashed, must start with `%PDF-`, is never parsed, and is renamed into place;
+  it is served only as an attachment, so a browser never renders it inside the app.
+- **Quota:** documents use the documents class of section 10 (everything except the reserve for
+  official votes); the daily limit per user applies to photos only (documents are uploaded by
+  staff and bounded by the quota).
+

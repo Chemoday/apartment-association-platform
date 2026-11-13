@@ -20,9 +20,11 @@ from src.core.files import (
     LocalDisk,
     Reservations,
     UploadGate,
+    file_limits,
     run_janitor_loop,
     validate_files_settings,
 )
+from src.core.files import usage_router as files_usage_router
 from src.core.frontend import mount_frontend
 from src.core.headers import SecurityHeadersMiddleware
 from src.core.health import router as health_router
@@ -34,6 +36,7 @@ from src.modules.auth.passwords import PasswordHashing
 from src.modules.auth.policies import validate_auth_settings
 from src.modules.auth.router import router as auth_router
 from src.modules.communication.router import router as communication_router
+from src.modules.documents.router import router as documents_router
 from src.modules.governance.router import router as governance_router
 from src.modules.issues.router import router as issues_router
 from src.modules.maintenance.publisher import Publisher, run_publisher_loop
@@ -96,7 +99,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         loops.append(
             asyncio.create_task(
                 run_janitor_loop(
-                    lambda: app.state.files_session_factory, lambda: app.state.file_disk
+                    lambda: app.state.files_session_factory,
+                    lambda: app.state.file_disk,
+                    lambda: file_limits(app.state.settings).quota_bytes,
                 ),
                 name="files-janitor",
             )
@@ -138,8 +143,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(communication_router)
     app.include_router(governance_router)
     app.include_router(settings_router)
+    app.include_router(files_usage_router)
     app.include_router(issues_router)
     app.include_router(maintenance_router)
+    app.include_router(documents_router)
     # Posts go out even without notifications; the factory is read on every tick (tests swap it).
     app.state.maintenance_session_factory = async_session_factory
     app.state.maintenance_publisher = Publisher(

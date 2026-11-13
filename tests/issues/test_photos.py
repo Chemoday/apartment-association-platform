@@ -360,11 +360,12 @@ async def test_a_key_used_for_another_or_a_deleted_photo_is_refused_not_a_server
     )
     after_delete = await upload(api_client, world.owner_14, issue["id"], **{"Idempotency-Key": "k"})
 
-    for response in (on_other, after_delete):
-        assert (response.status_code, response.json()["error_code"]) == (
-            409,
-            "IDEMPOTENCY_KEY_REUSED",
-        )
+    assert (on_other.status_code, on_other.json()["error_code"]) == (
+        409,
+        "IDEMPOTENCY_KEY_REUSED",
+    )
+    # Removed meanwhile (here by its uploader, or by the board): the client must not resend it.
+    assert (after_delete.status_code, after_delete.json()["error_code"]) == (409, "UPLOAD_REMOVED")
 
 
 async def test_a_repeat_after_the_issue_ended_still_returns_the_photo(
@@ -417,5 +418,17 @@ async def test_a_repeat_after_the_issue_was_withdrawn_gets_the_issues_answer(
 
     again = await upload(api_client, world.owner_14, issue["id"], **{"Idempotency-Key": "gone"})
 
-    # The photo went with the withdrawal: the client learns why, not that it misused the key.
-    assert (again.status_code, again.json()["error_code"]) == (409, "ISSUE_ENDED")
+    # The photo went with the withdrawal: the client learns it was removed, not to resend it.
+    assert (again.status_code, again.json()["error_code"]) == (409, "UPLOAD_REMOVED")
+
+
+async def test_older_names_of_the_jpeg_type_are_accepted(
+    api_client: AsyncClient, world: IssueWorld, issue: dict
+) -> None:
+    for content_type in ("image/jpg", "image/pjpeg"):
+        response = await api_client.post(
+            f"{API}/{issue['id']}/photos",
+            content=PHOTO,
+            headers={**as_user(world.owner_14), "Content-Type": content_type},
+        )
+        assert response.status_code == 201, response.text

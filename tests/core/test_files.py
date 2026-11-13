@@ -5,6 +5,7 @@ tested in tests/issues/test_photos.py.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import os
 import time
@@ -417,7 +418,7 @@ async def test_the_gate_answers_busy_instead_of_queueing_without_end() -> None:
     assert caught.value.status_code == 429
     assert started == 5  # one at a time, the four waiting ones after it
 
-    with gate.receiving():
+    with gate.receiving(uuid.uuid4()):
         pass
 
 
@@ -539,3 +540,173 @@ async def test_all_files_of_an_owner_are_deleted_at_once(
     assert await files.count(PURPOSE, uuid.UUID(int=1)) == 0
     assert await files.count(PURPOSE, kept.owner_ref) == 1
     assert await files.delete_all(PURPOSE, uuid.UUID(int=1)) == 0
+
+
+def test_documents_keep_off_the_reserve_for_official_votes() -> None:
+    from src.core.files import QuotaClass, class_limit, votes_reserve
+
+    assert votes_reserve(2048 * MB) == 102 * MB + int(0.4 * MB)  # 5% of 2 GB
+    assert votes_reserve(1000 * MB) == 100 * MB  # at least 100 MB
+    assert votes_reserve(100 * MB) == 20 * MB  # never more than 20% (the demo quota)
+    assert class_limit(1000 * MB, QuotaClass.DOCUMENTS) == 900 * MB
+    assert class_limit(1000 * MB, QuotaClass.PHOTOS) == 800 * MB
+
+
+async def test_the_daily_limit_is_for_photos_only(
+    db_session: AsyncSession, disk: LocalDisk, owner
+) -> None:
+    building, user = owner
+    files = make_store(db_session, disk, FILES_USER_MB_PER_DAY=5)
+    await store(files, building, user, photo=EncodedPhoto(b"D" * (3 * MB), b"", 1, 1))
+
+    await files.admit(building.id, user.id, FilePurpose.DOCUMENT, 20_000_000)
+    with pytest.raises(DomainError):
+        await files.admit(building.id, user.id, PURPOSE, 3 * MB)
+
+
+@pytest.mark.parametrize(
+    ("chunks", "ok"),
+    [
+        ([b"%P", b"DF-1.7 rest"], True),
+        ([b"%", b"P", b"D", b"F", b"-", b"x"], True),
+        ([b"%P", b"NG...."], False),
+        ([b"%PDF"], False),  # too short to be a PDF
+    ],
+)
+async def test_the_file_signature_is_checked_across_chunks(
+    disk: LocalDisk, chunks: list[bytes], ok: bool
+) -> None:
+    from src.core.files import receive_to_disk
+
+    length = sum(len(chunk) for chunk in chunks)
+    request = _request({"Content-Length": str(length)}, chunks)
+    if ok:
+        received = await receive_to_disk(request, disk, length, 1000, b"%PDF-")
+        assert received.path.read_bytes() == b"".join(chunks)
+        assert received.size == length
+        assert received.sha256 == hashlib.sha256(b"".join(chunks)).hexdigest()
+    else:
+        with pytest.raises(DomainError) as caught:
+            await receive_to_disk(request, disk, length, 1000, b"%PDF-")
+        assert caught.value.status_code == 415
+        assert list(disk.tmp.iterdir()) == []  # nothing left behind
+
+
+async def test_a_full_disk_while_receiving_answers_507_and_leaves_nothing(
+    disk: LocalDisk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno as errno_codes
+
+    import src.core.files as files_module
+
+    def full(_handle) -> None:
+        raise OSError(errno_codes.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(files_module, "_flush_and_sync", full)
+    data = b"%PDF-1.7 body"
+    request = _request({"Content-Length": str(len(data))}, [data])
+
+    with pytest.raises(DomainError) as caught:
+        await files_module.receive_to_disk(request, disk, len(data), 1000, b"%PDF-")
+
+    assert (caught.value.status_code, caught.value.error_code) == (507, "STORAGE_LOW_DISK")
+    assert list(disk.tmp.iterdir()) == []
+
+
+async def test_a_foreign_key_failure_is_not_mistaken_for_a_repeated_key(
+    db_session: AsyncSession, disk: LocalDisk, owner
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.files import receive_to_disk
+
+    _, user = owner
+    files = make_store(db_session, disk)
+    data = b"%PDF-1.7 body"
+    received = await receive_to_disk(
+        _request({"Content-Length": str(len(data))}, [data]), disk, len(data), 1000, b"%PDF-"
+    )
+
+    with pytest.raises(IntegrityError):  # a building that does not exist
+        await files.store_received(
+            building_id=uuid.uuid4(),
+            purpose=FilePurpose.DOCUMENT,
+            owner_ref=uuid.uuid4(),
+            created_by=user.id,
+            received=received,
+            content_type="application/pdf",
+            idempotency_key="k-fk",
+        )
+
+    assert list(disk.blob_ages()) == []  # the moved blob is removed again
+
+
+def test_one_account_cannot_hold_the_whole_upload_pool() -> None:
+    from src.core.files import MAX_BODIES_IN_FLIGHT, MAX_BODIES_PER_USER
+
+    gate = UploadGate()
+    attacker, neighbour = uuid.uuid4(), uuid.uuid4()
+    with contextlib.ExitStack() as held:
+        for _ in range(MAX_BODIES_PER_USER):
+            held.enter_context(gate.receiving(attacker))
+        with pytest.raises(DomainError) as caught:
+            held.enter_context(gate.receiving(attacker))
+        assert caught.value.status_code == 429
+        with gate.receiving(neighbour):  # everyone else still gets a slot
+            pass
+    others = [uuid.uuid4() for _ in range(MAX_BODIES_IN_FLIGHT)]
+    with contextlib.ExitStack() as held:
+        for user in others:
+            held.enter_context(gate.receiving(user))
+        with pytest.raises(DomainError):
+            held.enter_context(gate.receiving(uuid.uuid4()))
+
+
+async def test_a_stalled_body_times_out_and_leaves_nothing(
+    disk: LocalDisk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import src.core.files as files_module
+    from src.core.files import receive_to_disk
+
+    monkeypatch.setattr(files_module, "UPLOAD_READ_SECONDS", 0.2)
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": b"%PDF-1.7", "more_body": True}
+        await asyncio.sleep(10)  # the client stops sending
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {"type": "http", "method": "POST", "path": "/", "headers": []}
+    with pytest.raises(DomainError) as caught:
+        await receive_to_disk(Request(scope, receive), disk, 1000, 1000, b"%PDF-")
+    with pytest.raises(DomainError) as photo:
+        sent = False
+        await read_body(Request(scope, receive), 1000, 1000)
+
+    assert (caught.value.status_code, caught.value.error_code) == (408, "UPLOAD_TIMEOUT")
+    assert photo.value.error_code == "UPLOAD_TIMEOUT"
+    assert list(disk.tmp.iterdir()) == []
+
+
+async def test_deleting_frees_room_at_once_but_deletions_are_bounded(
+    db_session: AsyncSession, disk: LocalDisk, owner
+) -> None:
+    building, user = owner
+    files = make_store(db_session, disk, FILES_QUOTA_MB=10, FILES_USER_MB_PER_DAY=100)
+    big = EncodedPhoto(display=b"D" * (7 * MB), thumb=b"T", width=1, height=1)
+    stored, _ = await store(files, building, user, photo=big)
+    with pytest.raises(DomainError):
+        await files.admit(building.id, user.id, PURPOSE, 4 * MB)
+
+    await files.delete(stored.id, PURPOSE, stored.owner_ref)
+
+    await files.admit(building.id, user.id, PURPOSE, 4 * MB)  # the room is free again
+    # Deleting and uploading again cannot fill the disk: deleted bytes are capped too.
+    again, _ = await store(files, building, user, photo=EncodedPhoto(b"D" * (6 * MB), b"", 1, 1))
+    await files.delete(again.id, PURPOSE, again.owner_ref)
+    with pytest.raises(DomainError) as caught:
+        await files.admit(building.id, user.id, PURPOSE, 1 * MB)
+    assert (caught.value.status_code, caught.value.extra["reason"]) == (507, "DELETIONS_PENDING")

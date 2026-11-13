@@ -107,6 +107,7 @@ _STATUS_TITLES = {
     401: "Not authenticated",
     403: "Forbidden",
     404: "Not found (or not visible to the caller)",
+    408: "Request timeout",
     409: "Conflict with the current state",
     411: "Length required",
     413: "Payload too large",

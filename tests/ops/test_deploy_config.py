@@ -74,7 +74,7 @@ def test_database_caps_its_write_ahead_log_and_temp_files() -> None:
 def test_edge_limits_request_bodies_and_raises_them_only_on_upload_routes() -> None:
     caddyfile = (DEPLOY / "edge" / "Caddyfile").read_text()
 
-    assert re.findall(r"max_size (\S+)", caddyfile) == ["4MB", "1MB"]
+    assert re.findall(r"max_size (\S+)", caddyfile) == ["4MB", "20MB", "1MB"]
     assert "path_regexp ^/api/v1/issues/[^/]+/photos$" in caddyfile
     assert "read_body 3m" in caddyfile
     # Both environments go through the same limits.

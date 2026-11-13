@@ -34,14 +34,15 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 **Request body limits (deployed environments).** The edge proxy in front of the backend
 (docs/DEPLOYMENT.md, "Resource limits and disk hygiene") accepts at most **1 MB** (1,000,000
 bytes) of request body on every route, and more only on upload routes (4 MB for
-`POST /api/v1/issues/{id}/photos`, epic E11). A larger body is cut off at the limit and answered
+`POST /api/v1/issues/{id}/photos`, 20 MB for `POST /api/v1/documents`, epic E11). A larger body is cut off at the limit and answered
 `413` with an **empty, non-JSON body** (no `error_code`, no `trace_id`), because the backend never
 gets to answer it. Upload routes check `Content-Length` themselves before reading and answer
 their own JSON errors below the edge limit; every backend cap stays at or below the edge limit in
 decimal bytes. Local Docker has no edge and no such limit.
 
 Section 12 (uploaded files) adds `UPLOAD_INTERRUPTED` (400), `UPLOADS_DISABLED` (403),
-`IDEMPOTENCY_KEY_REUSED` (409), `LENGTH_REQUIRED` (411),
+`UPLOAD_TIMEOUT` (408),
+`IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED` (409), `LENGTH_REQUIRED` (411),
 `FILE_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `INVALID_IMAGE`, `IMAGE_TOO_LARGE` (422),
 `STORAGE_QUOTA_EXCEEDED` and `STORAGE_LOW_DISK` (507), and reuses `RATE_LIMITED` (429).
 
@@ -694,6 +695,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
 | `MAINTENANCE_DUE` | the maintenance calendar published a task or reminded of an overdue one (section 11): the chairman and the board members | no |
 | `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target and the chairman and the board members (also without an apartment), once each, never its author | no |
+| `STORAGE_ALMOST_FULL` | the association's files filled 70% or 90% of the room for files (section 12, epic E11 task F4): the chairman and the board members, once per threshold until the usage falls well below it again | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -768,6 +770,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_STATUS_CHANGED` | on | on | on | on |
 | `MAINTENANCE_DUE` | on | off | off | off |
 | `NOTICE_PUBLISHED` | on | on | on | on |
+| `STORAGE_ALMOST_FULL` | on | on | off | off |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
@@ -791,7 +794,8 @@ reports, but not for urgent ones (epic E9).
   the readings of that period (`params.period_code`); `poll` links to
   `GET /api/v1/governance/polls/{subject_id}`; `issue` links to
   `GET /api/v1/issues/{subject_id}` (for a merge notice, the original); `maintenance_task` links
-  to `GET /api/v1/maintenance/tasks/{subject_id}`.
+  to `GET /api/v1/maintenance/tasks/{subject_id}`; `storage` (the subject is the building) links
+  to `GET /api/v1/files/usage`.
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
@@ -802,7 +806,9 @@ reports, but not for urgent ones (epic E9).
   `ISSUE_STATUS_CHANGED` `category`, `entrance`, `status` (the new one) and `merged` (`true` for
   the merge notice, whose `status` is `DUPLICATE`); `MAINTENANCE_DUE` `occurrence_id`,
   `due_date`, `overdue` and `reminder_number` (0 for the publication; the title is loaded with
-  the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`).
+  the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`); `STORAGE_ALMOST_FULL`
+  `threshold` (70 or 90, percent of the room for files), `used_percent` (an integer, percent of
+  the whole quota, as `GET /api/v1/files/usage` shows it).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -841,7 +847,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 48 combinations of `event_type` and `channel` (60 once
+- `preferences` always has all 52 combinations of `event_type` and `channel` (65 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -858,7 +864,7 @@ Only the listed combinations change. Response: the same body as the `GET`.
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
 `PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
-`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`, `STORAGE_ALMOST_FULL`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -1976,7 +1982,8 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (ta
 | 400 | `UPLOAD_INTERRUPTED` (photos, section 12) |
 | 403 | `FORBIDDEN`, `UPLOADS_DISABLED` |
 | 404 | `ISSUE_NOT_FOUND`, `PHOTO_NOT_FOUND` |
-| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED` |
+| 408 | `UPLOAD_TIMEOUT` (photos, section 12) |
+| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED` |
 | 411, 413, 415 | `LENGTH_REQUIRED`, `FILE_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` (photos, section 12) |
 | 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE`, `INVALID_IMAGE`, `IMAGE_TOO_LARGE` |
 | 429 | `RATE_LIMITED` |
@@ -2194,7 +2201,8 @@ section 10.*
 ### Uploading
 - **The body is the file itself**, not a multipart form: `Content-Type` names the file type and
   `Content-Length` is required. Values that are not the file (a title) travel in the query.
-- **Photos are JPEG of at most 2560 px on either edge** (`Content-Type: image/jpeg`). Every client
+- **Photos are JPEG of at most 2560 px on either edge** (`Content-Type: image/jpeg`; `image/jpg`
+  and `image/pjpeg`, which some older devices send, are accepted too). Every client
   scales and converts a photo before sending it (docs/FRONTEND_GUIDE.md section 17): the server
   opens no other format and never scales a large photo itself. It still re-encodes every photo:
   the orientation is applied, all metadata (location, camera) is removed and the photo is stored
@@ -2203,12 +2211,14 @@ section 10.*
   per file, for example a UUID): an upload repeated with the same key by the same user, after a
   lost answer, returns the stored file with `200` instead of storing it again (also when the
   issue was resolved meanwhile); the first upload answers `201`. The body of a repeated request
-  is not read. When the file is gone meanwhile because its owner ended (for an issue: declined,
-  a duplicate, withdrawn), the repeat gets the owner's own answer (`409 ISSUE_ENDED`). A key
-  already used for another file, or for a file a person deleted, is `409
-  IDEMPOTENCY_KEY_REUSED`: send a new key for every file.
-- **Order of the checks:** the route's own rules (404, 403, 409), then demo mode, the disk, the
-  quota and the daily limit, then the size from `Content-Length`; only then the body is read.
+  is not read. When the earlier upload is gone meanwhile (a person or the board deleted it, its
+  issue ended in a way that deletes photos, a document moved out of the caller's sight), the
+  repeat gets `409 UPLOAD_REMOVED`: tell the person it was removed and **do not send it again**.
+  A key already used for another file (another owner, or a document of another size) is `409
+  IDEMPOTENCY_KEY_REUSED`, a mistake of the client: a new key for every file.
+- **Order of the checks:** the route's own rules (404, 403, 409), then the type and the size from
+  `Content-Type` and `Content-Length`, then demo mode, the disk, the quota (holding the declared
+  size, not the route's cap) and the daily limit; only then the body is read.
 
 ### Serving
 - `Content-Type` is the stored one (`image/webp` for photos). Every file response carries
@@ -2222,19 +2232,56 @@ section 10.*
 - **Quota per association**, set by the operator of the server (`FILES_QUOTA_MB`, default
   2048 MB); photos may not use the last 20% of it, which stays for documents and official votes.
 - **At most `FILES_USER_MB_PER_DAY` (20 MB) stored per user and day**, counted as stored (a photo
-  is about 0.3 MB); an upload is admitted only while a whole file of the route's cap still fits
-  (4 MB for a photo): `429 RATE_LIMITED` with `retry_after_seconds`.
-- **A busy server** (too many uploads at the same moment): `429 RATE_LIMITED` with
-  `retry_after_seconds`; retry that one file later.
+  is about 0.3 MB): `429 RATE_LIMITED` with `retry_after_seconds` and `reason: DAILY_LIMIT`. The
+  chairman and the board (who document issues for everyone) and documents (section 13, uploaded
+  by staff) are bounded by the quota only.
+- **A busy server** (too many uploads at the same moment, or more than 2 of one account at
+  once): `429 RATE_LIMITED` with `retry_after_seconds` and `reason: BUSY`; retry that one file
+  later.
+- **A body must arrive within 3 minutes** (also the edge's limit), else `408 UPLOAD_TIMEOUT`.
+- **Deleting frees room at once.** Deleted files wait 14 days before they are erased; together
+  they may use at most the quota once more, beyond that uploads wait (`507
+  STORAGE_QUOTA_EXCEEDED`, `reason: DELETIONS_PENDING`).
 - **Demo mode:** uploads only where the server allows them (dev), with a small quota, and files
   are deleted after about a day; elsewhere `403 UPLOADS_DISABLED`.
+
+### `GET /api/v1/files/usage` (the chairman and the board; task F4)
+How much of the association's quota its files use:
+```json
+{
+  "quota_bytes": 2147483648,
+  "used_bytes": 412000000,
+  "used_percent": 19,
+  "pending_deletion_bytes": 12000000,
+  "categories": [
+    {"category": "photos", "used_bytes": 300000000, "limit_bytes": 1717986918},
+    {"category": "documents", "used_bytes": 112000000, "limit_bytes": 2040109466}
+  ]
+}
+```
+- `used_bytes` counts the live files, which is what the quota counts: deleting a file frees its
+  room at once. `pending_deletion_bytes` are deleted files not erased yet (within 14 days); they
+  may add up to at most the quota, beyond that uploads wait for the erasing (`507
+  STORAGE_QUOTA_EXCEEDED` with `reason: DELETIONS_PENDING`). `used_percent` is rounded down.
+- `categories`: the bytes of each class and the most it may fill (photos 80% of the quota,
+  documents everything except the reserve for official votes). More categories come with later
+  tasks.
+- **The room for files** is the quota minus the reserve for official votes (what photos and
+  documents together may fill; photos stop earlier, at 80% of the quota). When the files fill 70%
+  and 90% of that room, or the photos 70% and 90% of the room for photos, whichever comes first,
+  the chairman and the board get `STORAGE_ALMOST_FULL` (section 6), once per threshold and one
+  notification per upload (the highest threshold it reached), early enough to act before
+  uploads are refused; it can come again only after the usage fell at least 10 points below it.
+- Anyone else: `403 FORBIDDEN`.
 
 ### Error codes of this section
 | Status | `error_code` | When |
 | :--- | :--- | :--- |
 | 400 | `UPLOAD_INTERRUPTED` | The client went away while sending the body; send the file again |
 | 403 | `UPLOADS_DISABLED` | Demo mode without uploads (every deployed environment except dev) |
-| 409 | `IDEMPOTENCY_KEY_REUSED` | The `Idempotency-Key` was used for another file or a deleted one |
+| 408 | `UPLOAD_TIMEOUT` | The body did not arrive within 3 minutes; send it again |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | The `Idempotency-Key` was used for another file |
+| 409 | `UPLOAD_REMOVED` | A repeat of an upload that was removed meanwhile; do not send it again |
 | 411 | `LENGTH_REQUIRED` | No `Content-Length` |
 | 413 | `FILE_TOO_LARGE` | `Content-Length` above the route's cap, or a body longer than it says (`max_bytes` in the body) |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Another `Content-Type`, or the bytes are not that type (for photos: not a JPEG) |
@@ -2242,6 +2289,108 @@ section 10.*
 | 422 | `IMAGE_TOO_LARGE` | Longer than 2560 px on an edge (`max_edge_px` in the body); scale it first |
 | 422 | `VALIDATION_ERROR` | A malformed `Idempotency-Key` |
 | 429 | `RATE_LIMITED` | The daily limit of the user, or the server is busy (`retry_after_seconds`, `Retry-After`) |
-| 507 | `STORAGE_QUOTA_EXCEEDED` | The association's quota is used up |
+| 507 | `STORAGE_QUOTA_EXCEEDED` | `reason: QUOTA`: the room of `category` (`photos` or `documents`) is full; `reason: DELETIONS_PENDING`: too many deleted files still wait to be erased |
 | 507 | `STORAGE_LOW_DISK` | The server's disk is nearly full |
+
+---
+
+## 13. Documents of the association (`documents`), epic E11 task F3
+
+*Owner decisions of 2026-11-13 (docs/epics/E11_FILE_STORAGE.md section 1a). Upload rules, limits
+and errors shared by every upload: section 12.*
+
+### Who sees and who does what
+| Audience | Who sees it | Who may upload into it |
+| :--- | :--- | :--- |
+| `EVERYONE` | every resident of the building (an active membership), the chairman, the board, the accountant | the chairman, the board |
+| `BOARD_AND_ACCOUNTANT` | the chairman, the board, the accountant | the chairman, the board, the accountant |
+| `BOARD` | the chairman, the board | the chairman, the board |
+
+- Editing the title, category, audience or date: the chairman and the board.
+- Deleting: **only the chairman**. The document disappears at once; its file is erased from the
+  server after 14 days.
+- Anyone without access to the module (no active membership and no staff role): `403 FORBIDDEN`.
+  A document the caller may not see, of another building or deleted: `404 DOCUMENT_NOT_FOUND`.
+- Documents are kept until the chairman deletes them (in demo mode about a day at most: a
+  document whose file expired disappears from the list).
+- A repeat with the same `Idempotency-Key` of a document that was deleted, whose file expired, or
+  that moved into an audience the caller no longer sees: `409 IDEMPOTENCY_KEY_REUSED`.
+
+### Document object (`DocumentView`)
+```json
+{
+  "id": "uuid",
+  "title": "General meeting minutes 2026",
+  "category": "GENERAL_MEETING_MINUTES",
+  "audience": "EVERYONE",
+  "document_date": "2026-05-20",
+  "size_bytes": 482133,
+  "created_at": "2026-11-13T10:00:00Z",
+  "updated_at": "2026-11-13T10:00:00Z",
+  "mine": false,
+  "can_edit": false,
+  "can_delete": false,
+  "uploaded_by": null
+}
+```
+- `category`: `ARTICLES` (the articles of association), `GENERAL_MEETING_MINUTES`,
+  `BOARD_MINUTES`, `CONTRACT`, `INVOICE` (an invoice or a certificate of work done),
+  `FINANCIAL_REPORT`, `INSURANCE`, `HOUSE_RULES`, `OTHER` (more may come; show an unknown one as
+  "Other").
+- `document_date`: the date of the document itself, or `null`. `mine`: the caller uploaded it.
+- `uploaded_by`: for the chairman, the board and the accountant the privacy badge of section 0
+  without an apartment context, never a raw name; `null` for residents.
+
+### `POST /api/v1/documents?title=...&category=...&audience=...&document_date=YYYY-MM-DD`
+The PDF is the body (`Content-Type: application/pdf`, `Content-Length`, at most 20,000,000
+bytes), optionally `Idempotency-Key` (section 12). `title` 1..200 characters, `category`,
+`audience` required, `document_date` optional; the title is one line (no tabs or line breaks).
+Answers the `DocumentView` with `201`, or `200`
+for a repeat with the same key.
+- The accountant may upload only with `audience=BOARD_AND_ACCOUNTANT`; residents never upload:
+  `403 FORBIDDEN`.
+- `document_date`: from 1900-01-01 to five years from today; an empty value means no date.
+- The title is one line of visible text (no tabs or line breaks, not only invisible
+  characters). The download's file name is made from it; a title that already ends in `.pdf`
+  keeps one extension.
+- The file must start with `%PDF-`: otherwise `415 UNSUPPORTED_MEDIA_TYPE`. It is stored as
+  sent and never opened by the server.
+
+### `GET /api/v1/documents/upload-options`
+What the upload form may offer the caller:
+`{"can_upload": true, "audiences": ["BOARD_AND_ACCOUNTANT"], "categories": [...], "max_bytes": 20000000}`.
+`can_upload` is false for residents and wherever uploads are switched off (a demo without
+uploads); `audiences` are those the caller may upload into.
+
+### `GET /api/v1/documents?category=CONTRACT&limit=50&offset=0`
+The documents the caller sees, newest first (`created_at`). `limit` 1..100.
+
+### `GET /api/v1/documents/{document_id}`
+One `DocumentView`.
+
+### `GET /api/v1/documents/{document_id}/file`
+The PDF, `Content-Type: application/pdf`, always as an attachment (`Content-Disposition:
+attachment` with a file name made from the title), streamed from disk, with the headers of
+section 12 except the cache: `Cache-Control: private, no-store` (a document's name and audience
+can change). A document whose file is missing on the server: `404 DOCUMENT_NOT_FOUND`.
+
+### `PATCH /api/v1/documents/{document_id}` (the chairman and the board)
+`{"title"?, "category"?, "audience"?, "document_date"?}` (`document_date: null` clears it).
+Returns the `DocumentView`.
+
+### `DELETE /api/v1/documents/{document_id}` (the chairman)
+`204`.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 400 | `UPLOAD_INTERRUPTED` |
+| 403 | `FORBIDDEN`, `UPLOADS_DISABLED` |
+| 404 | `DOCUMENT_NOT_FOUND` |
+| 408 | `UPLOAD_TIMEOUT` |
+| 409 | `IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED` |
+| 411, 413, 415 | `LENGTH_REQUIRED`, `FILE_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` |
+| 422 | `VALIDATION_ERROR` |
+| 429 | `RATE_LIMITED` |
+| 507 | `STORAGE_QUOTA_EXCEEDED`, `STORAGE_LOW_DISK` |
 

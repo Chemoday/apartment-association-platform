@@ -22,6 +22,7 @@ from pydantic import TypeAdapter
 from src.core.event_bus import DomainEvent
 
 _MODULE_EVENT_MODULES = (
+    "src.core.file_events",
     "src.modules.auth.events",
     "src.modules.communication.events",
     "src.modules.governance.events",

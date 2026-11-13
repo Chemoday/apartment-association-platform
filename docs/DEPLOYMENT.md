@@ -92,7 +92,7 @@ Several instances and unrelated services share the host, so nothing may grow wit
 
 | What | Where | Limit |
 | :--- | :--- | :--- |
-| Request bodies | `deploy/edge/Caddyfile` | 1 MB (decimal) for every route; 4 MB for `POST /api/v1/issues/{id}/photos`; the backend never receives more than the limit, and the client gets a bare 413 (docs/API.md, section 0). Refusing a large `Content-Length` before reading is the upload route's own job (E11) |
+| Request bodies | `deploy/edge/Caddyfile` | 1 MB (decimal) for every route; 4 MB for `POST /api/v1/issues/{id}/photos`; 20 MB for `POST /api/v1/documents`; the backend never receives more than the limit, and the client gets a bare 413 (docs/API.md, section 0). Refusing a large `Content-Length` before reading is the upload route's own job (E11) |
 | Slow clients | `deploy/edge/Caddyfile` | 10 s for the headers, 3 min for a body, 2 min idle |
 | Backend | `deploy/docker-compose.deploy.yml` | 512 MB of memory, 2 CPUs, 200 processes; read-only root filesystem with a 64 MB `/tmp` |
 | Database | `deploy/docker-compose.deploy.yml` | 384 MB of memory, 200 processes; `max_wal_size=256MB`, `temp_file_limit=512MB` |
