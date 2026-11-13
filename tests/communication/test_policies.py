@@ -5,10 +5,15 @@ import uuid
 import pytest
 
 from src.modules.communication.policies import (
+    COMMENT_HIDEABLE_ON,
+    HIDEABLE_POST_TYPES,
     can_publish,
+    comment_is_editable,
     deletable_types,
     is_deletable,
+    post_is_editable,
     sees_all_targets,
+    sees_hidden_text,
     target_problem,
     thread_author_apartment,
 )
@@ -121,3 +126,37 @@ def test_a_member_writes_from_the_thread_apartment_and_anyone_else_as_the_board(
     assert thread_author_apartment(APARTMENT, {APARTMENT, other}) == APARTMENT
     assert thread_author_apartment(APARTMENT, {other}) is None
     assert thread_author_apartment(APARTMENT, set()) is None
+
+
+# --- Moderation (issue #135) ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("post_type", list(PostType))
+def test_only_topics_people_wrote_are_editable_while_shown(post_type: PostType) -> None:
+    topic = post_type in {PostType.FORUM_TOPIC, PostType.BOARD_TOPIC}
+    assert post_is_editable(post_type, from_maintenance=False, hidden=False) is topic
+    assert not post_is_editable(post_type, from_maintenance=True, hidden=False)
+    assert not post_is_editable(post_type, from_maintenance=False, hidden=True)
+
+
+@pytest.mark.parametrize("post_type", list(PostType))
+def test_comments_are_editable_outside_threads_unless_hidden(post_type: PostType) -> None:
+    outside_thread = post_type != PostType.APARTMENT_THREAD
+    assert comment_is_editable(post_type, False, post_hidden=False, comment_hidden=False) is (
+        outside_thread
+    )
+    assert not comment_is_editable(post_type, True, post_hidden=False, comment_hidden=False)
+    assert not comment_is_editable(post_type, False, post_hidden=True, comment_hidden=False)
+    assert not comment_is_editable(post_type, False, post_hidden=False, comment_hidden=True)
+
+
+def test_what_the_board_hides() -> None:
+    assert HIDEABLE_POST_TYPES == {PostType.FORUM_TOPIC}
+    assert {PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC}.isdisjoint(COMMENT_HIDEABLE_ON)
+
+
+@pytest.mark.parametrize("role", list(BuildingRole))
+def test_hidden_text_is_for_the_author_and_the_board(role: BuildingRole) -> None:
+    board = role in {BuildingRole.CHAIRMAN, BuildingRole.BOARD}
+    assert sees_hidden_text(role, is_author=False) is board
+    assert sees_hidden_text(role, is_author=True)

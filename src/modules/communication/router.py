@@ -15,11 +15,14 @@ from src.modules.communication.schemas import (
     FEED_PAGE_MAX,
     AcknowledgeResponse,
     CommentCreateRequest,
+    CommentEditRequest,
     CommentView,
     EmergencyView,
+    HideRequest,
     PostCategory,
     PostCreateRequest,
     PostDetail,
+    PostEditRequest,
     PostType,
     PostView,
     ResolveResponse,
@@ -168,7 +171,7 @@ async def delete_post(
     responses=error_responses(
         {
             404: ["POST_NOT_FOUND"],
-            409: ["COMMENTS_DISABLED"],
+            409: ["COMMENTS_DISABLED", "POST_HIDDEN"],
             422: ["VALIDATION_ERROR", "INVALID_AUTHOR_APARTMENT"],
         }
     ),
@@ -180,3 +183,121 @@ async def add_comment(
     service: CommunicationService = Depends(get_communication_service),
 ) -> CommentView:
     return await service.add_comment(user, post_id, body)
+
+
+# --- Author edits and hiding by the board (issue #135) ------------------------------------------
+
+
+@router.patch(
+    "/posts/{post_id}",
+    response_model=PostView,
+    responses=error_responses(
+        {
+            403: ["FORBIDDEN"],
+            404: ["POST_NOT_FOUND"],
+            409: ["POST_NOT_EDITABLE"],
+            422: ["VALIDATION_ERROR"],
+        }
+    ),
+)
+async def edit_post(
+    post_id: uuid.UUID,
+    body: PostEditRequest,
+    user: CurrentUserDTO = Depends(get_current_user),
+    service: CommunicationService = Depends(get_communication_service),
+) -> PostView:
+    """The author edits their own forum or board topic."""
+    return await service.edit_post(user, post_id, body)
+
+
+@router.patch(
+    "/posts/{post_id}/comments/{comment_id}",
+    response_model=CommentView,
+    responses=error_responses(
+        {
+            403: ["FORBIDDEN"],
+            404: ["POST_NOT_FOUND", "COMMENT_NOT_FOUND"],
+            409: ["COMMENT_NOT_EDITABLE"],
+            422: ["VALIDATION_ERROR"],
+        }
+    ),
+)
+async def edit_comment(
+    post_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    body: CommentEditRequest,
+    user: CurrentUserDTO = Depends(get_current_user),
+    service: CommunicationService = Depends(get_communication_service),
+) -> CommentView:
+    """The author edits their own comment (not in a thread with the board)."""
+    return await service.edit_comment(user, post_id, comment_id, body)
+
+
+_POST_MODERATION_ERRORS = error_responses(
+    {
+        403: ["FORBIDDEN"],
+        404: ["POST_NOT_FOUND"],
+        409: ["POST_NOT_HIDEABLE"],
+        422: ["VALIDATION_ERROR"],
+    }
+)
+_COMMENT_MODERATION_ERRORS = error_responses(
+    {
+        403: ["FORBIDDEN"],
+        404: ["POST_NOT_FOUND", "COMMENT_NOT_FOUND"],
+        409: ["COMMENT_NOT_HIDEABLE"],
+        422: ["VALIDATION_ERROR"],
+    }
+)
+
+
+@router.post("/posts/{post_id}/hide", response_model=PostView, responses=_POST_MODERATION_ERRORS)
+async def hide_post(
+    post_id: uuid.UUID,
+    body: HideRequest,
+    user: CurrentUserDTO = Depends(publisher),
+    service: CommunicationService = Depends(get_communication_service),
+) -> PostView:
+    """The board hides a forum topic with a reason; its author and the board still see it."""
+    return await service.set_post_hidden(user, post_id, body)
+
+
+@router.post("/posts/{post_id}/unhide", response_model=PostView, responses=_POST_MODERATION_ERRORS)
+async def unhide_post(
+    post_id: uuid.UUID,
+    user: CurrentUserDTO = Depends(publisher),
+    service: CommunicationService = Depends(get_communication_service),
+) -> PostView:
+    """The board shows a hidden forum topic again."""
+    return await service.set_post_hidden(user, post_id, None)
+
+
+@router.post(
+    "/posts/{post_id}/comments/{comment_id}/hide",
+    response_model=CommentView,
+    responses=_COMMENT_MODERATION_ERRORS,
+)
+async def hide_comment(
+    post_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    body: HideRequest,
+    user: CurrentUserDTO = Depends(publisher),
+    service: CommunicationService = Depends(get_communication_service),
+) -> CommentView:
+    """The board hides a comment with a reason; it stays as a placeholder."""
+    return await service.set_comment_hidden(user, post_id, comment_id, body)
+
+
+@router.post(
+    "/posts/{post_id}/comments/{comment_id}/unhide",
+    response_model=CommentView,
+    responses=_COMMENT_MODERATION_ERRORS,
+)
+async def unhide_comment(
+    post_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    user: CurrentUserDTO = Depends(publisher),
+    service: CommunicationService = Depends(get_communication_service),
+) -> CommentView:
+    """The board shows a hidden comment again."""
+    return await service.set_comment_hidden(user, post_id, comment_id, None)

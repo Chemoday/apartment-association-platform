@@ -71,3 +71,44 @@ class PostDeleted(DomainEvent):
     building_id: uuid.UUID
     post_type: PostType
     deleted_by_user_id: uuid.UUID
+
+
+# --- Moderation (issue #135): the record of what the board hid; never the reason (free text) ---
+
+
+@dataclass(frozen=True, kw_only=True)
+class PostHidden(DomainEvent):
+    """The board hid a forum topic; only its author and the board see it now."""
+
+    post_id: uuid.UUID
+    building_id: uuid.UUID
+    moderator_user_id: uuid.UUID
+
+
+@dataclass(frozen=True, kw_only=True)
+class PostUnhidden(DomainEvent):
+    """The board showed a hidden forum topic again."""
+
+    post_id: uuid.UUID
+    building_id: uuid.UUID
+    moderator_user_id: uuid.UUID
+
+
+@dataclass(frozen=True, kw_only=True)
+class CommentHidden(DomainEvent):
+    """The board hid a comment; it stays in its place as a placeholder."""
+
+    comment_id: uuid.UUID
+    post_id: uuid.UUID
+    building_id: uuid.UUID
+    moderator_user_id: uuid.UUID
+
+
+@dataclass(frozen=True, kw_only=True)
+class CommentUnhidden(DomainEvent):
+    """The board showed a hidden comment again."""
+
+    comment_id: uuid.UUID
+    post_id: uuid.UUID
+    building_id: uuid.UUID
+    moderator_user_id: uuid.UUID

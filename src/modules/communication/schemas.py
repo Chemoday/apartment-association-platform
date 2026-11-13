@@ -56,10 +56,12 @@ MAX_TARGET_APARTMENTS = 500
 FEED_PAGE_MAX = 100
 COMMENTS_PAGE_MAX = 500
 COMMENTS_PAGE_DEFAULT = 200
+HIDE_REASON_MAX_LENGTH = 500  # VARCHAR(500)
 
 TitleText = safe_text(TITLE_MAX_LENGTH)
 PostBodyText = safe_text(POST_BODY_MAX_LENGTH)
 CommentBodyText = safe_text(COMMENT_BODY_MAX_LENGTH)
+HideReasonText = safe_text(HIDE_REASON_MAX_LENGTH)
 
 
 def _unique_apartment_ids(ids: list[uuid.UUID] | None) -> list[uuid.UUID] | None:
@@ -110,6 +112,37 @@ class CommentCreateRequest(BaseModel):
     author_apartment_id: uuid.UUID | None = None
 
 
+class PostEditRequest(BaseModel):
+    """Body of PATCH /api/v1/communication/posts/{post_id}: the new title, body or both."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: TitleText | None = None
+    body: PostBodyText | None = None
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "PostEditRequest":
+        if self.title is None and self.body is None:
+            raise ValueError("give a new title, a new body or both")
+        return self
+
+
+class CommentEditRequest(BaseModel):
+    """Body of PATCH /api/v1/communication/posts/{post_id}/comments/{comment_id}."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    body: CommentBodyText
+
+
+class HideRequest(BaseModel):
+    """Body of POST .../hide: why the board hides it (shown to the author and the board)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: HideReasonText
+
+
 # --- Responses -----------------------------------------------------------------------------------
 
 
@@ -132,6 +165,10 @@ class PostView(BaseModel):
     last_activity_at: datetime
     # MAINTENANCE for a reminder or notice the maintenance calendar published (epic E10).
     origin: PostOrigin | None = None
+    # Moderation (docs/API.md section 4): the author's last edit; the board hiding a forum topic.
+    edited_at: datetime | None = None
+    hidden_at: datetime | None = None
+    hidden_reason: str | None = None
 
 
 class EmergencyView(PostView):
@@ -143,10 +180,14 @@ class EmergencyView(PostView):
 class CommentView(BaseModel):
     id: uuid.UUID
     post_id: uuid.UUID
-    body: str
+    # None for a hidden comment, except for its author and the board (a placeholder).
+    body: str | None
     author_badge: AuthorBadgeDTO
     is_mine: bool
     created_at: datetime
+    edited_at: datetime | None = None
+    hidden_at: datetime | None = None
+    hidden_reason: str | None = None
 
 
 class PostDetail(PostView):

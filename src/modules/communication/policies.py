@@ -94,3 +94,43 @@ def thread_author_apartment(
     """Who writes as whom in a thread: a member of its apartment writes from it, anyone else
     (the board) without an apartment. The server decides; the client cannot choose."""
     return thread_apartment_id if thread_apartment_id in member_apartment_ids else None
+
+
+# --- Moderation (issue #135, docs/API.md section 4) ----------------------------------------------
+
+# Hide and show again: the chairman and the board (owner decision 2026-11-09).
+HIDER_ROLES = PUBLISHER_ROLES
+
+# Authors edit their own topics; everything else is a record (the emergency text has been sent).
+EDITABLE_POST_TYPES = frozenset({PostType.FORUM_TOPIC, PostType.BOARD_TOPIC})
+
+# The board hides forum topics only; its own topics are deleted, emergencies resolved.
+HIDEABLE_POST_TYPES = frozenset({PostType.FORUM_TOPIC})
+
+# Comments the board hides: on the public posts, never in threads or the board's micro-forum.
+COMMENT_HIDEABLE_ON = frozenset(
+    {PostType.FORUM_TOPIC, PostType.OFFICIAL_NOTICE, PostType.EMERGENCY}
+)
+
+
+def post_is_editable(post_type: PostType, from_maintenance: bool, hidden: bool) -> bool:
+    """A forum or board topic a person wrote, while it is not hidden."""
+    return post_type in EDITABLE_POST_TYPES and not from_maintenance and not hidden
+
+
+def comment_is_editable(
+    post_type: PostType, on_maintenance_post: bool, post_hidden: bool, comment_hidden: bool
+) -> bool:
+    """Any comment outside the records (threads, and the maintenance calendar's posts, whose
+    comments it writes as "done", "skipped" or "moved"), unless it or its topic is hidden."""
+    return (
+        post_type != PostType.APARTMENT_THREAD
+        and not on_maintenance_post
+        and not post_hidden
+        and not comment_hidden
+    )
+
+
+def sees_hidden_text(building_role: BuildingRole, is_author: bool) -> bool:
+    """Who reads a hidden comment's text and the reason: its author and the board."""
+    return is_author or building_role in HIDER_ROLES
