@@ -218,6 +218,41 @@ class LogEntryView(BaseModel):
     updated_by: AuthorBadgeDTO | None
 
 
+REPORT_YEAR_MIN = 2000
+REPORT_YEAR_MAX = 2100
+# A money amount of the report: a decimal string with exactly 2 decimals ("1240.00").
+ReportMoney = Annotated[str, Field(pattern=r"^[0-9]+\.[0-9]{2}$", examples=["1240.00"])]
+
+
+class TaskReport(BaseModel):
+    """One task in the yearly report; `total_cost` a decimal string with 2 decimals."""
+
+    task_id: uuid.UUID
+    task_title: str
+    done_count: int
+    skipped_count: int
+    total_cost: ReportMoney
+
+
+class YearReport(BaseModel):
+    year: int
+    done_count: int
+    skipped_count: int
+    total_cost: ReportMoney
+    tasks: list[TaskReport]
+
+
+REPORT_CSV_COLUMNS = (
+    "closed_on",
+    "task_title",
+    "kind",
+    "planned_date",
+    "cost",
+    "note",
+    "recorded_by",
+)
+
+
 class OccurrenceRefDTO(BaseModel):
     """An occurrence's state for the notifications module (system-level)."""
 

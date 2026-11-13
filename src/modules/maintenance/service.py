@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.building_settings import BuildingSettings
 from src.core.config import get_settings
+from src.core.csv_safety import neutralize_formula
 from src.core.database import DbSession, get_event_outbox
 from src.core.event_bus import EventOutbox
 from src.core.exceptions import DomainError
@@ -57,13 +59,19 @@ from src.modules.maintenance.schemas import (
     SkipRequest,
     TaskCreate,
     TaskEdit,
+    TaskReport,
     TaskResume,
     TaskStatus,
     TaskView,
+    YearReport,
 )
 from src.modules.maintenance.settings import OVERDUE_REMINDER_DAYS
 from src.modules.property.schemas import BuildingRole, CurrentUserDTO, TargetScope
 from src.modules.property.service import PropertyService, get_property_service
+
+
+def _money(amount: Decimal) -> str:
+    return f"{amount.quantize(Decimal('0.01')):.2f}"
 
 
 def _now() -> datetime:
@@ -74,6 +82,19 @@ def _forbidden() -> DomainError:
     return DomainError(
         status_code=403, error_code="FORBIDDEN", message="Only the board runs the calendar."
     )
+
+
+def _not_a_log_reader() -> DomainError:
+    return DomainError(
+        status_code=403,
+        error_code="FORBIDDEN",
+        message="Only the board and the accountant read the log.",
+    )
+
+
+def _in_year(year: int) -> ColumnElement[bool]:
+    """Entries closed in a calendar year (closed_on is a local date, so no time zone shift)."""
+    return LogEntry.closed_on.between(date(year, 1, 1), date(year, 12, 31))
 
 
 def _task_not_found() -> DomainError:
@@ -437,7 +458,7 @@ class MaintenanceService:
     ) -> list[LogEntryView]:
         """The chairman, the board and the accountant; newest closing date first."""
         if not reads_log(user.building_role):
-            raise _forbidden()
+            raise _not_a_log_reader()
         statement = select(LogEntry).where(LogEntry.building_id == user.building_id)
         if task_id is not None:
             statement = statement.where(LogEntry.task_id == task_id)
@@ -477,6 +498,80 @@ class MaintenanceService:
             await self.session.flush()
         [view] = await self._entry_views([entry])
         return view
+
+    # --- The yearly report (issue #132) ----------------------------------------------------------
+
+    async def report(self, user: CurrentUserDTO, year: int) -> YearReport:
+        """Done and skipped counts and the exact costs per task in a year (by closed_on)."""
+        if not reads_log(user.building_role):
+            raise _not_a_log_reader()
+        rows = (
+            await self.session.execute(
+                select(LogEntry.task_id, Task.title, LogEntry.kind, LogEntry.cost)
+                .join(Task, Task.id == LogEntry.task_id)
+                .where(
+                    LogEntry.building_id == user.building_id,
+                    _in_year(year),
+                )
+            )
+        ).all()
+        tasks: dict[uuid.UUID, dict[str, Any]] = {}
+        for task_id, title, kind, cost in rows:
+            entry = tasks.setdefault(
+                task_id, {"title": title, "done": 0, "skipped": 0, "cost": Decimal("0.00")}
+            )
+            entry["done" if kind == LogKind.DONE else "skipped"] += 1
+            entry["cost"] += cost or Decimal("0.00")
+        reports = sorted(
+            (
+                TaskReport(
+                    task_id=task_id,
+                    task_title=values["title"],
+                    done_count=values["done"],
+                    skipped_count=values["skipped"],
+                    total_cost=_money(values["cost"]),
+                )
+                for task_id, values in tasks.items()
+            ),
+            key=lambda report: (report.task_title.casefold(), str(report.task_id)),
+        )
+        return YearReport(
+            year=year,
+            done_count=sum(values["done"] for values in tasks.values()),
+            skipped_count=sum(values["skipped"] for values in tasks.values()),
+            total_cost=_money(
+                sum((values["cost"] for values in tasks.values()), start=Decimal("0.00"))
+            ),
+            tasks=reports,
+        )
+
+    async def report_rows(self, user: CurrentUserDTO, year: int) -> list[list[str]]:
+        """The log entries of a year as CSV cells, oldest first; text cells guarded against
+        spreadsheet formulas. Who recorded an entry by name (the E10 exception for staff)."""
+        if not reads_log(user.building_role):
+            raise _not_a_log_reader()
+        entries = list(
+            await self.session.scalars(
+                select(LogEntry)
+                .where(
+                    LogEntry.building_id == user.building_id,
+                    _in_year(year),
+                )
+                .order_by(LogEntry.closed_on, LogEntry.created_at, LogEntry.id)
+            )
+        )
+        return [
+            [
+                view.closed_on.isoformat(),
+                neutralize_formula(view.task_title),
+                view.kind.value,
+                view.planned_date.isoformat(),
+                view.cost or "",
+                neutralize_formula(view.note),
+                neutralize_formula(view.recorded_by.display_label),
+            ]
+            for view in await self._entry_views(entries)
+        ]
 
     # --- Publishing (task M2; called by the publisher, one task per transaction) ---------------
 
