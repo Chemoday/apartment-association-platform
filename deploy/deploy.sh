@@ -22,6 +22,9 @@ log() { echo "[deploy $ENV_NAME $(date -u +%H:%M:%S)] $*"; }
 
 export IMAGE_REF="$IMAGE:$SHA"
 export APP_ENV="$ENV_NAME"
+export AAP_ROOT
+# Uploads in demo mode (epic E11): dev only, so the client can be tried there (owner decision).
+if [[ "$ENV_NAME" == dev ]]; then export FILES_IN_DEMO=true; else export FILES_IN_DEMO=false; fi
 
 compose() {
     docker compose -p "aap-$ENV_NAME" \

@@ -114,6 +114,20 @@ class Settings(BaseSettings):
     DOMAIN_EVENTS_RELAY_ENABLED: bool = True
     DOMAIN_EVENTS_RETENTION_DAYS: int = Field(default=365, ge=0)
 
+    # Uploaded files (epic E11; docs/DEPLOYMENT.md "Uploaded files"). FILES_DIR holds blobs/ and
+    # tmp/; the quota is per association and set by the operator of the server.
+    FILES_DIR: str = "var/files"
+    FILES_QUOTA_MB: int = Field(default=2048, ge=1)
+    FILES_USER_MB_PER_DAY: int = Field(default=20, ge=1)
+    FILES_MIN_FREE_MB: int = Field(default=5120, ge=0)
+    # Uploads while demo mode is on (only ENVIRONMENT local, dev or test): anyone can act as anyone,
+    # so the demo gets a small quota and keeps files for a short time only.
+    FILES_IN_DEMO: bool = False
+    FILES_DEMO_QUOTA_MB: int = Field(default=100, ge=1)
+    FILES_DEMO_RETENTION_HOURS: int = Field(default=24, ge=1)
+    # The hourly clean-up of expired and deleted files (tests call its tick directly).
+    FILES_JANITOR_ENABLED: bool = True
+
     OTEL_SERVICE_NAME: str = "apartment-platform-backend"
     # OTLP/HTTP collector base URL, e.g. "http://otel-collector:4318". Empty disables export.
     OTEL_EXPORTER_OTLP_ENDPOINT: str = ""

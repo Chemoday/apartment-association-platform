@@ -108,10 +108,14 @@ _STATUS_TITLES = {
     403: "Forbidden",
     404: "Not found (or not visible to the caller)",
     409: "Conflict with the current state",
+    411: "Length required",
+    413: "Payload too large",
+    415: "Unsupported media type",
     422: "Invalid input",
     429: "Too many requests (see retry_after_seconds and the Retry-After header)",
     500: "Internal server error",
     503: "Service unavailable",
+    507: "Insufficient storage",
 }
 
 

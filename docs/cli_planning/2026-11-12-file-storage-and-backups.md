@@ -103,3 +103,8 @@ should be done before the first real association stores files.
   kept in the repository, with the scripts that apply it and a log of what was applied, so that
   a new VPS can be set up without anybody's memory. It becomes a rule in AGENTS.md and is
   introduced by task F0.
+- **Retention of issue photos** (owner, during the review of #128): photos are working
+  material. They are kept while the issue is open, deleted 30 days after it is resolved (the
+  client says so in advance, to save space), and deleted at once when the issue becomes a
+  duplicate, is declined or withdrawn. The building setting of 12 months was dropped: a resident
+  may well add an uninformative photo, and nothing justifies keeping it for a year.

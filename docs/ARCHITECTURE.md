@@ -380,3 +380,50 @@ API: docs/API.md section 2 ("Monthly periods and which month a reading belongs t
   so a concurrent status change or a second submission sees the result of the first.
 - **Time:** months are local months of `INSTANCE_TIMEZONE`; "now" comes from `service._now()`,
   which tests replace.
+
+## 10. File storage (`src/core/files.py`, `src/core/images.py`), epic E11
+
+Design: docs/epics/E11_FILE_STORAGE.md. Table: docs/SCHEMA.md section 12. API rules: docs/API.md
+section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
+
+- **A port in core:** `FileStore` stores, lists, serves and deletes files; its default disk is
+  `LocalDisk(FILES_DIR)` (`app.state.file_disk`, tests use a temporary directory). An S3 disk can
+  come later as a plugin. Modules own the routes (`POST /issues/{id}/photos`, ...): there is no
+  general `/files/{id}`. A module checks its own rules first (a file of something the caller may
+  not see is 404), then calls the store with the `purpose` and `owner_ref` it expects; a file of
+  another purpose, owner or building is "not found" to the store too.
+- **Uploads are raw request bodies** (`Content-Type` of the file), not multipart forms, so the
+  session, the rights, the limits and the quota are checked before the first byte is read.
+  `declared_length` refuses a request without `Content-Length` (411) or above the route's cap
+  (413) before reading, and `read_body` stops reading at the cap (a client that goes away is
+  `400 UPLOAD_INTERRUPTED`, not a server error). The request's transaction is committed before
+  the body is read, so a slow upload never holds a database connection.
+- **Photos** (`images.py`): only JPEG of at most 2560 px on either edge is accepted. Before Pillow
+  sees the bytes, `check_structure` walks the markers and refuses more than 64 segments or 512 KB
+  of metadata before the image and more than 32 scans (a progressive JPEG with thousands of
+  repeated scans would decode for minutes). Only the JPEG decoder is opened, the size comes from
+  the header before decoding, a colour profile is converted to sRGB, the orientation is
+  applied, all metadata is dropped and the photo is written as WebP (1920 px display, 320 px
+  preview). The work runs in a worker thread behind a semaphore of one with a short queue (429
+  when it is full), like the password hashes of E7; at most a few bodies are received at once.
+- **Quota and limits** (per building): photos may not use the last 20% of `FILES_QUOTA_MB`. A
+  route's cap is reserved in memory while its body is read (the backend is one process), and the
+  final check runs again under a transaction-scoped advisory lock on the building
+  (`core:files:<building_id>`) when the row is inserted, so parallel uploads cannot overshoot.
+  Each user stores at most `FILES_USER_MB_PER_DAY` a day. Uploads stop when the disk of
+  `FILES_DIR` has less than `FILES_MIN_FREE_MB` free.
+- **Demo mode:** uploads are refused (403 `UPLOADS_DISABLED`) unless `FILES_IN_DEMO` (only for
+  `ENVIRONMENT` local, dev or test; `deploy.sh` sets it for dev), which also caps the quota at
+  `FILES_DEMO_QUOTA_MB` and the retention at `FILES_DEMO_RETENTION_HOURS`.
+- **Deleting:** a delete marks the row and hides the file; 14 days later the janitor erases the
+  blob and then the row.
+- **The `files-janitor` loop** (hourly, after the pattern of `auth/cleanup.py`): marks files past
+  `delete_after`, erases what is past `purge_after` (the disk work outside the transaction),
+  empties old files from `tmp/` (all of it at startup); weekly it removes blobs without a row
+  (older than a day), logs rows without a blob as `file_blob_missing` and re-hashes a sample
+  (`file_blob_corrupt`). Several processes never work at once (`pg_try_advisory_xact_lock`).
+- **Startup:** `create_app` creates `blobs/` and `tmp/`; the lifespan empties `tmp/` and refuses
+  to start when `FILES_DIR` is not writable (a deploy then rolls back). Emptying `tmp/` never
+  happens at import, so a one-off command in the running container cannot break an upload.
+- **Privacy:** the store never returns `created_by_user_id`; logs and spans carry the file id,
+  the purpose and sizes, never a file name or content.

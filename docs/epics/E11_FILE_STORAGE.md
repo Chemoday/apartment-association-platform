@@ -40,7 +40,7 @@ the contract wins. All sizes below are estimates to be measured again in the fir
   (the web client now, a native phone app later) scales the photo and converts it to JPEG itself;
   the operating systems and browsers do this with their own tools, HEIC photos of an iPhone
   included. The server opens only the JPEG decoder, so a PNG or WebP bomb never reaches a
-  decoder, and decoding one photo needs about 30 MB at most (section 4). The requirement is part
+  decoder, and re-encoding one photo needs about 30-70 MB (section 4). The requirement is part
   of the API contract for every client; the server still checks it and still re-encodes.
 - **Uploads in demo mode only behind a flag:** `FILES_IN_DEMO=true`, set on dev only, with a small
   demo quota and a short retention, after the pattern of `AUTH_MAIL_IN_DEMO`; without the flag
@@ -81,7 +81,7 @@ Still open: how signed containers, which hold personal data, are kept (section 9
 
 | Stream | Who | Accepted input | What is stored | Cap per file | Retention |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| Photo of an issue (E9 I4) | resident | JPEG of at most 2560 px, scaled by the client | WebP, long edge 1920 px (about 300 KB), and a 320 px preview (about 15 KB) | 4 MB in, up to 3 per report | 12 months after the issue is closed (building setting) |
+| Photo of an issue (E9 I4) | resident | JPEG of at most 2560 px, scaled by the client | WebP, long edge 1920 px (about 300 KB), and a 320 px preview (about 15 KB) | 4 MB in, up to 3 per report | while the issue is open; 30 days after it is resolved; deleted at once when it ends otherwise (owner decision 2026-11-13) |
 | Photo of a meter (E6) | resident | the same | WebP, long edge 1280 px (about 150 KB) | 4 MB in | 13 months, to cover the yearly settlement (building setting, 1-24) |
 | Documents: articles, minutes, contracts | the board only | PDF; a photo becomes WebP | the PDF as it is | 20 MB | kept until the board deletes it |
 | Attachments of the maintenance log (E10 part B) | the board | PDF or photo | as above | 20 MB | kept |
@@ -126,11 +126,13 @@ e-mail attachment from the board.
    - Only the JPEG decoder is opened (`Image.open(..., formats=["JPEG"])`); a PNG, a WebP or
      anything else is refused (415) and no other decoder ever runs.
    - The header is read first; a photo longer than 2560 px on either edge is refused before
-     decoding (422). Decoding needs about 3 bytes per pixel, so at most about 20-30 MB, also for
-     a progressive JPEG; F1 measures both kinds.
+     decoding (422).
    - The orientation is applied and all metadata is dropped.
    - The result is written as WebP: the display size and the preview.
-   About 0.2 s of CPU for one photo.
+   Measured in F1 (Pillow 13, one image at a time, the decoded image, the scaled one and the
+   WebP encoder): about 30 MB of memory and 0.35 s of CPU for the 1920 px photo a client sends,
+   50-75 MB and 0.4-0.75 s for the largest accepted one (2560 px; the upper value for pure noise,
+   the worst case for every codec), progressive or not.
 5. **A document.** Streamed to a temporary file on the files volume while its SHA-256 is
    computed; it must start with the PDF signature; it is not parsed.
 6. **A signed container.** Held in memory (2 MB at most) and checked without unpacking to disk:

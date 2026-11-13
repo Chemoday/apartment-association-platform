@@ -21,6 +21,10 @@ RECENTLY_ENDED = timedelta(days=30)
 LIMIT_WINDOW = timedelta(hours=24)
 
 BOARD_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
+# Photos per issue (task I4, epic E11 F2); the request body cap of the photo route (also the edge
+# limit of deploy/edge/Caddyfile, in decimal bytes).
+MAX_PHOTOS_PER_ISSUE = 3
+PHOTO_MAX_BYTES = 4_000_000
 
 
 def is_board(role: BuildingRole) -> bool:
@@ -29,6 +33,28 @@ def is_board(role: BuildingRole) -> bool:
 
 def is_open(status: IssueStatus) -> bool:
     return status in OPEN_STATUSES
+
+
+def may_add_photo(*, is_reporter: bool, board: bool, status: IssueStatus, photos: int) -> bool:
+    return (is_reporter or board) and is_open(status) and photos < MAX_PHOTOS_PER_ISSUE
+
+
+def may_delete_photo(*, uploaded_by_caller: bool, board: bool, status: IssueStatus) -> bool:
+    return board or (uploaded_by_caller and is_open(status))
+
+
+def photos_delete_at(status: IssueStatus, ended_at: datetime | None) -> datetime | None:
+    """When the photos of a resolved issue are deleted: as soon as it can no longer be reopened
+    (owner decision 2026-11-13: photos are working material). None for any other status: open
+    issues keep their photos, and the other ended statuses delete them at once."""
+    if status != IssueStatus.RESOLVED or ended_at is None:
+        return None
+    return ended_at + REOPEN_WINDOW
+
+
+def photos_deleted_at_once(status: IssueStatus) -> bool:
+    """A duplicate, a declined and a withdrawn issue lose their photos with the status change."""
+    return not is_open(status) and status != IssueStatus.RESOLVED
 
 
 def statuses_for(status_filter: StatusFilter | None) -> frozenset[IssueStatus] | None:

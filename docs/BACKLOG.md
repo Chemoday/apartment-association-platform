@@ -419,10 +419,11 @@ Measured on 2026-11-12 (6 vCPU, 12 GB): an idle instance uses 80-100 MB for the 
 
 ### Suggested direction
 1. In `deploy/docker-compose.deploy.yml`: backend `mem_limit` 512 MB, a CPU limit and a
-   process limit; database `mem_limit` 384 MB. Two password hashes at a time need 128 MB and a
-   decoded photo about 30 MB (E11 accepts only JPEG of at most 2560 px), so the backend limit
-   leaves room for both. The CPU limit is to be measured: the event loop must stay responsive while a
-   worker thread encodes a photo (a CPU weight, or 1.5-2 CPUs, instead of a hard limit of one).
+   process limit; database `mem_limit` 384 MB. Two password hashes at a time need 128 MB and
+   re-encoding one photo 30-75 MB (measured in E11 F1; only JPEG of at most 2560 px), so the
+   backend limit leaves room for both. The CPU limit is to be measured: the event loop must stay
+   responsive while a worker thread encodes a photo (a CPU weight, or 1.5-2 CPUs, instead of a
+   hard limit of one).
 2. A read-only root filesystem for the backend with a small tmpfs for `/tmp`: nothing can grow
    inside the container layer, and uploads go only to the files volume (E11).
 3. With the owner: swap on the host as a cushion (2-4 GB).

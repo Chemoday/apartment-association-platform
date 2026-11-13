@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy import (
     ColumnElement,
     DateTime,
@@ -28,18 +28,35 @@ from src.core.building_settings import BuildingSettings
 from src.core.database import DbSession, get_event_outbox
 from src.core.event_bus import EventOutbox
 from src.core.exceptions import DomainError
+from src.core.files import (
+    FileDTO,
+    FilePurpose,
+    FileStore,
+    PhotoVariant,
+    declared_length,
+    get_file_store_factory,
+    key_reused,
+    read_body,
+    require_content_type,
+)
 from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
 from src.modules.issues.models import Issue, IssueFollower, IssueStatusChange
 from src.modules.issues.policies import (
     ENDED_STATUSES,
     LIMIT_WINDOW,
+    MAX_PHOTOS_PER_ISSUE,
     OPEN_STATUSES,
+    PHOTO_MAX_BYTES,
     RECENTLY_ENDED,
     Transition,
     board_transition,
     can_be_original,
     is_board,
     is_open,
+    may_add_photo,
+    may_delete_photo,
+    photos_delete_at,
+    photos_deleted_at_once,
     retry_after_seconds,
     statuses_for,
     visible,
@@ -50,6 +67,7 @@ from src.modules.issues.schemas import (
     IssueCategory,
     IssueEdit,
     IssueForm,
+    IssuePhoto,
     IssueRefDTO,
     IssueReport,
     IssueStatus,
@@ -127,6 +145,22 @@ def _validation_error(field: str, message: str) -> DomainError:
     )
 
 
+def _photo_not_found() -> DomainError:
+    return DomainError(status_code=404, error_code="PHOTO_NOT_FOUND", message="Photo not found.")
+
+
+def _photo_limit() -> DomainError:
+    return DomainError(
+        status_code=409,
+        error_code="PHOTO_LIMIT_REACHED",
+        message=f"An issue has at most {MAX_PHOTOS_PER_ISSUE} photos.",
+        extra={"max_photos": MAX_PHOTOS_PER_ISSUE},
+    )
+
+
+PHOTO = FilePurpose.ISSUE_PHOTO
+
+
 def _rate_limited(wait: int) -> DomainError:
     return DomainError(
         status_code=429,
@@ -143,10 +177,13 @@ class IssuesService:
         session: AsyncSession,
         property_service: PropertyService,
         outbox: EventOutbox | None = None,
+        files: FileStore | None = None,
     ):
         self.session = session
         self.property_service = property_service
         self.settings = BuildingSettings(session)
+        # The photos (epic E11 F2). None only for system-level readers, which never show photos.
+        self.files = files
         # Events go out only after the request's transaction commits. None only for
         # system-level readers (the notifications module), which never write.
         self.outbox = outbox
@@ -298,6 +335,7 @@ class IssuesService:
         )
         issue.status, issue.ended_at, issue.updated_at = IssueStatus.WITHDRAWN, now, now
         await self.session.flush()
+        await self._sync_photo_retention(issue)
         return await self._view(user, issue)
 
     # --- Following ------------------------------------------------------------------------------
@@ -408,6 +446,7 @@ class IssuesService:
                 .on_conflict_do_nothing(index_elements=["issue_id", "user_id"])
             )
         await self.session.flush()
+        await self._sync_photo_retention(issue)
         if original is not None:
             self._publish(
                 IssueMerged(
@@ -452,6 +491,143 @@ class IssuesService:
             issue.urgent, issue.updated_at = False, now
             await self.session.flush()
         return await self._view(user, issue)
+
+    # --- Photos (task I4, epic E11 F2) -----------------------------------------------------------
+
+    async def add_photo(
+        self,
+        user: CurrentUserDTO,
+        issue_id: uuid.UUID,
+        request: Request,
+        idempotency_key: str | None,
+    ) -> tuple[IssuePhoto, bool]:
+        """Store one photo; returns it and whether it is new (False: a repeat of the same key).
+
+        The rules first, then the storage's admission, then the size; the request's transaction
+        is committed before the body is read, so a slow upload holds no database connection. The
+        issue is locked and checked again before the photo is stored.
+        """
+        files = self._require_files()
+        # A repeat answers like the first upload did, even if the issue ended meanwhile.
+        issue = await self._visible_issue(user, issue_id)
+        if idempotency_key is not None:
+            repeat = await files.find_repeat(user.id, idempotency_key, PHOTO, issue.id)
+            if repeat is not None:
+                return self._repeat_answer(user, issue, repeat)
+        issue = await self._photo_target(user, issue_id)
+        if await files.count(PHOTO, issue.id) >= MAX_PHOTOS_PER_ISSUE:
+            raise _photo_limit()
+        await files.admit(user.building_id, user.id, PHOTO, PHOTO_MAX_BYTES)
+        require_content_type(request, "image/jpeg")
+        length = declared_length(request, PHOTO_MAX_BYTES)
+        await self.session.commit()
+        with files.reservations.hold(user.building_id, length):
+            with files.gate.receiving():
+                data = await read_body(request, length, PHOTO_MAX_BYTES)
+            photo = await files.gate.reencode(data)
+            issue = await self._photo_target(user, issue_id, lock=True)
+            if idempotency_key is not None:  # a parallel request with the same key was first
+                repeat = await files.find_repeat(user.id, idempotency_key, PHOTO, issue.id)
+                if repeat is not None:
+                    return self._repeat_answer(user, issue, repeat)
+            if await files.count(PHOTO, issue.id) >= MAX_PHOTOS_PER_ISSUE:
+                raise _photo_limit()
+            stored, new = await files.store_photo(
+                building_id=user.building_id,
+                purpose=PHOTO,
+                owner_ref=issue.id,
+                created_by=user.id,
+                photo=photo,
+                idempotency_key=idempotency_key,
+            )
+        return self._photo_view(user, issue, stored), new
+
+    async def photo_bytes(
+        self,
+        user: CurrentUserDTO,
+        issue_id: uuid.UUID,
+        photo_id: uuid.UUID,
+        variant: PhotoVariant,
+    ) -> tuple[bytes, str]:
+        """The image of a photo for everyone who sees the issue."""
+        files = self._require_files()
+        issue = await self._visible_issue(user, issue_id)
+        stored = await files.get(photo_id, PHOTO, issue.id)
+        data = await files.read(stored, variant) if stored is not None else None
+        if stored is None or data is None:
+            raise _photo_not_found()
+        return data, stored.content_type
+
+    async def delete_photo(
+        self, user: CurrentUserDTO, issue_id: uuid.UUID, photo_id: uuid.UUID
+    ) -> None:
+        files = self._require_files()
+        issue = await self._visible_issue(user, issue_id, lock="update")
+        stored = await files.get(photo_id, PHOTO, issue.id, caller_id=user.id)
+        if stored is None:
+            raise _photo_not_found()
+        if not may_delete_photo(
+            uploaded_by_caller=stored.uploaded_by_caller,
+            board=is_board(user.building_role),
+            status=issue.status,
+        ):
+            raise _forbidden("Only the uploader, while the issue is open, or the board may delete.")
+        await files.delete(photo_id, PHOTO, issue.id)
+
+    def _repeat_answer(
+        self, user: CurrentUserDTO, issue: Issue, repeat: FileDTO
+    ) -> tuple[IssuePhoto, bool]:
+        """A repeat of an upload: the photo again, or why it is gone. Its issue ended in a way that
+        deletes photos (declined, duplicate, withdrawn): 409 ISSUE_ENDED, like a new upload would
+        get; deleted by a person while the issue is open: the key cannot be used again."""
+        if not repeat.deleted:
+            return self._photo_view(user, issue, repeat), False
+        if not is_open(issue.status):
+            raise _ended(issue.status)
+        raise key_reused()
+
+    def _require_files(self) -> FileStore:
+        if self.files is None:
+            raise RuntimeError("photos need the file store")
+        return self.files
+
+    async def _photo_target(
+        self, user: CurrentUserDTO, issue_id: uuid.UUID, *, lock: bool = False
+    ) -> Issue:
+        """The issue a photo is added to: visible, the caller is its reporter or the board, open."""
+        issue = await self._visible_issue(user, issue_id, lock="update" if lock else None)
+        if issue.reporter_user_id != user.id and not is_board(user.building_role):
+            raise _forbidden("Only the reporter and the board add photos.")
+        if not is_open(issue.status):
+            raise _ended(issue.status)
+        return issue
+
+    @staticmethod
+    def _photo_view(user: CurrentUserDTO, issue: Issue, stored: FileDTO) -> IssuePhoto:
+        return IssuePhoto(
+            id=stored.id,
+            width=stored.width,
+            height=stored.height,
+            created_at=stored.created_at,
+            mine=stored.uploaded_by_caller,
+            can_delete=may_delete_photo(
+                uploaded_by_caller=stored.uploaded_by_caller,
+                board=is_board(user.building_role),
+                status=issue.status,
+            ),
+        )
+
+    async def _sync_photo_retention(self, issue: Issue) -> None:
+        """Photos follow the issue's status: kept while open, deleted 30 days after it was resolved
+        (cleared again on reopening), deleted at once when it ends otherwise."""
+        if self.files is None:
+            raise RuntimeError("changing the status of an issue needs the file store")
+        if photos_deleted_at_once(issue.status):
+            await self.files.delete_all(PHOTO, issue.id)
+        else:
+            await self.files.set_delete_after(
+                PHOTO, issue.id, photos_delete_at(issue.status, issue.ended_at)
+            )
 
     # --- Reading --------------------------------------------------------------------------------
 
@@ -694,10 +870,25 @@ class IssuesService:
 
     async def _view(self, user: CurrentUserDTO, issue: Issue) -> IssueView:
         [summary] = await self._summaries(user, [issue])
+        stored = (
+            await self.files.list_files(PHOTO, issue.id, caller_id=user.id)
+            if self.files is not None
+            else []
+        )
         return IssueView(
             **summary.model_dump(),
             description=issue.description,
             timeline=await self._timeline(user, issue),
+            photos=[self._photo_view(user, issue, photo) for photo in stored],
+            can_add_photo=self.files is not None
+            and self.files.uploads_enabled
+            and may_add_photo(
+                is_reporter=issue.reporter_user_id == user.id,
+                board=is_board(user.building_role),
+                status=issue.status,
+                photos=len(stored),
+            ),
+            photos_delete_at=photos_delete_at(issue.status, issue.ended_at) if stored else None,
         )
 
     async def _timeline(self, user: CurrentUserDTO, issue: Issue) -> list[TimelineEntry]:
@@ -731,8 +922,11 @@ class IssuesService:
 
 
 def get_issues_service(
+    request: Request,
     session: DbSession,
     property_service: PropertyService = Depends(get_property_service),
     outbox: EventOutbox = Depends(get_event_outbox),
 ) -> IssuesService:
-    return IssuesService(session, property_service, outbox)
+    return IssuesService(
+        session, property_service, outbox, get_file_store_factory(request)(session)
+    )

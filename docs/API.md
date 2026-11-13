@@ -40,6 +40,11 @@ gets to answer it. Upload routes check `Content-Length` themselves before readin
 their own JSON errors below the edge limit; every backend cap stays at or below the edge limit in
 decimal bytes. Local Docker has no edge and no such limit.
 
+Section 12 (uploaded files) adds `UPLOAD_INTERRUPTED` (400), `UPLOADS_DISABLED` (403),
+`IDEMPOTENCY_KEY_REUSED` (409), `LENGTH_REQUIRED` (411),
+`FILE_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `INVALID_IMAGE`, `IMAGE_TOO_LARGE` (422),
+`STORAGE_QUOTA_EXCEEDED` and `STORAGE_LOW_DISK` (507), and reuses `RATE_LIMITED` (429).
+
 Section 7 adds `INVALID_CREDENTIALS`, `SESSION_EXPIRED` (401), `CSRF_CHECK_FAILED`, `REAUTHENTICATION_REQUIRED` (403), `SESSION_NOT_FOUND`, `INVITATION_NOT_FOUND`, `USER_NOT_FOUND` (404), `EMAIL_ALREADY_REGISTERED`, `TENANT_LIMIT_REACHED`, `INVITATION_ALREADY_PENDING`, `INVITATION_ACCEPTED`, `INVITATION_NO_LONGER_VALID`, `LAST_CHAIRMAN` (409) and `PASSWORD_TOO_WEAK` (422); it reuses `RATE_LIMITED` (429) of section 6. `INVALID_CREDENTIALS`, `REAUTHENTICATION_REQUIRED` and `PASSWORD_TOO_WEAK` exist since A5.
 
 ### Author badge rules (`property.policies.format_author_badge`)
@@ -1790,7 +1795,12 @@ Every endpoint needs a signed-in user.
   "updated_at": "2026-11-08T18:00:00Z",
   "ended_at": null,
   "timeline": [{"status": "REPORTED", "at": "2026-11-08T18:00:00Z"}],
-  "reporter": null
+  "reporter": null,
+  "photos": [
+    {"id": "uuid", "width": 1920, "height": 1440, "created_at": "2026-11-08T18:01:00Z", "mine": false, "can_delete": false}
+  ],
+  "can_add_photo": false,
+  "photos_delete_at": null
 }
 ```
 - `category`: `LIGHTING`, `DOORS_AND_LOCKS`, `LIFT`, `HEATING`, `WATER_AND_SEWAGE`, `ELECTRICITY`,
@@ -1816,7 +1826,15 @@ Every endpoint needs a signed-in user.
   `{"badge": AuthorBadge, "apartment_id": "uuid" | null}`. The badge is the privacy badge of
   section 0 (the reporter's mode in that apartment), never a raw name or contacts;
   `apartment_id` links to the apartment's card and thread (epic E8).
-- Never in a payload: who reported (except `reporter` for the board), who follows.
+- `photos` (task I4 / E11 F2): at most 3, oldest first; `width`/`height` of the display size.
+  `mine`: the caller uploaded it; `can_delete`: the caller may delete it (below). Who uploaded a
+  photo is never in a payload. `can_add_photo`: the caller may upload one now (the reporter or the
+  board, the issue is open, fewer than 3 photos, and uploads are switched on: never in a demo
+  without uploads). `photos_delete_at`: when the photos of a `RESOLVED` issue will be deleted
+  (`ended_at` + 30 days), else `null` (also when it has no photos); show it so nobody is
+  surprised (see "Retention").
+- Never in a payload: who reported (except `reporter` for the board), who follows, who uploaded a
+  photo.
 
 ### `GET /api/v1/issues/form`
 What the report form needs: `{"urgent_enabled": false, "apartment_ids": ["uuid"], "entrances": [1, 2]}`.
@@ -1910,6 +1928,38 @@ Clears the urgent flag (a false alarm); returns the `IssueView`. Logged as an `U
 entry. The report still counts as urgent for the apartment's urgent limit. Already not urgent:
 changes nothing. On an ended issue: `409 ISSUE_ENDED`.
 
+### Photos of an issue (task I4, epic E11 task F2)
+Upload rules, limits and errors shared by every upload: section 12.
+
+**`POST /api/v1/issues/{issue_id}/photos`** with the photo as the body
+(`Content-Type: image/jpeg`, `Content-Length`, at most 4,000,000 bytes, at most 2560 px on either
+edge) and optionally `Idempotency-Key`. Answers the stored `IssuePhoto` (an element of `photos`):
+`201`, or `200` for a repeat with the same key.
+- Who: the reporter and the chairman or the board, while the issue is open (`409 ISSUE_ENDED`
+  after); anyone else who sees it `403 FORBIDDEN`; not visible `404 ISSUE_NOT_FOUND`.
+- At most 3 photos per issue: `409 PHOTO_LIMIT_REACHED` (a deleted photo frees its place).
+- The photo is re-encoded (orientation applied, location and every other metadata removed) and
+  stored as WebP in two sizes.
+
+**`GET /api/v1/issues/{issue_id}/photos/{photo_id}?variant=display|thumb`**: the image
+(`image/webp`; `thumb` at most 320 px for lists, `display` at most 1920 px; default `display`) to
+everyone who sees the issue, with the headers of section 12. Unknown, deleted, of another issue,
+or its file is missing on the server: `404 PHOTO_NOT_FOUND`.
+
+**`DELETE /api/v1/issues/{issue_id}/photos/{photo_id}`**: `204`. The one who uploaded it while the
+issue is open, the chairman and the board at any time; anyone else `403 FORBIDDEN`. The photo
+disappears at once and is erased from the server after 14 days.
+
+**Retention** (owner decision 2026-11-13: photos are working material, not an archive, and many
+add little information):
+- While the issue is open, its photos are kept.
+- `RESOLVED`: deleted 30 days after the issue was resolved (`photos_delete_at`), to save space;
+  reopening the issue within those 30 days keeps them again.
+- `DUPLICATE`, `DECLINED`, `WITHDRAWN`: deleted at once with the status change; reopening the
+  issue later does not bring them back.
+- There is no setting. In demo mode a photo is deleted after about a day at the latest
+  (`photos_delete_at` does not show that).
+
 ### Domain events
 Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (task I3):
 - `IssueReported`: `issue_id`, `building_id`, `reporter_user_id`, `urgent`; drives
@@ -1923,11 +1973,14 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (ta
 ### Error codes of this section
 | Status | `error_code` |
 | :--- | :--- |
-| 403 | `FORBIDDEN` |
-| 404 | `ISSUE_NOT_FOUND` |
-| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION` |
-| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE` |
+| 400 | `UPLOAD_INTERRUPTED` (photos, section 12) |
+| 403 | `FORBIDDEN`, `UPLOADS_DISABLED` |
+| 404 | `ISSUE_NOT_FOUND`, `PHOTO_NOT_FOUND` |
+| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED` |
+| 411, 413, 415 | `LENGTH_REQUIRED`, `FILE_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` (photos, section 12) |
+| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE`, `INVALID_IMAGE`, `IMAGE_TOO_LARGE` |
 | 429 | `RATE_LIMITED` |
+| 507 | `STORAGE_QUOTA_EXCEEDED`, `STORAGE_LOW_DISK` (photos, section 12) |
 
 ## 11. Maintenance calendar and log (`maintenance`), epic E10
 
@@ -2129,3 +2182,66 @@ changes, because the schedule depends on it. `404 LOG_ENTRY_NOT_FOUND`.
 | 404 | `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND` |
 | 409 | `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` |
 | 422 | `VALIDATION_ERROR`, `INVALID_TARGET` |
+
+---
+
+## 12. Uploaded files (`core`), epic E11
+
+*Rules shared by every upload route (docs/epics/E11_FILE_STORAGE.md; storage: docs/SCHEMA.md
+section 12). The routes themselves belong to their modules: the photos of an issue are in
+section 10.*
+
+### Uploading
+- **The body is the file itself**, not a multipart form: `Content-Type` names the file type and
+  `Content-Length` is required. Values that are not the file (a title) travel in the query.
+- **Photos are JPEG of at most 2560 px on either edge** (`Content-Type: image/jpeg`). Every client
+  scales and converts a photo before sending it (docs/FRONTEND_GUIDE.md section 17): the server
+  opens no other format and never scales a large photo itself. It still re-encodes every photo:
+  the orientation is applied, all metadata (location, camera) is removed and the photo is stored
+  as WebP in two sizes, `display` (at most 1920 px) and `thumb` (at most 320 px).
+- **`Idempotency-Key`** (optional header, 1-64 characters `A-Z a-z 0-9 _ -`, a new random value
+  per file, for example a UUID): an upload repeated with the same key by the same user, after a
+  lost answer, returns the stored file with `200` instead of storing it again (also when the
+  issue was resolved meanwhile); the first upload answers `201`. The body of a repeated request
+  is not read. When the file is gone meanwhile because its owner ended (for an issue: declined,
+  a duplicate, withdrawn), the repeat gets the owner's own answer (`409 ISSUE_ENDED`). A key
+  already used for another file, or for a file a person deleted, is `409
+  IDEMPOTENCY_KEY_REUSED`: send a new key for every file.
+- **Order of the checks:** the route's own rules (404, 403, 409), then demo mode, the disk, the
+  quota and the daily limit, then the size from `Content-Length`; only then the body is read.
+
+### Serving
+- `Content-Type` is the stored one (`image/webp` for photos). Every file response carries
+  `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` and
+  `Cache-Control: private, max-age=31536000, immutable` (a file never changes; a new one gets a
+  new id). Send the access token as for any request and show images from a blob URL; there are
+  no public or signed links.
+- A deleted file is `404` at once. It is erased 14 days later.
+
+### Limits
+- **Quota per association**, set by the operator of the server (`FILES_QUOTA_MB`, default
+  2048 MB); photos may not use the last 20% of it, which stays for documents and official votes.
+- **At most `FILES_USER_MB_PER_DAY` (20 MB) stored per user and day**, counted as stored (a photo
+  is about 0.3 MB); an upload is admitted only while a whole file of the route's cap still fits
+  (4 MB for a photo): `429 RATE_LIMITED` with `retry_after_seconds`.
+- **A busy server** (too many uploads at the same moment): `429 RATE_LIMITED` with
+  `retry_after_seconds`; retry that one file later.
+- **Demo mode:** uploads only where the server allows them (dev), with a small quota, and files
+  are deleted after about a day; elsewhere `403 UPLOADS_DISABLED`.
+
+### Error codes of this section
+| Status | `error_code` | When |
+| :--- | :--- | :--- |
+| 400 | `UPLOAD_INTERRUPTED` | The client went away while sending the body; send the file again |
+| 403 | `UPLOADS_DISABLED` | Demo mode without uploads (every deployed environment except dev) |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | The `Idempotency-Key` was used for another file or a deleted one |
+| 411 | `LENGTH_REQUIRED` | No `Content-Length` |
+| 413 | `FILE_TOO_LARGE` | `Content-Length` above the route's cap, or a body longer than it says (`max_bytes` in the body) |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | Another `Content-Type`, or the bytes are not that type (for photos: not a JPEG) |
+| 422 | `INVALID_IMAGE` | A JPEG that cannot be decoded (cut off, broken), or one built like no camera writes it: more than 64 segments or 512 KB of metadata before the image, or more than 32 scans |
+| 422 | `IMAGE_TOO_LARGE` | Longer than 2560 px on an edge (`max_edge_px` in the body); scale it first |
+| 422 | `VALIDATION_ERROR` | A malformed `Idempotency-Key` |
+| 429 | `RATE_LIMITED` | The daily limit of the user, or the server is busy (`retry_after_seconds`, `Retry-After`) |
+| 507 | `STORAGE_QUOTA_EXCEEDED` | The association's quota is used up |
+| 507 | `STORAGE_LOW_DISK` | The server's disk is nearly full |
+

@@ -177,6 +177,25 @@ class IssueSummary(BaseModel):
     reporter: ReporterView | None
 
 
+class PhotoVariantName(StrEnum):
+    DISPLAY = "display"
+    THUMB = "thumb"
+
+
+class IssuePhoto(BaseModel):
+    """A photo of an issue (epic E11 F2). Who uploaded it is never told, only `mine`."""
+
+    id: uuid.UUID
+    width: int | None
+    height: int | None
+    created_at: datetime
+    mine: bool
+    can_delete: bool
+
+
 class IssueView(IssueSummary):
     description: str
     timeline: list[TimelineEntry]
+    photos: list[IssuePhoto]
+    can_add_photo: bool
+    photos_delete_at: datetime | None  # when a resolved issue's photos are deleted

@@ -538,6 +538,7 @@ Contract: docs/API.md section 10; notifications in docs/API.md section 6.
   `entrance: null`. Never show an issue title in a notification. The preferences matrix now has 40
   rows; show `ISSUE_REPORTED` and `ISSUE_URGENT` only to the chairman and the board, and
   `ISSUE_STATUS_CHANGED` to everyone who can use the tracker.
+- **Photos** (up to 3 per issue): section 17.
 
 ## 16. Maintenance calendar and log (epic E10)
 
@@ -570,3 +571,45 @@ Contract: docs/API.md section 11.
 - In the board room and the feed, a post with `origin`
   `MAINTENANCE` gets a small "automatic reminder" (or "automatic notice") label next to the
   author's badge.
+
+## 17. Photos (epic E11; issue reports first)
+
+Contract: docs/API.md section 12 (rules shared by every upload) and section 10 (the photos of an
+issue). The server accepts only JPEG of at most 2560 px: **the client scales and converts every
+photo before sending it.**
+
+- **Picking:** two buttons, "Take a photo" (`<input type="file" accept="image/*"
+  capture="environment">`, opens the camera directly) and "Choose from gallery" (the same without
+  `capture`). iPhone photos (HEIC) open in Safari like any image.
+- **Scaling, in a Web Worker:** `createImageBitmap(file, {imageOrientation: "from-image"})`, draw
+  it on an `OffscreenCanvas` scaled so the long edge is at most **1920 px** (never above 2560),
+  then `convertToBlob({type: "image/jpeg", quality: 0.85})`. The canvas drops every piece of
+  metadata, so the location of the photo never leaves the phone. Without `OffscreenCanvas` do the
+  same on a hidden `<canvas>` with `toBlob`.
+- **When scaling or converting fails** (an old browser, a format it cannot open): send nothing and
+  say "This photo cannot be used; take one with the camera". Never send the original.
+- **Before sending:** at most 3 photos per report (`can_add_photo`); show each picked photo at once
+  from `URL.createObjectURL` and revoke the URL when done.
+- **Sending:** report the issue as text first (`POST /issues`), then upload each photo on its own
+  (`POST /issues/{id}/photos`, body = the JPEG blob, `Content-Type: image/jpeg`) with a fresh
+  `Idempotency-Key` (`crypto.randomUUID()`) per photo, kept for its retries. Show progress with
+  `XMLHttpRequest.upload.onprogress` (fetch has no upload progress). On a network error retry only
+  that photo with the same key; the report itself is already saved.
+- **Showing:** fetch `.../photos/{id}?variant=thumb` for lists and the issue page and `display` when
+  the photo is opened, with the access token as for every request, and show it from
+  `URL.createObjectURL(blob)`. Responses are cacheable for good; a photo never changes.
+- **Deleting:** a bin icon where `can_delete` is true.
+- **Retention, told to people:** next to the "add photo" button: "Photos are kept while the issue
+  is open and deleted 30 days after it is resolved, to save space." On a resolved issue with
+  photos, show "Photos will be deleted on {photos_delete_at}". When the board marks an issue as a
+  duplicate or declines it, warn in the confirmation: "Its photos will be deleted".
+- **Errors:** `400 UPLOAD_INTERRUPTED`: retry that photo; `409 IDEMPOTENCY_KEY_REUSED`: a bug
+  of the client (a key used twice), retry with a new key; `403 UPLOADS_DISABLED` "Photos are
+  switched off in this demo"; `409
+  PHOTO_LIMIT_REACHED` "At most 3 photos"; `409 ISSUE_ENDED` "This issue is closed"; `413` (also a
+  bare 413 from the edge, docs/API.md section 0), `422 IMAGE_TOO_LARGE`: scale again, smaller;
+  `415`, `422 INVALID_IMAGE`: "This photo cannot be used"; `429 RATE_LIMITED`: retry after
+  `retry_after_seconds` (the server is busy, or the daily limit); `507`: "There is no room for more
+  photos now; tell the board".
+- A future native app does the same with the image tools of the system (scale on decoding,
+  convert to JPEG) and the same `Idempotency-Key`; the contract is the same for every client.

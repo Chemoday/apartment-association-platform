@@ -3,18 +3,21 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 
 from src.core.exceptions import AUTH_ERRORS, error_responses
+from src.core.files import PhotoVariant, file_response
 from src.core.security import get_current_user
 from src.modules.issues.schemas import (
     ISSUES_PAGE_MAX,
     IssueCategory,
     IssueEdit,
     IssueForm,
+    IssuePhoto,
     IssueReport,
     IssueSummary,
     IssueView,
+    PhotoVariantName,
     StatusChange,
     StatusFilter,
 )
@@ -162,3 +165,94 @@ async def change_issue_status(
 async def clear_urgent_flag(issue_id: uuid.UUID, user: Caller, service: Service) -> IssueView:
     """The board clears a false urgent flag."""
     return await service.clear_urgent(user, issue_id)
+
+
+# --- Photos (task I4, epic E11 F2; docs/API.md sections 10 and 12) -------------------------------
+
+_PHOTO_BODY = {
+    "requestBody": {
+        "required": True,
+        "description": "The photo itself: JPEG of at most 2560 px, at most 4,000,000 bytes.",
+        "content": {"image/jpeg": {"schema": {"type": "string", "format": "binary"}}},
+    }
+}
+IdempotencyKey = Annotated[
+    str | None,
+    Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
+]
+
+
+@router.post(
+    "/{issue_id}/photos",
+    response_model=IssuePhoto,
+    status_code=201,
+    openapi_extra=_PHOTO_BODY,
+    responses={
+        200: {"model": IssuePhoto, "description": "A repeat with the same Idempotency-Key"},
+        **error_responses(
+            {
+                400: ["UPLOAD_INTERRUPTED"],
+                403: ["FORBIDDEN", "UPLOADS_DISABLED"],
+                404: ["ISSUE_NOT_FOUND"],
+                409: ["ISSUE_ENDED", "PHOTO_LIMIT_REACHED", "IDEMPOTENCY_KEY_REUSED"],
+                411: ["LENGTH_REQUIRED"],
+                413: ["FILE_TOO_LARGE"],
+                415: ["UNSUPPORTED_MEDIA_TYPE"],
+                422: ["VALIDATION_ERROR", "INVALID_IMAGE", "IMAGE_TOO_LARGE"],
+                429: ["RATE_LIMITED"],
+                507: ["STORAGE_QUOTA_EXCEEDED", "STORAGE_LOW_DISK"],
+            }
+        ),
+    },
+)
+async def add_issue_photo(
+    issue_id: uuid.UUID,
+    request: Request,
+    response: Response,
+    user: Caller,
+    service: Service,
+    idempotency_key: IdempotencyKey = None,
+) -> IssuePhoto:
+    """Add a photo (the reporter or the board, while the issue is open; at most 3)."""
+    photo, new = await service.add_photo(user, issue_id, request, idempotency_key)
+    if not new:
+        response.status_code = 200
+    return photo
+
+
+@router.get(
+    "/{issue_id}/photos/{photo_id}",
+    response_class=Response,
+    responses={
+        200: {"content": {"image/webp": {"schema": {"type": "string", "format": "binary"}}}},
+        **error_responses({404: ["ISSUE_NOT_FOUND", "PHOTO_NOT_FOUND"], 422: ["VALIDATION_ERROR"]}),
+    },
+)
+async def get_issue_photo(
+    issue_id: uuid.UUID,
+    photo_id: uuid.UUID,
+    user: Caller,
+    service: Service,
+    variant: PhotoVariantName = PhotoVariantName.DISPLAY,
+) -> Response:
+    """The image of a photo: `display` (at most 1920 px) or `thumb` (at most 320 px)."""
+    data, content_type = await service.photo_bytes(
+        user, issue_id, photo_id, PhotoVariant(variant.value)
+    )
+    return file_response(data, content_type)
+
+
+@router.delete(
+    "/{issue_id}/photos/{photo_id}",
+    status_code=204,
+    response_class=Response,
+    responses=error_responses(
+        {404: ["ISSUE_NOT_FOUND", "PHOTO_NOT_FOUND"], 422: ["VALIDATION_ERROR"]}
+    ),
+)
+async def delete_issue_photo(
+    issue_id: uuid.UUID, photo_id: uuid.UUID, user: Caller, service: Service
+) -> Response:
+    """Delete a photo (its uploader while the issue is open, the board at any time)."""
+    await service.delete_photo(user, issue_id, photo_id)
+    return Response(status_code=204)
