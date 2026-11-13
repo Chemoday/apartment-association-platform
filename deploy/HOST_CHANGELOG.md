@@ -17,6 +17,7 @@ Never write secrets here.
 | 2026-11-12 | vps1 | - | Read-only measurements for epic E11 (disk, memory, logs, images); nothing changed | agent | docs/cli_planning/2026-11-12-file-storage-and-backups.md |
 | 2026-11-13 | vps1 | deafbb2 | Deploy of #126 to dev (CI): container limits and log rotation on dev; the first `deploy/cleanup.sh` removed 15 images and 39 release directories | CI | dev healthy; prod untouched |
 | 2026-11-13 | vps1 | deafbb2 | `bootstrap.sh --host hosts/vps1.env --source-sha deafbb2...` as root (runbook "Applying a change to a host"), agent on the owner's instruction: new Caddyfile (body limits, timeouts), edge container recreated, `ssh-gate` reinstalled, `files/` directories, `aap-disk-check` timer | agent | `host/check.sh`: all OK except prod containers without limits (prod still runs c6e8706 until it is promoted); dev and prod `/health/ready` 200; a 2 MB body to dev gets 413 |
+| 2026-11-13 | vps1 | 5fa04f2 | `bootstrap.sh --host hosts/vps1.env --source-sha 5fa04f2...` as root, agent on the owner's instruction: the Caddyfile of #129 (20 MB for `POST /api/v1/documents`), reloaded without recreating the edge container | agent | `host/check.sh`: OK except the prod containers (prod still on c6e8706); on dev a 5 MB PDF uploads (201), a 21 MB one gets 413 |
 
 Reconstructed from the project records on 2026-11-13; earlier re-runs of `bootstrap.sh`, if any,
 are not known.

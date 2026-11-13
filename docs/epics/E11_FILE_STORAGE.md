@@ -1,6 +1,6 @@
 # E11. Shared file storage with strict limits
 
-- **Phase:** 2. **Status:** designed with the owner (2026-11-12), scheduled on 2026-11-13: epic
+- **Phase:** 2. **Status:** done on 2026-11-13 (F0 #126, F1-F2 #128, F3-F4 #129); designed with the owner (2026-11-12), scheduled on 2026-11-13: epic
   [#125](https://github.com/Chemoday/apartment-association-platform/issues/125), tasks F0
   [#121](https://github.com/Chemoday/apartment-association-platform/issues/121), F1
   [#122](https://github.com/Chemoday/apartment-association-platform/issues/122), F2
