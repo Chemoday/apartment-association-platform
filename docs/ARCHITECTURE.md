@@ -432,7 +432,8 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
   happens at import, so a one-off command in the running container cannot break an upload.
 - **Usage and alerts** (task F4): `GET /api/v1/files/usage` (core router, the chairman and the
   board). When a stored file brings a building to 70% or 90% of its room for files (the quota
-  minus the votes reserve, so both fire before uploads are refused), the store inserts a
+  minus the votes reserve) or of its room for photos, whichever is fuller, so both fire before
+  uploads are refused, the store inserts a
   `core_file_alerts` row and adds the durable event `StorageUsageHigh` (`src/core/file_events.py`)
   to the request's outbox; `notifications` turns it into `STORAGE_ALMOST_FULL` for the chairman
   and the board. The janitor deletes the row when the usage is 10 points below the threshold,

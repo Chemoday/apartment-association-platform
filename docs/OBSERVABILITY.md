@@ -46,7 +46,10 @@ also logged as `domain_event_gave_up`).
 
 **No PII in telemetry.** The backend scrubs every span, JSON log line and exported log record
 (`src/core/telemetry.py`; exported log records keep only the scrubbed JSON body plus logger name
-and code location). Metrics carry route templates, methods and status codes only. The collector
+and code location). Values of sensitive keys are redacted wherever the key appears, also as a
+query parameter inside a URL (`http.url`, `http.target`, `url.query`): names, contacts, tokens,
+and free text people write, such as a document's `title`, which travels in the upload's query
+string. Metrics carry route templates, methods and status codes only. The collector
 masks emails and phone numbers once more. Covered by `tests/core/test_telemetry.py` and
 `tests/core/test_telemetry_export.py`.
 

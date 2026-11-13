@@ -603,9 +603,10 @@ photo before sending it.**
   is open and deleted 30 days after it is resolved, to save space." On a resolved issue with
   photos, show "Photos will be deleted on {photos_delete_at}". When the board marks an issue as a
   duplicate or declines it, warn in the confirmation: "Its photos will be deleted".
-- **Errors:** `400 UPLOAD_INTERRUPTED`, `408 UPLOAD_TIMEOUT`: retry that photo (upload at most 2
-  files at once); `409 IDEMPOTENCY_KEY_REUSED`: a bug
-  of the client (a key used twice), retry with a new key; `403 UPLOADS_DISABLED` "Photos are
+- **Errors:** `400 UPLOAD_INTERRUPTED`, `408 UPLOAD_TIMEOUT`: retry that photo with the same key
+  (upload at most 2 files at once); `409 UPLOAD_REMOVED`: "This photo was removed" (never send
+  it again, also not with a new key); `409 IDEMPOTENCY_KEY_REUSED`: a bug of the client (a key
+  used for two files): fix the client, do not retry blindly; `403 UPLOADS_DISABLED` "Photos are
   switched off in this demo"; `409
   PHOTO_LIMIT_REACHED` "At most 3 photos"; `409 ISSUE_ENDED` "This issue is closed"; `413` (also a
   bare 413 from the edge, docs/API.md section 0), `422 IMAGE_TOO_LARGE`: scale again, smaller;
@@ -634,8 +635,17 @@ Contract: docs/API.md section 13 (and section 12 for the upload rules).
 - **Editing** (the chairman and the board, `can_edit`): title, category, audience, date.
 - **Deleting** (the chairman, `can_delete`): confirm "Delete this document for everyone?".
 - `uploaded_by` (staff only) is a badge, never a name.
-- Errors as in section 17 (photos), plus `415 UNSUPPORTED_MEDIA_TYPE` "Only PDF files" and
-  `404 DOCUMENT_NOT_FOUND` "This document is not available".
+- **Before the form:** `GET /documents/upload-options` says whether to show "Upload" at all
+  (`can_upload`), which audiences to offer and the size limit. Prefill the title from the file
+  name without the folder and without ".pdf".
+- **Editing:** send only the fields the person changed (`PATCH` changes only those), so two board
+  members editing different fields at once do not overwrite each other.
+- **Errors (their own texts, not the photo ones):** `413` "The file is larger than 20 MB";
+  `415 UNSUPPORTED_MEDIA_TYPE` "Only PDF files"; `400 UPLOAD_INTERRUPTED`, `408 UPLOAD_TIMEOUT`
+  "The upload broke off; try again" (same key); `409 UPLOAD_REMOVED` "This document was removed
+  meanwhile"; `422` on `title` or `document_date` next to the field; `403 UPLOADS_DISABLED`
+  "Uploads are switched off in this demo"; `507` "The association's storage is full: delete old
+  documents or ask the operator"; `404 DOCUMENT_NOT_FOUND` "This document is not available".
 
 ## 19. Storage used by the association (epic E11 task F4)
 

@@ -42,7 +42,7 @@ decimal bytes. Local Docker has no edge and no such limit.
 
 Section 12 (uploaded files) adds `UPLOAD_INTERRUPTED` (400), `UPLOADS_DISABLED` (403),
 `UPLOAD_TIMEOUT` (408),
-`IDEMPOTENCY_KEY_REUSED` (409), `LENGTH_REQUIRED` (411),
+`IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED` (409), `LENGTH_REQUIRED` (411),
 `FILE_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `INVALID_IMAGE`, `IMAGE_TOO_LARGE` (422),
 `STORAGE_QUOTA_EXCEEDED` and `STORAGE_LOW_DISK` (507), and reuses `RATE_LIMITED` (429).
 
@@ -1982,7 +1982,8 @@ Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (ta
 | 400 | `UPLOAD_INTERRUPTED` (photos, section 12) |
 | 403 | `FORBIDDEN`, `UPLOADS_DISABLED` |
 | 404 | `ISSUE_NOT_FOUND`, `PHOTO_NOT_FOUND` |
-| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED` |
+| 408 | `UPLOAD_TIMEOUT` (photos, section 12) |
+| 409 | `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED` |
 | 411, 413, 415 | `LENGTH_REQUIRED`, `FILE_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` (photos, section 12) |
 | 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT`, `INVALID_LOCATION`, `INVALID_DUPLICATE`, `INVALID_IMAGE`, `IMAGE_TOO_LARGE` |
 | 429 | `RATE_LIMITED` |
@@ -2200,7 +2201,8 @@ section 10.*
 ### Uploading
 - **The body is the file itself**, not a multipart form: `Content-Type` names the file type and
   `Content-Length` is required. Values that are not the file (a title) travel in the query.
-- **Photos are JPEG of at most 2560 px on either edge** (`Content-Type: image/jpeg`). Every client
+- **Photos are JPEG of at most 2560 px on either edge** (`Content-Type: image/jpeg`; `image/jpg`
+  and `image/pjpeg`, which some older devices send, are accepted too). Every client
   scales and converts a photo before sending it (docs/FRONTEND_GUIDE.md section 17): the server
   opens no other format and never scales a large photo itself. It still re-encodes every photo:
   the orientation is applied, all metadata (location, camera) is removed and the photo is stored
@@ -2209,12 +2211,14 @@ section 10.*
   per file, for example a UUID): an upload repeated with the same key by the same user, after a
   lost answer, returns the stored file with `200` instead of storing it again (also when the
   issue was resolved meanwhile); the first upload answers `201`. The body of a repeated request
-  is not read. When the file is gone meanwhile because its owner ended (for an issue: declined,
-  a duplicate, withdrawn), the repeat gets the owner's own answer (`409 ISSUE_ENDED`). A key
-  already used for another file, or for a file a person deleted, is `409
-  IDEMPOTENCY_KEY_REUSED`: send a new key for every file.
-- **Order of the checks:** the route's own rules (404, 403, 409), then demo mode, the disk, the
-  quota and the daily limit, then the size from `Content-Length`; only then the body is read.
+  is not read. When the earlier upload is gone meanwhile (a person or the board deleted it, its
+  issue ended in a way that deletes photos, a document moved out of the caller's sight), the
+  repeat gets `409 UPLOAD_REMOVED`: tell the person it was removed and **do not send it again**.
+  A key already used for another file (another owner, or a document of another size) is `409
+  IDEMPOTENCY_KEY_REUSED`, a mistake of the client: a new key for every file.
+- **Order of the checks:** the route's own rules (404, 403, 409), then the type and the size from
+  `Content-Type` and `Content-Length`, then demo mode, the disk, the quota (holding the declared
+  size, not the route's cap) and the daily limit; only then the body is read.
 
 ### Serving
 - `Content-Type` is the stored one (`image/webp` for photos). Every file response carries
@@ -2228,11 +2232,12 @@ section 10.*
 - **Quota per association**, set by the operator of the server (`FILES_QUOTA_MB`, default
   2048 MB); photos may not use the last 20% of it, which stays for documents and official votes.
 - **At most `FILES_USER_MB_PER_DAY` (20 MB) stored per user and day**, counted as stored (a photo
-  is about 0.3 MB); an upload is admitted only while a whole file of the route's cap still fits
-  (4 MB for a photo): `429 RATE_LIMITED` with `retry_after_seconds`. Documents (section 13) are
-  uploaded by staff and are bounded by the quota only.
+  is about 0.3 MB): `429 RATE_LIMITED` with `retry_after_seconds` and `reason: DAILY_LIMIT`. The
+  chairman and the board (who document issues for everyone) and documents (section 13, uploaded
+  by staff) are bounded by the quota only.
 - **A busy server** (too many uploads at the same moment, or more than 2 of one account at
-  once): `429 RATE_LIMITED` with `retry_after_seconds`; retry that one file later.
+  once): `429 RATE_LIMITED` with `retry_after_seconds` and `reason: BUSY`; retry that one file
+  later.
 - **A body must arrive within 3 minutes** (also the edge's limit), else `408 UPLOAD_TIMEOUT`.
 - **Deleting frees room at once.** Deleted files wait 14 days before they are erased; together
   they may use at most the quota once more, beyond that uploads wait (`507
@@ -2263,9 +2268,10 @@ How much of the association's quota its files use:
   tasks.
 - **The room for files** is the quota minus the reserve for official votes (what photos and
   documents together may fill; photos stop earlier, at 80% of the quota). When the files fill 70%
-  and 90% of that room, the chairman and the board get `STORAGE_ALMOST_FULL` (section 6), once
-  per threshold, early enough to act before uploads are refused; it can come again only after the
-  usage fell at least 10 points below it.
+  and 90% of that room, or the photos 70% and 90% of the room for photos, whichever comes first,
+  the chairman and the board get `STORAGE_ALMOST_FULL` (section 6), once per threshold and one
+  notification per upload (the highest threshold it reached), early enough to act before
+  uploads are refused; it can come again only after the usage fell at least 10 points below it.
 - Anyone else: `403 FORBIDDEN`.
 
 ### Error codes of this section
@@ -2274,7 +2280,8 @@ How much of the association's quota its files use:
 | 400 | `UPLOAD_INTERRUPTED` | The client went away while sending the body; send the file again |
 | 403 | `UPLOADS_DISABLED` | Demo mode without uploads (every deployed environment except dev) |
 | 408 | `UPLOAD_TIMEOUT` | The body did not arrive within 3 minutes; send it again |
-| 409 | `IDEMPOTENCY_KEY_REUSED` | The `Idempotency-Key` was used for another file or a deleted one |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | The `Idempotency-Key` was used for another file |
+| 409 | `UPLOAD_REMOVED` | A repeat of an upload that was removed meanwhile; do not send it again |
 | 411 | `LENGTH_REQUIRED` | No `Content-Length` |
 | 413 | `FILE_TOO_LARGE` | `Content-Length` above the route's cap, or a body longer than it says (`max_bytes` in the body) |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Another `Content-Type`, or the bytes are not that type (for photos: not a JPEG) |
@@ -2282,7 +2289,7 @@ How much of the association's quota its files use:
 | 422 | `IMAGE_TOO_LARGE` | Longer than 2560 px on an edge (`max_edge_px` in the body); scale it first |
 | 422 | `VALIDATION_ERROR` | A malformed `Idempotency-Key` |
 | 429 | `RATE_LIMITED` | The daily limit of the user, or the server is busy (`retry_after_seconds`, `Retry-After`) |
-| 507 | `STORAGE_QUOTA_EXCEEDED` | The association's quota is used up, or (`reason: DELETIONS_PENDING`) too many deleted files still wait to be erased |
+| 507 | `STORAGE_QUOTA_EXCEEDED` | `reason: QUOTA`: the room of `category` (`photos` or `documents`) is full; `reason: DELETIONS_PENDING`: too many deleted files still wait to be erased |
 | 507 | `STORAGE_LOW_DISK` | The server's disk is nearly full |
 
 ---
@@ -2342,8 +2349,18 @@ Answers the `DocumentView` with `201`, or `200`
 for a repeat with the same key.
 - The accountant may upload only with `audience=BOARD_AND_ACCOUNTANT`; residents never upload:
   `403 FORBIDDEN`.
+- `document_date`: from 1900-01-01 to five years from today; an empty value means no date.
+- The title is one line of visible text (no tabs or line breaks, not only invisible
+  characters). The download's file name is made from it; a title that already ends in `.pdf`
+  keeps one extension.
 - The file must start with `%PDF-`: otherwise `415 UNSUPPORTED_MEDIA_TYPE`. It is stored as
   sent and never opened by the server.
+
+### `GET /api/v1/documents/upload-options`
+What the upload form may offer the caller:
+`{"can_upload": true, "audiences": ["BOARD_AND_ACCOUNTANT"], "categories": [...], "max_bytes": 20000000}`.
+`can_upload` is false for residents and wherever uploads are switched off (a demo without
+uploads); `audiences` are those the caller may upload into.
 
 ### `GET /api/v1/documents?category=CONTRACT&limit=50&offset=0`
 The documents the caller sees, newest first (`created_at`). `limit` 1..100.
@@ -2370,7 +2387,8 @@ Returns the `DocumentView`.
 | 400 | `UPLOAD_INTERRUPTED` |
 | 403 | `FORBIDDEN`, `UPLOADS_DISABLED` |
 | 404 | `DOCUMENT_NOT_FOUND` |
-| 409 | `IDEMPOTENCY_KEY_REUSED` |
+| 408 | `UPLOAD_TIMEOUT` |
+| 409 | `IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED` |
 | 411, 413, 415 | `LENGTH_REQUIRED`, `FILE_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` |
 | 422 | `VALIDATION_ERROR` |
 | 429 | `RATE_LIMITED` |
