@@ -559,6 +559,9 @@ Contract: docs/API.md section 11.
   confirmations; archived tasks are read only.
 - **Log:** newest first, filters by task and dates, `recorded_by` as the badge it is; costs only
   here, never on a residents' page.
+- **Yearly report** (chairman, board, accountant): a year picker, the totals and a table per task
+  (done, skipped, cost) from `GET /maintenance/report?year=`, and "Download CSV"
+  (`.../report/export-csv?year=`, saved from a blob) for the general meeting.
 - **Publishing (task M2):** show on the task when its reminder went out (`published_at`, link to
   the board topic `board_post_id`), the residents' notice (`notice_post_id`), a warning when
   `notice_failed` is true ("the notice could not be published: correct its target for the next

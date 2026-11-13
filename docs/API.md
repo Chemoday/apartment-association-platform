@@ -2182,6 +2182,34 @@ The chairman, the board and the accountant. Entries newest `closed_on` first; `f
 Changes `note` and `cost` (`cost` on a `SKIPPED` entry: `422 VALIDATION_ERROR`); `closed_on` never
 changes, because the schedule depends on it. `404 LOG_ENTRY_NOT_FOUND`.
 
+### `GET /api/v1/maintenance/report?year=2027` (chairman, board and accountant)
+The year of the log for the general meeting (issue #132), by `closed_on` (the local date the
+occurrence was closed); `year` 2000..2100, required:
+```json
+{
+  "year": 2027,
+  "done_count": 14,
+  "skipped_count": 2,
+  "total_cost": "1240.00",
+  "tasks": [
+    {"task_id": "uuid", "task_title": "Inspect the fire extinguishers", "done_count": 2, "skipped_count": 0, "total_cost": "180.00"}
+  ]
+}
+```
+- `tasks`: every task with at least one entry in that year (also paused or archived ones), by
+  title. Counts of `DONE` and `SKIPPED` entries; `total_cost` the exact sum of their costs as a
+  decimal string with 2 decimals (`"0.00"` when none has a cost). A year without entries gives
+  zeros and an empty list.
+- Anyone else: `403 FORBIDDEN`.
+
+### `GET /api/v1/maintenance/report/export-csv?year=2027` (chairman, board and accountant)
+The entries of that year as a CSV attachment `maintenance-log-2027.csv` (UTF-8 with a BOM, CRLF,
+comma), oldest `closed_on` first, columns `closed_on`, `task_title`, `kind`, `planned_date`,
+`cost` (decimal string or empty), `note`, `recorded_by` (the name, like `recorded_by` of the log:
+the board and the accountant see who recorded an entry, owner decision of epic E10). A text cell
+a spreadsheet could read as a formula starts with `'`, as in the readings export (section 3).
+Anyone else gets `403 FORBIDDEN`; `year` follows the same rule as above (`422 VALIDATION_ERROR`).
+
 ### Error codes of this section
 | Status | `error_code` |
 | :--- | :--- |
