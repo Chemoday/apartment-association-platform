@@ -41,6 +41,7 @@ their own JSON errors below the edge limit; every backend cap stays at or below 
 decimal bytes. Local Docker has no edge and no such limit.
 
 Section 12 (uploaded files) adds `UPLOAD_INTERRUPTED` (400), `UPLOADS_DISABLED` (403),
+`UPLOAD_TIMEOUT` (408),
 `IDEMPOTENCY_KEY_REUSED` (409), `LENGTH_REQUIRED` (411),
 `FILE_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `INVALID_IMAGE`, `IMAGE_TOO_LARGE` (422),
 `STORAGE_QUOTA_EXCEEDED` and `STORAGE_LOW_DISK` (507), and reuses `RATE_LIMITED` (429).
@@ -2230,8 +2231,12 @@ section 10.*
   is about 0.3 MB); an upload is admitted only while a whole file of the route's cap still fits
   (4 MB for a photo): `429 RATE_LIMITED` with `retry_after_seconds`. Documents (section 13) are
   uploaded by staff and are bounded by the quota only.
-- **A busy server** (too many uploads at the same moment): `429 RATE_LIMITED` with
-  `retry_after_seconds`; retry that one file later.
+- **A busy server** (too many uploads at the same moment, or more than 2 of one account at
+  once): `429 RATE_LIMITED` with `retry_after_seconds`; retry that one file later.
+- **A body must arrive within 3 minutes** (also the edge's limit), else `408 UPLOAD_TIMEOUT`.
+- **Deleting frees room at once.** Deleted files wait 14 days before they are erased; together
+  they may use at most the quota once more, beyond that uploads wait (`507
+  STORAGE_QUOTA_EXCEEDED`, `reason: DELETIONS_PENDING`).
 - **Demo mode:** uploads only where the server allows them (dev), with a small quota, and files
   are deleted after about a day; elsewhere `403 UPLOADS_DISABLED`.
 
@@ -2249,9 +2254,10 @@ How much of the association's quota its files use:
   ]
 }
 ```
-- `used_bytes` counts every stored file, also deleted ones that are not erased yet
-  (`pending_deletion_bytes`, erased within 14 days): they still use the disk and the quota, so
-  deleting frees room only after those 14 days. `used_percent` is rounded down.
+- `used_bytes` counts the live files, which is what the quota counts: deleting a file frees its
+  room at once. `pending_deletion_bytes` are deleted files not erased yet (within 14 days); they
+  may add up to at most the quota, beyond that uploads wait for the erasing (`507
+  STORAGE_QUOTA_EXCEEDED` with `reason: DELETIONS_PENDING`). `used_percent` is rounded down.
 - `categories`: the bytes of each class and the most it may fill (photos 80% of the quota,
   documents everything except the reserve for official votes). More categories come with later
   tasks.
@@ -2267,6 +2273,7 @@ How much of the association's quota its files use:
 | :--- | :--- | :--- |
 | 400 | `UPLOAD_INTERRUPTED` | The client went away while sending the body; send the file again |
 | 403 | `UPLOADS_DISABLED` | Demo mode without uploads (every deployed environment except dev) |
+| 408 | `UPLOAD_TIMEOUT` | The body did not arrive within 3 minutes; send it again |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | The `Idempotency-Key` was used for another file or a deleted one |
 | 411 | `LENGTH_REQUIRED` | No `Content-Length` |
 | 413 | `FILE_TOO_LARGE` | `Content-Length` above the route's cap, or a body longer than it says (`max_bytes` in the body) |
@@ -2275,7 +2282,7 @@ How much of the association's quota its files use:
 | 422 | `IMAGE_TOO_LARGE` | Longer than 2560 px on an edge (`max_edge_px` in the body); scale it first |
 | 422 | `VALIDATION_ERROR` | A malformed `Idempotency-Key` |
 | 429 | `RATE_LIMITED` | The daily limit of the user, or the server is busy (`retry_after_seconds`, `Retry-After`) |
-| 507 | `STORAGE_QUOTA_EXCEEDED` | The association's quota is used up |
+| 507 | `STORAGE_QUOTA_EXCEEDED` | The association's quota is used up, or (`reason: DELETIONS_PENDING`) too many deleted files still wait to be erased |
 | 507 | `STORAGE_LOW_DISK` | The server's disk is nearly full |
 
 ---
@@ -2330,7 +2337,8 @@ and errors shared by every upload: section 12.*
 ### `POST /api/v1/documents?title=...&category=...&audience=...&document_date=YYYY-MM-DD`
 The PDF is the body (`Content-Type: application/pdf`, `Content-Length`, at most 20,000,000
 bytes), optionally `Idempotency-Key` (section 12). `title` 1..200 characters, `category`,
-`audience` required, `document_date` optional. Answers the `DocumentView` with `201`, or `200`
+`audience` required, `document_date` optional; the title is one line (no tabs or line breaks).
+Answers the `DocumentView` with `201`, or `200`
 for a repeat with the same key.
 - The accountant may upload only with `audience=BOARD_AND_ACCOUNTANT`; residents never upload:
   `403 FORBIDDEN`.

@@ -412,7 +412,10 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
   route's cap is reserved in memory while its body is read (the backend is one process), and the
   final check runs again under a transaction-scoped advisory lock on the building
   (`core:files:<building_id>`) when the row is inserted, so parallel uploads cannot overshoot.
-  Each user stores at most `FILES_USER_MB_PER_DAY` a day. Uploads stop when the disk of
+  Each user stores at most `FILES_USER_MB_PER_DAY` a day. The quota counts live files; deleted
+  ones not yet purged may use at most the quota once more. At most 16 bodies are received at once
+  and 2 of one account, each within 3 minutes (408), so one account cannot block the uploads of
+  everyone. Uploads stop when the disk of
   `FILES_DIR` has less than `FILES_MIN_FREE_MB` free.
 - **Demo mode:** uploads are refused (403 `UPLOADS_DISABLED`) unless `FILES_IN_DEMO` (only for
   `ENVIRONMENT` local, dev or test; `deploy.sh` sets it for dev), which also caps the quota at

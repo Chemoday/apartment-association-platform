@@ -603,7 +603,8 @@ photo before sending it.**
   is open and deleted 30 days after it is resolved, to save space." On a resolved issue with
   photos, show "Photos will be deleted on {photos_delete_at}". When the board marks an issue as a
   duplicate or declines it, warn in the confirmation: "Its photos will be deleted".
-- **Errors:** `400 UPLOAD_INTERRUPTED`: retry that photo; `409 IDEMPOTENCY_KEY_REUSED`: a bug
+- **Errors:** `400 UPLOAD_INTERRUPTED`, `408 UPLOAD_TIMEOUT`: retry that photo (upload at most 2
+  files at once); `409 IDEMPOTENCY_KEY_REUSED`: a bug
   of the client (a key used twice), retry with a new key; `403 UPLOADS_DISABLED` "Photos are
   switched off in this demo"; `409
   PHOTO_LIMIT_REACHED` "At most 3 photos"; `409 ISSUE_ENDED` "This issue is closed"; `413` (also a
@@ -644,10 +645,11 @@ Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
 - **For the chairman and the board:** on the association settings page (section 14) a block
   "Storage": a bar `used_percent` of the quota, the used and total size, and a line per category
   ("Photos", "Documents"; translate, show an unknown one by its name) with its bytes. Mention
-  `pending_deletion_bytes` as "of which deleted, erased within 14 days" when it is not zero.
+  `pending_deletion_bytes` as "Deleted files waiting to be erased (within 14 days)" when it is
+  not zero; they are not part of the used room.
 - **The notification** `STORAGE_ALMOST_FULL` (`subject_type` `storage`, open the storage block):
-  "The association's files use {used_percent}% of its storage. Deleted files free their room after
-  14 days; ask the operator of the server if more room is needed." It comes at 70% and 90% of the
+  "The association's files use {used_percent}% of its storage. Delete old documents or ask the
+  operator of the server for more room." It comes at 70% and 90% of the
   room for files, before uploads are refused. Show it to the chairman and the board only in the
   preferences; the matrix now has **52** rows (it had 48).
 

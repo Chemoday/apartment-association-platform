@@ -780,7 +780,8 @@ expects. The bytes live on disk, never in the database. Migration 022.*
   after it is written. It is written (temporary file, `fsync`, rename, `fsync` of the directory)
   before its row is inserted, so a crash leaves at most a blob without a row (the janitor removes
   it), never a row without a blob.
-- The quota counts every row until it is purged, deleted ones included: they still use the disk.
+- The quota counts the live rows (`deleted_at IS NULL`): deleting frees room at once. Deleted
+  rows not purged yet may add up to at most the quota once more (they still use the disk).
 
 ### Table: `core_file_alerts` (task F4, migration 024)
 *(Which usage thresholds the board was told about, so each is told once.)*
