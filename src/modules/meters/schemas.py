@@ -208,6 +208,64 @@ class ApartmentReadingsResponse(BaseModel):
     meters: list[ApartmentMeterHistory]
 
 
+# --- Consumption per month (docs/API.md section 3) ----------------------------------------------
+
+CONSUMPTION_MONTHS_DEFAULT = 12
+CONSUMPTION_MONTHS_MAX = 24
+
+# Consumption per m2 in a response: a canonical string with exactly 4 decimals ("0.0951").
+AreaRate = Annotated[
+    Decimal,
+    WithJsonSchema(
+        {"type": "string", "pattern": r"^-?[0-9]+\.[0-9]{4}$", "examples": ["0.0951"]},
+        mode="serialization",
+    ),
+]
+
+
+class ApartmentConsumptionMonth(BaseModel):
+    period_code: str
+    consumption: MeterAmount | None  # None: no reading of this type in the period
+    estimated: bool
+
+
+class ApartmentConsumptionSeries(BaseModel):
+    resource_type: ResourceType
+    unit: MeterUnit
+    months: list[ApartmentConsumptionMonth]  # one per period, in the order of `periods`
+
+
+class ApartmentConsumptionResponse(BaseModel):
+    """One apartment's consumption per month, ready for a chart; never building averages."""
+
+    apartment_id: uuid.UUID
+    apartment_number: str
+    periods: list[PeriodDTO]  # oldest first
+    resources: list[ApartmentConsumptionSeries]
+
+
+class BuildingConsumptionMonth(BaseModel):
+    period_code: str
+    total: MeterAmount | None  # None: no apartment has a reading of this type in the period
+    apartments_counted: int
+    average_per_apartment: MeterAmount | None
+    average_per_m2: AreaRate | None
+    estimated_readings: int
+
+
+class BuildingConsumptionSeries(BaseModel):
+    resource_type: ResourceType
+    unit: MeterUnit
+    months: list[BuildingConsumptionMonth]  # one per period, in the order of `periods`
+
+
+class BuildingConsumptionResponse(BaseModel):
+    """The building's apartment meters per month (staff only); master meters are left out."""
+
+    periods: list[PeriodDTO]  # oldest first
+    resources: list[BuildingConsumptionSeries]
+
+
 class NextSubmission(BaseModel):
     """Where a meter's next resident reading goes (docs/API.md section 2)."""
 

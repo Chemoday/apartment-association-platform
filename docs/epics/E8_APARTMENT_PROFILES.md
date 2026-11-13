@@ -73,8 +73,9 @@ From 2026-11-05:
   apartment's own members): the apartment's meters with one reading per period, newest period
   first, at most 24 periods. Each reading carries its value, consumption and source
   (`AUTO_ESTIMATED` marks an estimate). The history belongs to the apartment, so a new resident
-  also sees older readings. The same series later feeds the resident's 12-month chart at no extra
-  backend cost.
+  also sees older readings. The resident's 12-month chart has its own call,
+  `GET /api/v1/meters/apartments/{apartment_id}/consumption` (docs/API.md section 3), which
+  sums these readings per month and resource type.
 - The router layer combines nothing: the frontend calls property for the card and meters for the
   readings. Modules never import each other's models.
 - **No contacts on the card.** Whether the board may see a phone number in an emergency, with an

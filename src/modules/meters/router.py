@@ -9,8 +9,12 @@ from fastapi.responses import StreamingResponse
 from src.core.exceptions import AUTH_ERRORS, DomainError, error_responses
 from src.core.security import get_current_user, require_building_roles
 from src.modules.meters.schemas import (
+    CONSUMPTION_MONTHS_DEFAULT,
+    CONSUMPTION_MONTHS_MAX,
     PERIOD_CODE_PATTERN,
+    ApartmentConsumptionResponse,
     ApartmentReadingsResponse,
+    BuildingConsumptionResponse,
     DashboardResponse,
     EstimateResponse,
     MatrixResponse,
@@ -105,6 +109,45 @@ async def apartment_readings(
 ) -> ApartmentReadingsResponse:
     """An apartment's readings across the latest periods: staff, or the apartment's members."""
     return await service.get_apartment_readings(user, apartment_id)
+
+
+MonthsQuery = Annotated[
+    int,
+    Query(
+        ge=1,
+        le=CONSUMPTION_MONTHS_MAX,
+        description="How many of the building's latest periods (1-24).",
+    ),
+]
+
+
+@router.get(
+    "/apartments/{apartment_id}/consumption",
+    response_model=ApartmentConsumptionResponse,
+    responses=error_responses({404: ["APARTMENT_NOT_FOUND"], 422: ["VALIDATION_ERROR"]}),
+)
+async def apartment_consumption(
+    apartment_id: uuid.UUID,
+    months: MonthsQuery = CONSUMPTION_MONTHS_DEFAULT,
+    user: CurrentUserDTO = Depends(get_current_user),
+    service: MetersService = Depends(get_meters_service),
+) -> ApartmentConsumptionResponse:
+    """An apartment's consumption per month for a chart: staff, or the apartment's members."""
+    return await service.get_apartment_consumption(user, apartment_id, months)
+
+
+@router.get(
+    "/consumption",
+    response_model=BuildingConsumptionResponse,
+    responses=error_responses({403: ["FORBIDDEN"], 422: ["VALIDATION_ERROR"]}),
+)
+async def building_consumption(
+    months: MonthsQuery = CONSUMPTION_MONTHS_DEFAULT,
+    user: CurrentUserDTO = Depends(staff_viewer),
+    service: MetersService = Depends(get_meters_service),
+) -> BuildingConsumptionResponse:
+    """The building's consumption and averages per month: chairman, board and accountant."""
+    return await service.get_building_consumption(user, months)
 
 
 @router.get("/periods", response_model=PeriodListResponse)

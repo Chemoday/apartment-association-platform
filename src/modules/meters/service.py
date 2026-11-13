@@ -31,22 +31,31 @@ from src.modules.meters.policies import (
     ReadingCheckStatus,
     SubmissionTarget,
     apartment_submission_status,
+    average_per_apartment,
     calculate_rolling_average_delta,
     can_transition_period,
+    consumption_per_area,
     meter_submission_status,
     period_code_of,
     period_due_date,
     previous_period_code,
     rolling_average_delta,
     submission_target,
+    total_consumption,
     validate_reading_delta,
 )
 from src.modules.meters.schemas import (
     APARTMENT_HISTORY_PERIODS,
     METER_VALUE_MAX,
+    ApartmentConsumptionMonth,
+    ApartmentConsumptionResponse,
+    ApartmentConsumptionSeries,
     ApartmentMeterHistory,
     ApartmentReading,
     ApartmentReadingsResponse,
+    BuildingConsumptionMonth,
+    BuildingConsumptionResponse,
+    BuildingConsumptionSeries,
     DashboardApartment,
     DashboardMeter,
     DashboardResponse,
@@ -70,9 +79,10 @@ from src.modules.meters.schemas import (
     ReadingSubmitRequest,
     ReadingSummary,
     ResourceBalance,
+    ResourceType,
     canonical_meter_value,
 )
-from src.modules.property.schemas import BuildingRole, CurrentUserDTO
+from src.modules.property.schemas import ApartmentRefDTO, BuildingRole, CurrentUserDTO
 from src.modules.property.service import PropertyService, get_property_service
 from src.plugins.registry import ReadingExporter, ReadingExportRow
 
@@ -644,15 +654,7 @@ class MetersService:
         Staff see every apartment of the building, a resident only their own; the history
         belongs to the apartment, so it includes readings from before the resident moved in.
         """
-        apartment = await self.property_service.apartment_ref(apartment_id)
-        visible = (
-            apartment is not None
-            and apartment.building_id == user.building_id
-            and (user.building_role in STAFF_VIEW_ROLES or user.membership_for(apartment_id))
-        )
-        if apartment is None or not visible:
-            raise _not_found("APARTMENT_NOT_FOUND", "No such apartment.")
-
+        apartment = await self._visible_apartment(user, apartment_id)
         periods = list(
             await self.session.scalars(
                 select(ReadingPeriod)
@@ -716,6 +718,165 @@ class MetersService:
                     ],
                 )
                 for meter in meters
+            ],
+        )
+
+    async def _visible_apartment(
+        self, user: CurrentUserDTO, apartment_id: uuid.UUID
+    ) -> ApartmentRefDTO:
+        """Staff see every apartment of the building, a resident only their own; else 404."""
+        apartment = await self.property_service.apartment_ref(apartment_id)
+        visible = (
+            apartment is not None
+            and apartment.building_id == user.building_id
+            and (user.building_role in STAFF_VIEW_ROLES or user.membership_for(apartment_id))
+        )
+        if apartment is None or not visible:
+            raise _not_found("APARTMENT_NOT_FOUND", "No such apartment.")
+        return apartment
+
+    # --- Consumption per month (docs/API.md section 3) ------------------------------------------
+
+    async def _latest_periods(self, building_id: uuid.UUID, months: int) -> list[ReadingPeriod]:
+        """The building's latest periods, oldest first (chart order)."""
+        latest = await self.session.scalars(
+            select(ReadingPeriod)
+            .where(ReadingPeriod.building_id == building_id)
+            .order_by(ReadingPeriod.period_code.desc())
+            .limit(months)
+        )
+        return list(reversed(list(latest)))
+
+    async def _meter_kinds(
+        self, building_id: uuid.UUID, apartment_id: uuid.UUID | None
+    ) -> set[tuple[ResourceType, MeterUnit]]:
+        """Resource types and units of the active apartment meters (one apartment, or all)."""
+        statement = select(MeterDevice.resource_type, MeterDevice.unit).where(
+            MeterDevice.building_id == building_id,
+            MeterDevice.is_active.is_(True),
+            MeterDevice.apartment_id.is_not(None)
+            if apartment_id is None
+            else MeterDevice.apartment_id == apartment_id,
+        )
+        return {(row[0], row[1]) for row in await self.session.execute(statement.distinct())}
+
+    async def get_apartment_consumption(
+        self, user: CurrentUserDTO, apartment_id: uuid.UUID, months: int
+    ) -> ApartmentConsumptionResponse:
+        """One apartment's consumption per month and resource type; rights as its readings."""
+        apartment = await self._visible_apartment(user, apartment_id)
+        periods = await self._latest_periods(user.building_id, months)
+        rows = (
+            await self.session.execute(
+                select(
+                    MeterReading.period_id,
+                    MeterDevice.resource_type,
+                    MeterDevice.unit,
+                    MeterReading.consumption_delta,
+                    MeterReading.source,
+                )
+                .join(MeterDevice, MeterDevice.id == MeterReading.meter_id)
+                .where(
+                    MeterDevice.apartment_id == apartment_id,
+                    MeterReading.building_id == user.building_id,
+                    MeterReading.period_id.in_([period.id for period in periods]),
+                )
+            )
+        ).all()
+        deltas: dict[tuple[ResourceType, MeterUnit, uuid.UUID], list[Decimal]] = {}
+        estimated: set[tuple[ResourceType, MeterUnit, uuid.UUID]] = set()
+        for period_id, resource_type, unit, delta, source in rows:
+            key = (resource_type, unit, period_id)
+            deltas.setdefault(key, []).append(delta)
+            if source == ReadingSource.AUTO_ESTIMATED:
+                estimated.add(key)
+        kinds = await self._meter_kinds(user.building_id, apartment_id)
+        kinds |= {(resource_type, unit) for resource_type, unit, _ in deltas}
+        return ApartmentConsumptionResponse(
+            apartment_id=apartment_id,
+            apartment_number=apartment.number,
+            periods=[_period_dto(period) for period in periods],
+            resources=[
+                ApartmentConsumptionSeries(
+                    resource_type=resource_type,
+                    unit=unit,
+                    months=[
+                        ApartmentConsumptionMonth(
+                            period_code=period.period_code,
+                            consumption=(total_consumption(deltas[key]) if key in deltas else None),
+                            estimated=key in estimated,
+                        )
+                        for period in periods
+                        for key in [(resource_type, unit, period.id)]
+                    ],
+                )
+                for resource_type, unit in sorted(kinds)
+            ],
+        )
+
+    async def get_building_consumption(
+        self, user: CurrentUserDTO, months: int
+    ) -> BuildingConsumptionResponse:
+        """Totals and averages of the apartment meters per month (staff; masters left out)."""
+        periods = await self._latest_periods(user.building_id, months)
+        rows = (
+            await self.session.execute(
+                select(
+                    MeterReading.period_id,
+                    MeterDevice.apartment_id,
+                    MeterDevice.resource_type,
+                    MeterDevice.unit,
+                    MeterReading.consumption_delta,
+                    MeterReading.source,
+                )
+                .join(MeterDevice, MeterDevice.id == MeterReading.meter_id)
+                .where(
+                    MeterDevice.apartment_id.is_not(None),
+                    MeterReading.building_id == user.building_id,
+                    MeterReading.period_id.in_([period.id for period in periods]),
+                )
+            )
+        ).all()
+        deltas: dict[tuple[ResourceType, MeterUnit, uuid.UUID], list[Decimal]] = {}
+        apartments: dict[tuple[ResourceType, MeterUnit, uuid.UUID], set[uuid.UUID]] = {}
+        estimates: dict[tuple[ResourceType, MeterUnit, uuid.UUID], int] = {}
+        for period_id, apartment_id, resource_type, unit, delta, source in rows:
+            key = (resource_type, unit, period_id)
+            deltas.setdefault(key, []).append(delta)
+            apartments.setdefault(key, set()).add(apartment_id)
+            if source == ReadingSource.AUTO_ESTIMATED:
+                estimates[key] = estimates.get(key, 0) + 1
+        kinds = await self._meter_kinds(user.building_id, None)
+        kinds |= {(resource_type, unit) for resource_type, unit, _ in deltas}
+        areas = await self.property_service.apartment_areas(user.building_id)
+
+        def month(
+            key: tuple[ResourceType, MeterUnit, uuid.UUID], code: str
+        ) -> BuildingConsumptionMonth:
+            counted = apartments.get(key, set())
+            total = total_consumption(deltas.get(key, []))
+            area = sum((areas.get(apartment, Decimal(0)) for apartment in counted), Decimal(0))
+            return BuildingConsumptionMonth(
+                period_code=code,
+                total=total if counted else None,
+                apartments_counted=len(counted),
+                average_per_apartment=average_per_apartment(total, len(counted)),
+                average_per_m2=consumption_per_area(total, area) if counted else None,
+                estimated_readings=estimates.get(key, 0),
+            )
+
+        return BuildingConsumptionResponse(
+            periods=[_period_dto(period) for period in periods],
+            resources=[
+                BuildingConsumptionSeries(
+                    resource_type=resource_type,
+                    unit=unit,
+                    months=[
+                        month((resource_type, unit, period.id), period.period_code)
+                        for period in periods
+                    ],
+                )
+                for resource_type, unit in sorted(kinds)
             ],
         )
 

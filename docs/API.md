@@ -450,6 +450,89 @@ board, and later the resident's consumption chart.
 }
 ```
 
+### `GET /api/v1/meters/apartments/{apartment_id}/consumption?months=12`
+One apartment's consumption per month, ready for a chart (the resident's 12-month chart and the
+board's apartment card).
+- Visible to the same people as `GET /meters/apartments/{apartment_id}/readings`: `CHAIRMAN`,
+  `BOARD` and `ACCOUNTANT` for every apartment of the building, and the active members of that
+  apartment. Anyone else, and an unknown apartment, gets `404 APARTMENT_NOT_FOUND`.
+- `months`: how many of the building's latest periods, 1 to 24, default 12. Anything else is
+  `422 VALIDATION_ERROR`.
+- `periods` are those periods **oldest first** (chart order), with their status, so a chart can
+  mark the month that is still open. A building with fewer periods returns fewer.
+- `resources` has one series per resource type and unit of the apartment's meters (active ones,
+  plus replaced ones with a reading in those periods), alphabetically by `resource_type`, then
+  `unit`; pick a chart colour by `resource_type`, not by position. Each series has one entry per
+  period, in the same order as `periods`:
+  - `consumption`: the sum of `consumption_delta` of the apartment's meters of that type in that
+    period, a decimal string with 3 decimals; a meter replaced during the period counts with both
+    its readings. It can be negative after a correction. `null` when no meter of that type has a
+    reading in that period (not submitted yet, or the meter did not exist): show a gap, not 0.
+    With two meters of a type (kitchen and bathroom), an open month can show only the one
+    already submitted.
+  - `estimated`: `true` when at least one of those readings is an estimate (`AUTO_ESTIMATED`).
+- No building averages and no other apartments: a resident only sees their own apartment.
+```json
+{
+  "apartment_id": "uuid",
+  "apartment_number": "14",
+  "periods": [
+    { "period_code": "2026-09", "status": "LOCKED", "due_date": "2026-10-04T20:59:59Z" },
+    { "period_code": "2026-10", "status": "OPEN_FOR_RESIDENTS", "due_date": "2026-11-04T21:59:59Z" }
+  ],
+  "resources": [
+    {
+      "resource_type": "COLD_WATER", "unit": "m3",
+      "months": [
+        { "period_code": "2026-09", "consumption": "6.000", "estimated": false },
+        { "period_code": "2026-10", "consumption": null, "estimated": false }
+      ]
+    }
+  ]
+}
+```
+
+### `GET /api/v1/meters/consumption?months=12`
+The building's consumption per month and the average per apartment and per m², for the board
+(compare the months, spot a leak or a meter that stopped).
+- Requires role `CHAIRMAN`, `BOARD` or `ACCOUNTANT` (`403 FORBIDDEN` for anyone else). Residents
+  never get building averages.
+- `months` and `periods` as above (1 to 24, default 12, oldest first).
+- `resources` has one series per resource type and unit of the building's apartment meters,
+  ordered as above.
+  Master meters (the basement) are left out: they measure the same water again; compare them in
+  the matrix (`master_meters`, `unallocated_loss`). Each entry, one per period:
+  - `total`: the sum of `consumption_delta` of all apartment meters of that type in the period
+    (3 decimals); `null` when no apartment has a reading (a gap, as above).
+  - `apartments_counted`: apartments with at least one reading of that type in the period (an
+    apartment counts once, with its whole area, even if only one of its meters has a reading).
+  - `average_per_apartment`: `total / apartments_counted`, 3 decimals, rounded half up; `null`
+    when no apartment has a reading.
+  - `average_per_m2`: `total` divided by the summed area of the counted apartments, 4 decimals,
+    rounded half up; `null` when no apartment has a reading or their recorded area is 0.
+  - `estimated_readings`: how many of those readings are estimates (`AUTO_ESTIMATED`).
+  An apartment without a reading is not counted as 0, so a month that is still open shows the
+  total and the average of the apartments that have submitted so far.
+- No apartment numbers and no names: only totals and averages.
+```json
+{
+  "periods": [
+    { "period_code": "2026-10", "status": "LOCKED", "due_date": "2026-11-04T21:59:59Z" }
+  ],
+  "resources": [
+    {
+      "resource_type": "COLD_WATER", "unit": "m3",
+      "months": [
+        {
+          "period_code": "2026-10", "total": "312.000", "apartments_counted": 58,
+          "average_per_apartment": "5.379", "average_per_m2": "0.0951", "estimated_readings": 3
+        }
+      ]
+    }
+  ]
+}
+```
+
 ### `GET /api/v1/meters/periods/{period_code}/export-csv`
 Executes plugins/common/csv_export and streams a CSV file of the period's readings.
 - Requires role `CHAIRMAN`, `BOARD` or `ACCOUNTANT`. Served as `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="readings-2026-10.csv"`.

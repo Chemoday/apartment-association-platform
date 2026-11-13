@@ -205,6 +205,18 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   lists only the periods that have a reading, so align them by `period_code`;
   `source: "AUTO_ESTIMATED"` is an estimate). The same readings call works for a resident's own
   apartment and an accountant (who has no cards).
+- **Consumption chart** (resident dashboard and the apartment card):
+  `GET /meters/apartments/{id}/consumption?months=12` returns the periods oldest first and one
+  series per resource type and unit, already aligned with them (one entry per period). Draw
+  `consumption: null` as a gap, never as 0; mark `estimated: true` points (for example a hollow
+  dot) and the period that is still `OPEN_FOR_RESIDENTS` (its month is not finished). Values are
+  decimal strings (section 5); a negative value is a correction, show it as it is.
+- **Building consumption** (chairman, board, accountant only): `GET /meters/consumption?months=12`
+  gives per month `total`, `apartments_counted`, `average_per_apartment` and `average_per_m2`
+  (4 decimals) and `estimated_readings`; `total: null` (no readings) is a gap. Never show these
+  to residents (see the consumption hints above). Totals and averages count only the apartments
+  that have a reading, so in an open month say "of N apartments". Series are ordered by
+  `resource_type`: choose colours by type, not by position.
 - Periods open by themselves on the 1st of each month, but never close by themselves. `due_date`
   (end of the local deadline day) is shown to users, drives the reading reminders (docs/API.md
   section 6) and ends the time a late reading for the previous month is accepted.
