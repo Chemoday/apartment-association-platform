@@ -159,7 +159,7 @@ async def delete_post(
     user: CurrentUserDTO = Depends(publisher),
     service: CommunicationService = Depends(get_communication_service),
 ) -> Response:
-    """Delete a forum topic (the chairman) or a board topic (the chairman or a board member)."""
+    """Delete a forum topic or a board topic (the chairman or a board member)."""
     await service.delete_post(user, post_id)
     return Response(status_code=204)
 
@@ -195,7 +195,7 @@ async def add_comment(
         {
             403: ["FORBIDDEN"],
             404: ["POST_NOT_FOUND"],
-            409: ["POST_NOT_EDITABLE"],
+            409: ["POST_NOT_EDITABLE", "EDIT_WINDOW_CLOSED"],
             422: ["VALIDATION_ERROR"],
         }
     ),
@@ -217,7 +217,7 @@ async def edit_post(
         {
             403: ["FORBIDDEN"],
             404: ["POST_NOT_FOUND", "COMMENT_NOT_FOUND"],
-            409: ["COMMENT_NOT_EDITABLE"],
+            409: ["COMMENT_NOT_EDITABLE", "EDIT_WINDOW_CLOSED"],
             422: ["VALIDATION_ERROR"],
         }
     ),

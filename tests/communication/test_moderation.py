@@ -2,8 +2,10 @@
 
 import uuid
 from dataclasses import fields
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +16,7 @@ from src.modules.communication.events import (
     PostHidden,
     PostUnhidden,
 )
-from src.modules.communication.models import Post
+from src.modules.communication.models import Comment, Post
 from tests.communication.conftest import CommWorld
 from tests.communication.test_api import API, as_user, emergency, feed_ids, publish
 
@@ -276,13 +278,16 @@ async def test_the_reason_is_required_and_bounded(
     assert (await hide(api_client, world.chairman, post, "x" * 500)).status_code == 200
 
 
-async def test_the_chairman_still_deletes_a_hidden_topic(
-    api_client: AsyncClient, world: CommWorld
+@pytest.mark.parametrize("deleter", ["chairman", "board"])
+async def test_the_board_still_deletes_a_hidden_topic(
+    api_client: AsyncClient, world: CommWorld, deleter: str
 ) -> None:
     post = await topic(api_client, world.owner_14)
     await hide(api_client, world.board, post)
 
-    deleted = await api_client.delete(f"{API}/posts/{post['id']}", headers=as_user(world.chairman))
+    deleted = await api_client.delete(
+        f"{API}/posts/{post['id']}", headers=as_user(getattr(world, deleter))
+    )
 
     assert deleted.status_code == 204
     gone = await api_client.get(f"{API}/posts/{post['id']}", headers=as_user(world.owner_14))
@@ -434,3 +439,74 @@ async def test_comments_of_forum_topics_are_hidden_too(
     assert seen["body"] is None and seen["hidden_at"] is not None
     (own,) = (await detail(api_client, world.owner_14, post))["comments"]
     assert (own["body"], own["hidden_reason"]) == ("Nonsense", REASON)
+
+
+# --- Owner decisions 2026-11-13: 24-hour edit window --------------------------------------------
+
+
+async def _age(db_session: AsyncSession, model, item_id: str, hours: float) -> None:
+    await db_session.execute(
+        update(model)
+        .where(model.id == uuid.UUID(item_id))
+        .values(created_at=datetime.now(UTC) - timedelta(hours=hours))
+    )
+
+
+async def test_forum_topics_and_comments_are_edited_only_in_the_first_24_hours(
+    api_client: AsyncClient, db_session: AsyncSession, world: CommWorld
+) -> None:
+    post = await topic(api_client, world.owner_14)
+    own = await comment(api_client, world.owner_14, post, "Who has a drill?")
+    await _age(db_session, Comment, own["id"], 23.5)
+    assert (await edit_comment(api_client, world.owner_14, post, own, "A saw?")).status_code == 200
+
+    await _age(db_session, Post, post["id"], 24.1)
+    await _age(db_session, Comment, own["id"], 24.1)
+    for response in (
+        await edit(api_client, world.owner_14, post, body="Rewritten later"),
+        await edit_comment(api_client, world.owner_14, post, own, "Rewritten later"),
+    ):
+        assert response.status_code == 409
+        body = response.json()
+        assert body["error_code"] == "EDIT_WINDOW_CLOSED"
+        assert body["editable_until"].endswith("Z")
+        until = datetime.fromisoformat(body["editable_until"])
+        assert datetime.now(UTC) - timedelta(minutes=10) < until < datetime.now(UTC)
+    # The author check comes first: someone else's late edit is still 403.
+    late = await edit(api_client, world.tenant_2, post, body="x")
+    assert late.status_code == 403
+
+
+async def test_board_topics_stay_editable_but_their_comments_do_not(
+    api_client: AsyncClient, db_session: AsyncSession, world: CommWorld
+) -> None:
+    notes = await topic(api_client, world.board, post_type="BOARD_TOPIC", title="Keys")
+    reply = await comment(api_client, world.board, notes, "Spare key at the chairman")
+    await _age(db_session, Post, notes["id"], 24 * 90)
+    await _age(db_session, Comment, reply["id"], 25)
+
+    updated = await edit(api_client, world.board, notes, body="The keys are in the boiler room.")
+    late = await edit_comment(api_client, world.board, notes, reply, "Spare key at the board")
+
+    assert updated.status_code == 200, updated.text
+    assert (late.status_code, late.json()["error_code"]) == (409, "EDIT_WINDOW_CLOSED")
+
+
+async def test_late_records_and_hidden_items_keep_their_own_answer(
+    api_client: AsyncClient, db_session: AsyncSession, world: CommWorld
+) -> None:
+    hidden = await topic(api_client, world.owner_14)
+    talk = await thread(api_client, world)
+    reply = await comment(api_client, world.owner_14, talk, "Still cold")
+    neighbour = await comment(api_client, world.tenant_2, hidden, "Agreed")
+    await hide(api_client, world.board, hidden)
+    for model, item in ((Post, hidden), (Comment, reply), (Comment, neighbour)):
+        await _age(db_session, model, item["id"], 48)
+
+    late_hidden = await edit(api_client, world.owner_14, hidden, body="x")
+    late_thread = await edit_comment(api_client, world.owner_14, talk, reply, "x")
+    late_other = await edit_comment(api_client, world.chairman, hidden, neighbour, "x")
+
+    assert late_hidden.json()["error_code"] == "POST_NOT_EDITABLE"
+    assert late_thread.json()["error_code"] == "COMMENT_NOT_EDITABLE"
+    assert (late_other.status_code, late_other.json()["error_code"]) == (403, "FORBIDDEN")

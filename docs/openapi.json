@@ -3886,7 +3886,7 @@
           "communication"
         ],
         "summary": "Delete Post",
-        "description": "Delete a forum topic (the chairman) or a board topic (the chairman or a board member).",
+        "description": "Delete a forum topic or a board topic (the chairman or a board member).",
         "operationId": "delete_post_api_v1_communication_posts__post_id__delete",
         "security": [
           {
@@ -4063,7 +4063,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state. error_code: `POST_NOT_EDITABLE`",
+            "description": "Conflict with the current state. error_code: `POST_NOT_EDITABLE`, `EDIT_WINDOW_CLOSED`",
             "content": {
               "application/json": {
                 "schema": {
@@ -4286,7 +4286,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state. error_code: `COMMENT_NOT_EDITABLE`",
+            "description": "Conflict with the current state. error_code: `COMMENT_NOT_EDITABLE`, `EDIT_WINDOW_CLOSED`",
             "content": {
               "application/json": {
                 "schema": {

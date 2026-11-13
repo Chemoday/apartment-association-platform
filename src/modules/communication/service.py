@@ -48,9 +48,12 @@ from src.modules.communication.policies import (
     FEED_HIDDEN_TYPES,
     HIDEABLE_POST_TYPES,
     can_publish,
+    comment_editable_until,
     comment_is_editable,
     deletable_types,
+    edit_window_closed,
     is_deletable,
+    post_editable_until,
     post_is_editable,
     sees_all_targets,
     sees_hidden_text,
@@ -489,7 +492,7 @@ class CommunicationService:
         return self._comment_view(user, comment, badges[key])
 
     async def delete_post(self, user: CurrentUserDTO, post_id: uuid.UUID) -> None:
-        """Moderation: soft-delete a forum topic (the chairman) or a board topic (any board
+        """Moderation: soft-delete a forum topic or a board topic (the chairman or any board
         member) with its comments, for everyone, and record it as PostDeleted.
 
         One conditional UPDATE, so a concurrent second delete finds nothing and gets 404.
@@ -533,7 +536,7 @@ class CommunicationService:
             raise DomainError(
                 status_code=403,
                 error_code="FORBIDDEN",
-                message="Only the chairman deletes forum topics.",
+                message="Only the chairman and the board delete topics.",
             )
         raise _post_not_found()  # unreachable unless the post changed meanwhile
 
@@ -555,6 +558,7 @@ class CommunicationService:
                 message="Only your own forum and board topics can be edited, while not hidden.",
                 extra={"post_type": PostType(post.post_type).value},
             )
+        self._check_edit_window(post_editable_until(post.post_type, post.created_at))
         changed = False
         if request.title is not None and request.title != post.title:
             post.title, changed = request.title, True
@@ -589,6 +593,7 @@ class CommunicationService:
                 error_code="COMMENT_NOT_EDITABLE",
                 message="This comment is a record or hidden by the board; it cannot be edited.",
             )
+        self._check_edit_window(comment_editable_until(comment.created_at))
         if request.body != comment.body:
             comment.body = request.body
             comment.edited_at = datetime.now(UTC)
@@ -648,6 +653,18 @@ class CommunicationService:
                 )
             )
         return await self._one_comment_view(user, post, comment)
+
+    @staticmethod
+    def _check_edit_window(editable_until: datetime | None) -> None:
+        if edit_window_closed(editable_until, datetime.now(UTC)):
+            assert editable_until is not None
+            raise DomainError(
+                status_code=409,
+                error_code="EDIT_WINDOW_CLOSED",
+                message="Posts and comments can be edited only in the first 24 hours.",
+                # The same form as every timestamp in the responses ("...Z").
+                extra={"editable_until": editable_until.isoformat().replace("+00:00", "Z")},
+            )
 
     @staticmethod
     def _moderate(item: Post | Comment, user: CurrentUserDTO, request: HideRequest | None) -> bool:

@@ -1,6 +1,7 @@
 """Pure rules of the communication module (no database access; unit-tested directly)."""
 
 from collections.abc import Collection
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from src.modules.communication.schemas import PostType, TargetScope
@@ -8,9 +9,6 @@ from src.modules.property.schemas import BuildingRole
 
 # Publish emergencies and official notices, resolve emergencies, and see every targeted post.
 PUBLISHER_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
-
-# Delete forum topics (moderation).
-MODERATOR_ROLES = frozenset({BuildingRole.CHAIRMAN})
 
 _BOARD_ONLY_TYPES = frozenset({PostType.EMERGENCY, PostType.OFFICIAL_NOTICE, PostType.BOARD_TOPIC})
 
@@ -20,10 +18,10 @@ FEED_HIDDEN_TYPES = frozenset({PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC})
 # Conversations listed by their newest activity rather than by creation.
 ACTIVITY_SORTED_TYPES = frozenset({PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC})
 
-# Who may delete which type: forum topics are moderated by the chairman, the board's own topics
-# by any board member (owner decision, E8). Every other type is a record.
+# Who may delete which type: forum topics and the board's own topics by the chairman and any
+# board member (owner decisions, E8 and 2026-11-13). Every other type is a record.
 _DELETERS = {
-    PostType.FORUM_TOPIC: MODERATOR_ROLES,
+    PostType.FORUM_TOPIC: PUBLISHER_ROLES,
     PostType.BOARD_TOPIC: PUBLISHER_ROLES,
 }
 
@@ -111,6 +109,27 @@ HIDEABLE_POST_TYPES = frozenset({PostType.FORUM_TOPIC})
 COMMENT_HIDEABLE_ON = frozenset(
     {PostType.FORUM_TOPIC, PostType.OFFICIAL_NOTICE, PostType.EMERGENCY}
 )
+
+
+# Forum topics and comments are edited only this long after they were written, so neighbours never
+# find an old post rewritten; board topics are notes kept up to date (owner decision 2026-11-13).
+EDIT_WINDOW = timedelta(hours=24)
+_TIMELESS_EDIT_TYPES = frozenset({PostType.BOARD_TOPIC})
+
+
+def post_editable_until(post_type: PostType, created_at: datetime) -> datetime | None:
+    """Until when the author may edit the post itself; None means no time limit."""
+    return None if post_type in _TIMELESS_EDIT_TYPES else created_at + EDIT_WINDOW
+
+
+def comment_editable_until(created_at: datetime) -> datetime:
+    """Until when the author may edit a comment (any post type)."""
+    return created_at + EDIT_WINDOW
+
+
+def edit_window_closed(editable_until: datetime | None, now: datetime) -> bool:
+    """Too late to edit: the limit has passed (the moment itself still counts as open)."""
+    return editable_until is not None and now > editable_until
 
 
 def post_is_editable(post_type: PostType, from_maintenance: bool, hidden: bool) -> bool:
