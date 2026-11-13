@@ -113,6 +113,25 @@ Several instances and unrelated services share the host, so nothing may grow wit
 - Where a disk warning goes beyond the journal is open (B-11). Check it with
   `systemctl --failed` or `journalctl -t aap-disk-check`.
 
+## Uploaded files
+
+Files of epic E11 live on the host, never in the image or the database (docs/ARCHITECTURE.md
+section 10): `/opt/aap/<env>/files` (created by `bootstrap.sh`, owned by uid 1000, mode 700) is
+mounted at `/data/files` in the backend (`FILES_DIR`). Settings, all in the environment:
+
+| Variable | Default | Meaning |
+| :--- | :--- | :--- |
+| `FILES_DIR` | `var/files` (`/data/files` in both compose files) | Root of `blobs/` and `tmp/` |
+| `FILES_QUOTA_MB` | 2048 | Quota per association (E11 section 6: about 0.5 GB + 25 MB per apartment) |
+| `FILES_USER_MB_PER_DAY` | 20 | Stored bytes per user and day |
+| `FILES_MIN_FREE_MB` | 5120 | Uploads stop below this free space on the disk of `FILES_DIR` |
+| `FILES_IN_DEMO` | `false` | Uploads in demo mode; only for `ENVIRONMENT` local, dev or test. `deploy.sh` sets it to `true` for dev and `false` for prod |
+| `FILES_DEMO_QUOTA_MB`, `FILES_DEMO_RETENTION_HOURS` | 100, 24 | The quota and the retention while in demo mode |
+| `FILES_JANITOR_ENABLED` | `true` | The hourly clean-up loop |
+
+The files are not in any backup yet (docs/BACKLOG.md B-3): that must change before a real
+association stores files.
+
 ## Rollback
 
 - **Automatic.** `deploy.sh` starts the new release with `docker compose up --wait`. The backend

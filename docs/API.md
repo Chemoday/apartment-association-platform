@@ -40,6 +40,11 @@ gets to answer it. Upload routes check `Content-Length` themselves before readin
 their own JSON errors below the edge limit; every backend cap stays at or below the edge limit in
 decimal bytes. Local Docker has no edge and no such limit.
 
+Section 12 (uploaded files) adds `UPLOAD_INTERRUPTED` (400), `UPLOADS_DISABLED` (403),
+`IDEMPOTENCY_KEY_REUSED` (409), `LENGTH_REQUIRED` (411),
+`FILE_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `INVALID_IMAGE`, `IMAGE_TOO_LARGE` (422),
+`STORAGE_QUOTA_EXCEEDED` and `STORAGE_LOW_DISK` (507), and reuses `RATE_LIMITED` (429).
+
 Section 7 adds `INVALID_CREDENTIALS`, `SESSION_EXPIRED` (401), `CSRF_CHECK_FAILED`, `REAUTHENTICATION_REQUIRED` (403), `SESSION_NOT_FOUND`, `INVITATION_NOT_FOUND`, `USER_NOT_FOUND` (404), `EMAIL_ALREADY_REGISTERED`, `TENANT_LIMIT_REACHED`, `INVITATION_ALREADY_PENDING`, `INVITATION_ACCEPTED`, `INVITATION_NO_LONGER_VALID`, `LAST_CHAIRMAN` (409) and `PASSWORD_TOO_WEAK` (422); it reuses `RATE_LIMITED` (429) of section 6. `INVALID_CREDENTIALS`, `REAUTHENTICATION_REQUIRED` and `PASSWORD_TOO_WEAK` exist since A5.
 
 ### Author badge rules (`property.policies.format_author_badge`)
@@ -2129,3 +2134,64 @@ changes, because the schedule depends on it. `404 LOG_ENTRY_NOT_FOUND`.
 | 404 | `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND` |
 | 409 | `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` |
 | 422 | `VALIDATION_ERROR`, `INVALID_TARGET` |
+
+---
+
+## 12. Uploaded files (`core`), epic E11
+
+*Rules shared by every upload route (docs/epics/E11_FILE_STORAGE.md; storage: docs/SCHEMA.md
+section 12). The routes themselves belong to their modules: the photos of an issue are in
+section 10.*
+
+### Uploading
+- **The body is the file itself**, not a multipart form: `Content-Type` names the file type and
+  `Content-Length` is required. Values that are not the file (a title) travel in the query.
+- **Photos are JPEG of at most 2560 px on either edge** (`Content-Type: image/jpeg`). Every client
+  scales and converts a photo before sending it (docs/FRONTEND_GUIDE.md section 17): the server
+  opens no other format and never scales a large photo itself. It still re-encodes every photo:
+  the orientation is applied, all metadata (location, camera) is removed and the photo is stored
+  as WebP in two sizes, `display` (at most 1920 px) and `thumb` (at most 320 px).
+- **`Idempotency-Key`** (optional header, 1-64 characters `A-Z a-z 0-9 _ -`, a new random value
+  per file, for example a UUID): an upload repeated with the same key by the same user, after a
+  lost answer, returns the stored file with `200` instead of storing it again (also when the
+  issue ended meanwhile); the first upload answers `201`. The body of a repeated request is not
+  read. A key already used for another file, or for a file that was deleted, is `409
+  IDEMPOTENCY_KEY_REUSED`: send a new key for every file.
+- **Order of the checks:** the route's own rules (404, 403, 409), then demo mode, the disk, the
+  quota and the daily limit, then the size from `Content-Length`; only then the body is read.
+
+### Serving
+- `Content-Type` is the stored one (`image/webp` for photos). Every file response carries
+  `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` and
+  `Cache-Control: private, max-age=31536000, immutable` (a file never changes; a new one gets a
+  new id). Send the access token as for any request and show images from a blob URL; there are
+  no public or signed links.
+- A deleted file is `404` at once. It is erased 14 days later.
+
+### Limits
+- **Quota per association**, set by the operator of the server (`FILES_QUOTA_MB`, default
+  2048 MB); photos may not use the last 20% of it, which stays for documents and official votes.
+- **At most `FILES_USER_MB_PER_DAY` (20 MB) stored per user and day**, counted as stored (a photo
+  is about 0.3 MB); an upload is admitted only while a whole file of the route's cap still fits
+  (4 MB for a photo): `429 RATE_LIMITED` with `retry_after_seconds`.
+- **A busy server** (too many uploads at the same moment): `429 RATE_LIMITED` with
+  `retry_after_seconds`; retry that one file later.
+- **Demo mode:** uploads only where the server allows them (dev), with a small quota, and files
+  are deleted after about a day; elsewhere `403 UPLOADS_DISABLED`.
+
+### Error codes of this section
+| Status | `error_code` | When |
+| :--- | :--- | :--- |
+| 400 | `UPLOAD_INTERRUPTED` | The client went away while sending the body; send the file again |
+| 403 | `UPLOADS_DISABLED` | Demo mode without uploads (every deployed environment except dev) |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | The `Idempotency-Key` was used for another file or a deleted one |
+| 411 | `LENGTH_REQUIRED` | No `Content-Length` |
+| 413 | `FILE_TOO_LARGE` | `Content-Length` above the route's cap, or a body longer than it says (`max_bytes` in the body) |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | Another `Content-Type`, or the bytes are not that type (for photos: not a JPEG) |
+| 422 | `INVALID_IMAGE` | A JPEG that cannot be decoded (cut off, broken), or one built like no camera writes it: more than 64 segments or 512 KB of metadata before the image, or more than 32 scans |
+| 422 | `IMAGE_TOO_LARGE` | Longer than 2560 px on an edge (`max_edge_px` in the body); scale it first |
+| 422 | `VALIDATION_ERROR` | A malformed `Idempotency-Key` |
+| 429 | `RATE_LIMITED` | The daily limit of the user, or the server is busy (`retry_after_seconds`, `Retry-After`) |
+| 507 | `STORAGE_QUOTA_EXCEEDED` | The association's quota is used up |
+| 507 | `STORAGE_LOW_DISK` | The server's disk is nearly full |
+

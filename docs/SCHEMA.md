@@ -732,3 +732,44 @@ Users are referenced by id only; names come from `PropertyService`.*
   (section 5).
 - **`comm_posts.origin`** (task M2, migration 020): `VARCHAR(32) NULLABLE, CHECK IN
   ('MAINTENANCE')`; set only by the service for posts the maintenance calendar publishes.
+
+---
+
+## 12. Core infrastructure (`src/core`): file storage (epic E11, task F1)
+
+*Uploaded files of every module (docs/epics/E11_FILE_STORAGE.md). Like the building settings,
+the table is infrastructure owned by `src/core/files.py`; a module keeps no copy of it and
+reaches its files only through the `FileStore` port with the `purpose` and the `owner_ref` it
+expects. The bytes live on disk, never in the database. Migration 022.*
+
+### Table: `core_files`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | Also the name of the file's directory on disk |
+| `building_id` | `UUID` | `FK(property_buildings.id) ON DELETE CASCADE, NOT NULL` | The association whose quota it uses |
+| `purpose` | `VARCHAR(32)` | `NOT NULL, CHECK` | `issue_photo` (more with later tasks: documents, meter photos, ballots) |
+| `owner_ref` | `UUID` | `NOT NULL` | The id of what the file belongs to in its module (for `issue_photo`: the issue). No foreign key: core does not know module tables |
+| `content_type` | `VARCHAR(64)` | `NOT NULL` | Chosen by the server from a fixed list (`image/webp` for photos), never taken from the client |
+| `width`, `height` | `INTEGER` | `NULLABLE, CHECK > 0` | Size of the main variant of an image, for the layout of the client |
+| `size_bytes` | `BIGINT` | `NOT NULL, CHECK > 0` | All variants together, as stored; what the quota counts |
+| `sha256` | `VARCHAR(64)` | `NOT NULL` | Of the main variant, for the corruption check of the janitor |
+| `created_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who uploaded it. **Never returned by the store**; whether anyone may learn it is the module's rule |
+| `idempotency_key` | `VARCHAR(64)` | `NULLABLE` | The client's `Idempotency-Key` of the upload |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `delete_after` | `TIMESTAMPTZ` | `NULLABLE` | The end of the retention; set and cleared by the module (for `issue_photo`: when the issue ends or is reopened) |
+| `deleted_at` | `TIMESTAMPTZ` | `NULLABLE` | Set when deleted (by a person or by the retention); the file is hidden at once |
+| `purge_after` | `TIMESTAMPTZ` | `NULLABLE` | `deleted_at` + 14 days: the janitor erases the blob, then the row |
+
+- `CHECK ((deleted_at IS NULL) = (purge_after IS NULL))`.
+- `ix_core_files_owner`: `(purpose, owner_ref)`; `ix_core_files_building`: `(building_id)`;
+  `ix_core_files_creator_time`: `(created_by_user_id, created_at)` (the daily byte limit).
+- `uq_core_files_idempotency`: `UNIQUE (created_by_user_id, idempotency_key) WHERE
+  idempotency_key IS NOT NULL`: a repeated upload finds the file of the first one.
+- `ix_core_files_expiring`: `(delete_after) WHERE deleted_at IS NULL AND delete_after IS NOT
+  NULL`; `ix_core_files_purge`: `(purge_after) WHERE purge_after IS NOT NULL` (the janitor).
+- **On disk** (`FILES_DIR`, `/opt/aap/<env>/files` on the VPS): `blobs/<first 2 characters of
+  id>/<id>/` with `display.webp` and `thumb.webp` for a photo, and `tmp/`. A blob never changes
+  after it is written. It is written (temporary file, `fsync`, rename, `fsync` of the directory)
+  before its row is inserted, so a crash leaves at most a blob without a row (the janitor removes
+  it), never a row without a blob.
+- The quota counts every row until it is purged, deleted ones included: they still use the disk.
