@@ -1831,7 +1831,8 @@ Every endpoint needs a signed-in user.
   photo is never in a payload. `can_add_photo`: the caller may upload one now (the reporter or the
   board, the issue is open, fewer than 3 photos, and uploads are switched on: never in a demo
   without uploads). `photos_delete_at`: when the photos of a `RESOLVED` issue will be deleted
-  (`ended_at` + 30 days), else `null`; show it so nobody is surprised (see "Retention").
+  (`ended_at` + 30 days), else `null` (also when it has no photos); show it so nobody is
+  surprised (see "Retention").
 - Never in a payload: who reported (except `reporter` for the board), who follows, who uploaded a
   photo.
 

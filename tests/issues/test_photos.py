@@ -2,7 +2,7 @@
 
 import io
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -13,9 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.files import StoredFile
-from src.modules.issues.policies import photo_retention_end
+from src.modules.issues.policies import photos_delete_at, photos_deleted_at_once
+from src.modules.issues.schemas import IssueStatus
 from tests.issues.conftest import IssueWorld
-from tests.issues.test_api import API, SETTINGS, as_user, reported
+from tests.issues.test_api import API, as_user, reported
 
 
 def jpeg(size: tuple[int, int] = (1600, 1200), gps: bool = True) -> bytes:
@@ -144,8 +145,8 @@ async def test_who_may_delete_a_photo(
 
     neighbour = await api_client.delete(url, headers=as_user(world.tenant_2))
     assert (neighbour.status_code, neighbour.json()["error_code"]) == (403, "FORBIDDEN")
-    # Once the issue ended, its uploader may no longer delete it; the board still may.
-    await api_client.post(f"{API}/{issue['id']}/withdraw", headers=as_user(world.owner_14))
+    # Once the issue is resolved, its uploader may no longer delete it; the board still may.
+    await _status(api_client, world, issue["id"], status="RESOLVED")
     assert (await api_client.delete(url, headers=as_user(world.owner_14))).status_code == 403
     assert (await api_client.delete(url, headers=as_user(world.chairman))).status_code == 204
 
@@ -250,7 +251,15 @@ async def _delete_after(db_session: AsyncSession, issue_id: str) -> list[datetim
     )
 
 
-async def test_photos_of_an_ended_issue_are_kept_for_the_setting_and_again_when_reopened(
+async def _status(client: AsyncClient, world: IssueWorld, issue_id: str, **body: Any) -> dict:
+    response = await client.post(
+        f"{API}/{issue_id}/status", json=body, headers=as_user(world.chairman)
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_photos_of_a_resolved_issue_go_after_30_days_and_stay_when_it_is_reopened(
     api_client: AsyncClient,
     db_app: FastAPI,
     db_session: AsyncSession,
@@ -260,43 +269,58 @@ async def test_photos_of_an_ended_issue_are_kept_for_the_setting_and_again_when_
     # Outside demo mode, so the demo's one-day retention does not apply.
     db_app.state.settings = db_app.state.settings.model_copy(update={"DEMO_MODE_ENABLED": False})
     await upload(api_client, world.owner_14, issue["id"])
-    await api_client.put(
-        SETTINGS,
-        json={"values": {"issues.photo_retention_months": 6}},
-        headers=as_user(world.chairman),
-    )
     assert await _delete_after(db_session, issue["id"]) == [None]
+    assert (await view(api_client, world.owner_14, issue["id"]))["photos_delete_at"] is None
 
-    resolved = await api_client.post(
-        f"{API}/{issue['id']}/status", json={"status": "RESOLVED"}, headers=as_user(world.chairman)
-    )
-    ended_at = datetime.fromisoformat(resolved.json()["ended_at"])
-    assert await _delete_after(db_session, issue["id"]) == [photo_retention_end(ended_at, 6)]
+    resolved = await _status(api_client, world, issue["id"], status="RESOLVED")
+    ended_at = datetime.fromisoformat(resolved["ended_at"])
+    assert await _delete_after(db_session, issue["id"]) == [ended_at + timedelta(days=30)]
+    assert datetime.fromisoformat(resolved["photos_delete_at"]) == ended_at + timedelta(days=30)
+    assert len(resolved["photos"]) == 1  # still shown until then
 
-    reopened = await api_client.post(
-        f"{API}/{issue['id']}/status",
-        json={"status": "IN_PROGRESS"},
-        headers=as_user(world.chairman),
-    )
-    assert reopened.status_code == 200, reopened.text
+    reopened = await _status(api_client, world, issue["id"], status="IN_PROGRESS")
     assert await _delete_after(db_session, issue["id"]) == [None]
+    assert reopened["photos_delete_at"] is None
 
 
-def test_the_retention_counts_calendar_months_but_outlasts_the_reopen_window() -> None:
-    assert photo_retention_end(None, 12) is None
-    # 31 January + 1 month = 28 February, only 28 days: the 30 days of reopening win.
-    assert photo_retention_end(datetime(2026, 1, 31, 10, tzinfo=UTC), 1) == datetime(
-        2026, 3, 2, 10, tzinfo=UTC
+@pytest.mark.parametrize("ending", ["DECLINED", "DUPLICATE", "WITHDRAWN"])
+async def test_photos_of_an_issue_that_ends_otherwise_are_deleted_at_once(
+    api_client: AsyncClient, world: IssueWorld, issue: dict, ending: str
+) -> None:
+    photo = (await upload(api_client, world.owner_14, issue["id"])).json()
+    if ending == "WITHDRAWN":
+        await api_client.post(f"{API}/{issue['id']}/withdraw", headers=as_user(world.owner_14))
+    elif ending == "DUPLICATE":
+        original = await reported(api_client, world.board_15, entrance=1)
+        await _status(
+            api_client, world, issue["id"], status="DUPLICATE", duplicate_of=original["id"]
+        )
+    else:
+        await _status(api_client, world, issue["id"], status="DECLINED")
+
+    ended = await view(api_client, world.owner_14, issue["id"])
+    image = await api_client.get(
+        f"{API}/{issue['id']}/photos/{photo['id']}", headers=as_user(world.owner_14)
     )
-    assert photo_retention_end(datetime(2026, 3, 31, 10, tzinfo=UTC), 1) == datetime(
-        2026, 4, 30, 10, tzinfo=UTC
-    )
-    assert photo_retention_end(datetime(2026, 11, 13, tzinfo=UTC), 12) == datetime(
-        2027, 11, 13, tzinfo=UTC
-    )
-    assert photo_retention_end(datetime(2026, 11, 13, tzinfo=UTC), 14) == datetime(
-        2028, 1, 13, tzinfo=UTC
-    )
+
+    assert (ended["photos"], ended["photos_delete_at"]) == ([], None)
+    assert image.status_code == 404
+    if ending != "WITHDRAWN":  # reopening does not bring them back
+        reopened = await _status(api_client, world, issue["id"], status="IN_PROGRESS")
+        assert reopened["photos"] == []
+
+
+def test_which_photos_go_when() -> None:
+    ended = datetime(2026, 11, 13, 10, tzinfo=UTC)
+    assert photos_delete_at(IssueStatus.RESOLVED, ended) == ended + timedelta(days=30)
+    for status in IssueStatus:
+        if status != IssueStatus.RESOLVED:
+            assert photos_delete_at(status, ended) is None
+    assert {status for status in IssueStatus if photos_deleted_at_once(status)} == {
+        IssueStatus.DUPLICATE,
+        IssueStatus.DECLINED,
+        IssueStatus.WITHDRAWN,
+    }
 
 
 async def test_a_lost_file_on_the_server_is_not_found_not_an_error(
@@ -347,7 +371,7 @@ async def test_a_repeat_after_the_issue_ended_still_returns_the_photo(
     api_client: AsyncClient, world: IssueWorld, issue: dict
 ) -> None:
     first = await upload(api_client, world.owner_14, issue["id"], **{"Idempotency-Key": "late"})
-    await api_client.post(f"{API}/{issue['id']}/withdraw", headers=as_user(world.owner_14))
+    await _status(api_client, world, issue["id"], status="RESOLVED")
 
     again = await upload(api_client, world.owner_14, issue["id"], **{"Idempotency-Key": "late"})
 
@@ -383,3 +407,15 @@ async def test_a_client_that_goes_away_mid_upload_is_no_server_error(
     )
 
     assert (response.status_code, response.json()["error_code"]) == (400, "UPLOAD_INTERRUPTED")
+
+
+async def test_a_repeat_after_the_issue_was_withdrawn_gets_the_issues_answer(
+    api_client: AsyncClient, world: IssueWorld, issue: dict
+) -> None:
+    await upload(api_client, world.owner_14, issue["id"], **{"Idempotency-Key": "gone"})
+    await api_client.post(f"{API}/{issue['id']}/withdraw", headers=as_user(world.owner_14))
+
+    again = await upload(api_client, world.owner_14, issue["id"], **{"Idempotency-Key": "gone"})
+
+    # The photo went with the withdrawal: the client learns why, not that it misused the key.
+    assert (again.status_code, again.json()["error_code"]) == (409, "ISSUE_ENDED")

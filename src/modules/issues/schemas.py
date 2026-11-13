@@ -198,3 +198,4 @@ class IssueView(IssueSummary):
     timeline: list[TimelineEntry]
     photos: list[IssuePhoto]
     can_add_photo: bool
+    photos_delete_at: datetime | None  # when a resolved issue's photos are deleted

@@ -175,6 +175,7 @@ class FileDTO:
     size_bytes: int
     created_at: datetime
     uploaded_by_caller: bool  # whether the user the module asked for uploaded it
+    deleted: bool = False  # only find_repeat returns deleted files
 
 
 def _dto(row: StoredFile, caller_id: uuid.UUID | None) -> FileDTO:
@@ -188,6 +189,7 @@ def _dto(row: StoredFile, caller_id: uuid.UUID | None) -> FileDTO:
         size_bytes=row.size_bytes,
         created_at=row.created_at,
         uploaded_by_caller=caller_id is not None and row.created_by_user_id == caller_id,
+        deleted=row.deleted_at is not None,
     )
 
 
@@ -238,7 +240,7 @@ def _low_disk() -> DomainError:
     )
 
 
-def _key_reused() -> DomainError:
+def key_reused() -> DomainError:
     return DomainError(
         status_code=409,
         error_code="IDEMPOTENCY_KEY_REUSED",
@@ -552,6 +554,7 @@ class FileStore:
             select(StoredFile)
             .where(*self._visible(purpose, owner_ref))
             .order_by(StoredFile.created_at, StoredFile.id)
+            .execution_options(populate_existing=True)
         )
         return [_dto(row, caller_id) for row in rows]
 
@@ -572,6 +575,7 @@ class FileStore:
                 StoredFile.deleted_at.is_(None),
             )
             .order_by(StoredFile.created_at, StoredFile.id)
+            .execution_options(populate_existing=True)
         )
         for row in rows:
             found[row.owner_ref].append(_dto(row, caller_id))
@@ -595,7 +599,9 @@ class FileStore:
         caller_id: uuid.UUID | None = None,
     ) -> FileDTO | None:
         row = await self.session.scalar(
-            select(StoredFile).where(StoredFile.id == file_id, *self._visible(purpose, owner_ref))
+            select(StoredFile)
+            .where(StoredFile.id == file_id, *self._visible(purpose, owner_ref))
+            .execution_options(populate_existing=True)
         )
         return _dto(row, caller_id) if row is not None else None
 
@@ -609,19 +615,20 @@ class FileStore:
     async def find_repeat(
         self, user_id: uuid.UUID, key: str, purpose: FilePurpose, owner_ref: uuid.UUID
     ) -> FileDTO | None:
-        """The file a user already stored with this Idempotency-Key: returned when it is a live
-        file of the same purpose and owner (a repeat), None when the key is new. A key used for
-        anything else (another owner, a deleted file) is 409 IDEMPOTENCY_KEY_REUSED: a client
-        sends a new key for every file. Keys of purged files may be used again."""
+        """The file a user already stored with this Idempotency-Key for the same purpose and
+        owner (a repeat; `deleted` tells the module it is gone meanwhile), None when the key is
+        new. A key used for another owner or purpose is 409 IDEMPOTENCY_KEY_REUSED: a client sends
+        a new key for every file. Keys of purged files may be used again."""
         row = await self.session.scalar(
-            select(StoredFile).where(
-                StoredFile.created_by_user_id == user_id, StoredFile.idempotency_key == key
-            )
+            select(StoredFile)
+            .where(StoredFile.created_by_user_id == user_id, StoredFile.idempotency_key == key)
+            # Deletes are bulk updates: never trust a row object held from earlier.
+            .execution_options(populate_existing=True)
         )
         if row is None:
             return None
-        if row.purpose != purpose or row.owner_ref != owner_ref or row.deleted_at is not None:
-            raise _key_reused()
+        if row.purpose != purpose or row.owner_ref != owner_ref:
+            raise key_reused()
         return _dto(row, user_id)
 
     # --- Admission (before the body is read) ----------------------------------------------------
@@ -721,8 +728,9 @@ class FileStore:
             await asyncio.to_thread(self.disk.remove, file_id)
             if idempotency_key is not None:  # a parallel request with the same key won
                 repeat = await self.find_repeat(created_by, idempotency_key, purpose, owner_ref)
-                if repeat is not None:
+                if repeat is not None and not repeat.deleted:
                     return repeat, False
+                raise key_reused() from None
             raise
         logger.info("file_stored", file_id=str(file_id), purpose=purpose.value, size_bytes=size)
         return _dto(row, created_by), True
@@ -737,6 +745,17 @@ class FileStore:
             .execution_options(synchronize_session=False)
         )
         return bool(result.rowcount)
+
+    async def delete_all(self, purpose: FilePurpose, owner_ref: uuid.UUID) -> int:
+        """Hide every file of an owner now; the janitor erases them after PURGE_DELAY."""
+        now = _now()
+        result = await self.session.execute(
+            update(StoredFile)
+            .where(*self._visible(purpose, owner_ref))
+            .values(deleted_at=now, purge_after=now + PURGE_DELAY)
+            .execution_options(synchronize_session=False)
+        )
+        return int(result.rowcount or 0)
 
     async def set_delete_after(
         self, purpose: FilePurpose, owner_ref: uuid.UUID, when: datetime | None

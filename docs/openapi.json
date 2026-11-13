@@ -10910,6 +10910,18 @@
           "can_add_photo": {
             "type": "boolean",
             "title": "Can Add Photo"
+          },
+          "photos_delete_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photos Delete At"
           }
         },
         "type": "object",
@@ -10934,7 +10946,8 @@
           "description",
           "timeline",
           "photos",
-          "can_add_photo"
+          "can_add_photo",
+          "photos_delete_at"
         ],
         "title": "IssueView"
       },

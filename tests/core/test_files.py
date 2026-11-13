@@ -184,12 +184,16 @@ async def test_a_repeated_upload_with_the_same_key_returns_the_first_file(
     with pytest.raises(DomainError) as reused:  # the key belongs to another owner's file
         await files.find_repeat(user.id, "k-1", PURPOSE, uuid.UUID(int=9))
     assert (reused.value.status_code, reused.value.error_code) == (409, "IDEMPOTENCY_KEY_REUSED")
+    await files.delete(first.id, PURPOSE, first.owner_ref)
+    gone = await files.find_repeat(user.id, "k-1", PURPOSE, first.owner_ref)
+    assert (gone.id, gone.deleted) == (first.id, True)  # the module decides what to answer
     # A race: both requests passed find_repeat; the second insert meets the unique index.
-    again, new = await store(files, building, user, idempotency_key="k-1")
+    again, new = await store(files, building, user, idempotency_key="k-2")
+    race, new_race = await store(files, building, user, idempotency_key="k-2")
 
-    assert (again.id, new) == (first.id, False)
-    blobs = [file_id for file_id, _ in disk.blob_ages()]
-    assert blobs == [first.id]  # the loser's blob is removed
+    assert (race.id, new_race, new) == (again.id, False, True)
+    blobs = {file_id for file_id, _ in disk.blob_ages()}
+    assert blobs == {first.id, again.id}  # the loser's blob is removed
 
 
 def test_file_responses_are_never_sniffed_scripted_or_refetched() -> None:
@@ -519,3 +523,19 @@ async def test_the_janitor_skips_while_another_process_runs_it(
         )
         assert await janitor_tick(factory_of(db_session), disk) is None
         await other.rollback()
+
+
+async def test_all_files_of_an_owner_are_deleted_at_once(
+    db_session: AsyncSession, disk: LocalDisk, owner
+) -> None:
+    building, user = owner
+    files = make_store(db_session, disk)
+    for _ in range(2):
+        await store(files, building, user, owner_ref=uuid.UUID(int=1))
+    kept, _ = await store(files, building, user, owner_ref=uuid.UUID(int=2))
+
+    assert await files.delete_all(PURPOSE, uuid.UUID(int=1)) == 2
+
+    assert await files.count(PURPOSE, uuid.UUID(int=1)) == 0
+    assert await files.count(PURPOSE, kept.owner_ref) == 1
+    assert await files.delete_all(PURPOSE, uuid.UUID(int=1)) == 0

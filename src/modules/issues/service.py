@@ -35,6 +35,7 @@ from src.core.files import (
     PhotoVariant,
     declared_length,
     get_file_store_factory,
+    key_reused,
     read_body,
     require_content_type,
 )
@@ -54,7 +55,8 @@ from src.modules.issues.policies import (
     is_open,
     may_add_photo,
     may_delete_photo,
-    photo_retention_end,
+    photos_delete_at,
+    photos_deleted_at_once,
     retry_after_seconds,
     statuses_for,
     visible,
@@ -77,7 +79,6 @@ from src.modules.issues.schemas import (
     TimelineEntry,
 )
 from src.modules.issues.settings import (
-    PHOTO_RETENTION_MONTHS,
     REPORTS_PER_APARTMENT_PER_DAY,
     URGENT_ENABLED,
     URGENT_PER_APARTMENT_PER_DAY,
@@ -512,7 +513,7 @@ class IssuesService:
         if idempotency_key is not None:
             repeat = await files.find_repeat(user.id, idempotency_key, PHOTO, issue.id)
             if repeat is not None:
-                return self._photo_view(user, issue, repeat), False
+                return self._repeat_answer(user, issue, repeat)
         issue = await self._photo_target(user, issue_id)
         if await files.count(PHOTO, issue.id) >= MAX_PHOTOS_PER_ISSUE:
             raise _photo_limit()
@@ -528,7 +529,7 @@ class IssuesService:
             if idempotency_key is not None:  # a parallel request with the same key was first
                 repeat = await files.find_repeat(user.id, idempotency_key, PHOTO, issue.id)
                 if repeat is not None:
-                    return self._photo_view(user, issue, repeat), False
+                    return self._repeat_answer(user, issue, repeat)
             if await files.count(PHOTO, issue.id) >= MAX_PHOTOS_PER_ISSUE:
                 raise _photo_limit()
             stored, new = await files.store_photo(
@@ -573,6 +574,18 @@ class IssuesService:
             raise _forbidden("Only the uploader, while the issue is open, or the board may delete.")
         await files.delete(photo_id, PHOTO, issue.id)
 
+    def _repeat_answer(
+        self, user: CurrentUserDTO, issue: Issue, repeat: FileDTO
+    ) -> tuple[IssuePhoto, bool]:
+        """A repeat of an upload: the photo again, or why it is gone. Its issue ended in a way that
+        deletes photos (declined, duplicate, withdrawn): 409 ISSUE_ENDED, like a new upload would
+        get; deleted by a person while the issue is open: the key cannot be used again."""
+        if not repeat.deleted:
+            return self._photo_view(user, issue, repeat), False
+        if not is_open(issue.status):
+            raise _ended(issue.status)
+        raise key_reused()
+
     def _require_files(self) -> FileStore:
         if self.files is None:
             raise RuntimeError("photos need the file store")
@@ -605,13 +618,16 @@ class IssuesService:
         )
 
     async def _sync_photo_retention(self, issue: Issue) -> None:
-        """Photos of an ended issue are kept for the building's setting; reopened: kept again."""
+        """Photos follow the issue's status: kept while open, deleted 30 days after it was resolved
+        (cleared again on reopening), deleted at once when it ends otherwise."""
         if self.files is None:
             raise RuntimeError("changing the status of an issue needs the file store")
-        months = await self.settings.get(issue.building_id, PHOTO_RETENTION_MONTHS)
-        await self.files.set_delete_after(
-            PHOTO, issue.id, photo_retention_end(issue.ended_at, months)
-        )
+        if photos_deleted_at_once(issue.status):
+            await self.files.delete_all(PHOTO, issue.id)
+        else:
+            await self.files.set_delete_after(
+                PHOTO, issue.id, photos_delete_at(issue.status, issue.ended_at)
+            )
 
     # --- Reading --------------------------------------------------------------------------------
 
@@ -872,6 +888,7 @@ class IssuesService:
                 status=issue.status,
                 photos=len(stored),
             ),
+            photos_delete_at=photos_delete_at(issue.status, issue.ended_at) if stored else None,
         )
 
     async def _timeline(self, user: CurrentUserDTO, issue: Issue) -> list[TimelineEntry]:

@@ -4,7 +4,6 @@ docs/API.md section 10 and docs/epics/E9_ISSUE_TRACKER.md. The board's transitio
 add their rules here.
 """
 
-import calendar
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -44,16 +43,18 @@ def may_delete_photo(*, uploaded_by_caller: bool, board: bool, status: IssueStat
     return board or (uploaded_by_caller and is_open(status))
 
 
-def photo_retention_end(ended_at: datetime | None, months: int) -> datetime | None:
-    """When the photos of an issue that ended at `ended_at` are deleted; None while it is open.
-    Months are calendar months; a day that the target month lacks becomes its last day. Never
-    before the reopen window closes: a reopened issue must still have its photos."""
-    if ended_at is None:
+def photos_delete_at(status: IssueStatus, ended_at: datetime | None) -> datetime | None:
+    """When the photos of a resolved issue are deleted: as soon as it can no longer be reopened
+    (owner decision 2026-11-13: photos are working material). None for any other status: open
+    issues keep their photos, and the other ended statuses delete them at once."""
+    if status != IssueStatus.RESOLVED or ended_at is None:
         return None
-    month_index = ended_at.month - 1 + months
-    year, month = ended_at.year + month_index // 12, month_index % 12 + 1
-    day = min(ended_at.day, calendar.monthrange(year, month)[1])
-    return max(ended_at.replace(year=year, month=month, day=day), ended_at + REOPEN_WINDOW)
+    return ended_at + REOPEN_WINDOW
+
+
+def photos_deleted_at_once(status: IssueStatus) -> bool:
+    """A duplicate, a declined and a withdrawn issue lose their photos with the status change."""
+    return not is_open(status) and status != IssueStatus.RESOLVED
 
 
 def statuses_for(status_filter: StatusFilter | None) -> frozenset[IssueStatus] | None:
