@@ -613,3 +613,26 @@ photo before sending it.**
   photos now; tell the board".
 - A future native app does the same with the image tools of the system (scale on decoding,
   convert to JPEG) and the same `Idempotency-Key`; the contract is the same for every client.
+
+## 18. Documents of the association (epic E11)
+
+Contract: docs/API.md section 13 (and section 12 for the upload rules).
+
+- **Page "Documents"** for everyone with access (residents, the chairman, the board, the
+  accountant): a list with title, category, date, size; a filter by category; a download button
+  (`GET .../file`, with the access token, saved from a blob; the server always sends it as an
+  attachment). Translate the categories in every locale; show an unknown one as "Other".
+- **Uploading** (the chairman, the board, the accountant): pick a PDF (`accept="application/pdf"`),
+  enter the title (prefilled from the file name), the category, the audience and optionally the
+  date of the document; send the file itself as the body (`Content-Type: application/pdf`) with
+  the other values in the query and a fresh `Idempotency-Key`; show the progress. The accountant
+  sees only the audience "Board and accountant". Check the size (at most 20 MB) before sending.
+- **Audience labels:** `EVERYONE` "Everyone in the building", `BOARD_AND_ACCOUNTANT` "Board and
+  accountant", `BOARD` "Board only". Staff see the audience on every document; residents only
+  ever see `EVERYONE` ones, so hide it for them.
+- **Editing** (the chairman and the board, `can_edit`): title, category, audience, date.
+- **Deleting** (the chairman, `can_delete`): confirm "Delete this document for everyone?".
+- `uploaded_by` (staff only) is a badge, never a name.
+- Errors as in section 17 (photos), plus `415 UNSUPPORTED_MEDIA_TYPE` "Only PDF files" and
+  `404 DOCUMENT_NOT_FOUND` "This document is not available".
+

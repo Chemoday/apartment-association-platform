@@ -34,7 +34,7 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 **Request body limits (deployed environments).** The edge proxy in front of the backend
 (docs/DEPLOYMENT.md, "Resource limits and disk hygiene") accepts at most **1 MB** (1,000,000
 bytes) of request body on every route, and more only on upload routes (4 MB for
-`POST /api/v1/issues/{id}/photos`, epic E11). A larger body is cut off at the limit and answered
+`POST /api/v1/issues/{id}/photos`, 20 MB for `POST /api/v1/documents`, epic E11). A larger body is cut off at the limit and answered
 `413` with an **empty, non-JSON body** (no `error_code`, no `trace_id`), because the backend never
 gets to answer it. Upload routes check `Content-Length` themselves before reading and answer
 their own JSON errors below the edge limit; every backend cap stays at or below the edge limit in
@@ -2223,7 +2223,8 @@ section 10.*
   2048 MB); photos may not use the last 20% of it, which stays for documents and official votes.
 - **At most `FILES_USER_MB_PER_DAY` (20 MB) stored per user and day**, counted as stored (a photo
   is about 0.3 MB); an upload is admitted only while a whole file of the route's cap still fits
-  (4 MB for a photo): `429 RATE_LIMITED` with `retry_after_seconds`.
+  (4 MB for a photo): `429 RATE_LIMITED` with `retry_after_seconds`. Documents (section 13) are
+  uploaded by staff and are bounded by the quota only.
 - **A busy server** (too many uploads at the same moment): `429 RATE_LIMITED` with
   `retry_after_seconds`; retry that one file later.
 - **Demo mode:** uploads only where the server allows them (dev), with a small quota, and files
@@ -2244,4 +2245,90 @@ section 10.*
 | 429 | `RATE_LIMITED` | The daily limit of the user, or the server is busy (`retry_after_seconds`, `Retry-After`) |
 | 507 | `STORAGE_QUOTA_EXCEEDED` | The association's quota is used up |
 | 507 | `STORAGE_LOW_DISK` | The server's disk is nearly full |
+
+---
+
+## 13. Documents of the association (`documents`), epic E11 task F3
+
+*Owner decisions of 2026-11-13 (docs/epics/E11_FILE_STORAGE.md section 1a). Upload rules, limits
+and errors shared by every upload: section 12.*
+
+### Who sees and who does what
+| Audience | Who sees it | Who may upload into it |
+| :--- | :--- | :--- |
+| `EVERYONE` | every resident of the building (an active membership), the chairman, the board, the accountant | the chairman, the board |
+| `BOARD_AND_ACCOUNTANT` | the chairman, the board, the accountant | the chairman, the board, the accountant |
+| `BOARD` | the chairman, the board | the chairman, the board |
+
+- Editing the title, category, audience or date: the chairman and the board.
+- Deleting: **only the chairman**. The document disappears at once; its file is erased from the
+  server after 14 days.
+- Anyone without access to the module (no active membership and no staff role): `403 FORBIDDEN`.
+  A document the caller may not see, of another building or deleted: `404 DOCUMENT_NOT_FOUND`.
+- Documents are kept until the chairman deletes them (in demo mode about a day at most).
+
+### Document object (`DocumentView`)
+```json
+{
+  "id": "uuid",
+  "title": "General meeting minutes 2026",
+  "category": "GENERAL_MEETING_MINUTES",
+  "audience": "EVERYONE",
+  "document_date": "2026-05-20",
+  "size_bytes": 482133,
+  "created_at": "2026-11-13T10:00:00Z",
+  "updated_at": "2026-11-13T10:00:00Z",
+  "mine": false,
+  "can_edit": false,
+  "can_delete": false,
+  "uploaded_by": null
+}
+```
+- `category`: `ARTICLES` (the articles of association), `GENERAL_MEETING_MINUTES`,
+  `BOARD_MINUTES`, `CONTRACT`, `INVOICE` (an invoice or a certificate of work done),
+  `FINANCIAL_REPORT`, `INSURANCE`, `HOUSE_RULES`, `OTHER` (more may come; show an unknown one as
+  "Other").
+- `document_date`: the date of the document itself, or `null`. `mine`: the caller uploaded it.
+- `uploaded_by`: for the chairman, the board and the accountant the privacy badge of section 0
+  without an apartment context, never a raw name; `null` for residents.
+
+### `POST /api/v1/documents?title=...&category=...&audience=...&document_date=YYYY-MM-DD`
+The PDF is the body (`Content-Type: application/pdf`, `Content-Length`, at most 20,000,000
+bytes), optionally `Idempotency-Key` (section 12). `title` 1..200 characters, `category`,
+`audience` required, `document_date` optional. Answers the `DocumentView` with `201`, or `200`
+for a repeat with the same key.
+- The accountant may upload only with `audience=BOARD_AND_ACCOUNTANT`; residents never upload:
+  `403 FORBIDDEN`.
+- The file must start with `%PDF-`: otherwise `415 UNSUPPORTED_MEDIA_TYPE`. It is stored as
+  sent and never opened by the server.
+
+### `GET /api/v1/documents?category=CONTRACT&limit=50&offset=0`
+The documents the caller sees, newest first (`created_at`). `limit` 1..100.
+
+### `GET /api/v1/documents/{document_id}`
+One `DocumentView`.
+
+### `GET /api/v1/documents/{document_id}/file`
+The PDF, `Content-Type: application/pdf`, always as an attachment (`Content-Disposition:
+attachment` with a file name made from the title), with the headers of section 12. A document
+whose file is missing on the server: `404 DOCUMENT_NOT_FOUND`.
+
+### `PATCH /api/v1/documents/{document_id}` (the chairman and the board)
+`{"title"?, "category"?, "audience"?, "document_date"?}` (`document_date: null` clears it).
+Returns the `DocumentView`.
+
+### `DELETE /api/v1/documents/{document_id}` (the chairman)
+`204`.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 400 | `UPLOAD_INTERRUPTED` |
+| 403 | `FORBIDDEN`, `UPLOADS_DISABLED` |
+| 404 | `DOCUMENT_NOT_FOUND` |
+| 409 | `IDEMPOTENCY_KEY_REUSED` |
+| 411, 413, 415 | `LENGTH_REQUIRED`, `FILE_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` |
+| 422 | `VALIDATION_ERROR` |
+| 429 | `RATE_LIMITED` |
+| 507 | `STORAGE_QUOTA_EXCEEDED`, `STORAGE_LOW_DISK` |
 

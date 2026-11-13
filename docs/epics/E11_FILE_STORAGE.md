@@ -56,6 +56,15 @@ the contract wins. All sizes below are estimates to be measured again in the fir
   (docs/DEPLOYMENT.md). Task F0 introduces it.
 - **Three pull requests:** F0 alone; F1 with F2 (the store and its first consumer); F3 with F4.
 
+**Documents of the association (task F3), owner decisions of 2026-11-13:**
+- Kept until the chairman deletes them; **only the chairman deletes** (the file is hidden at once
+  and erased after 14 days, the record of the document stays with who deleted it).
+- A **fixed list of categories** in code (the client translates them).
+- Every document has an **audience**: everyone (residents, board, accountant), the board and the
+  accountant, or the board only (the chairman and the board members).
+- The chairman and the board upload into any audience; **the accountant uploads too**, but only
+  into "the board and the accountant" (invoices, reports).
+
 Still open: how signed containers, which hold personal data, are kept (section 9).
 
 ## 2. Principles

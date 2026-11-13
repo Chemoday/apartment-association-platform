@@ -406,7 +406,9 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
   applied, all metadata is dropped and the photo is written as WebP (1920 px display, 320 px
   preview). The work runs in a worker thread behind a semaphore of one with a short queue (429
   when it is full), like the password hashes of E7; at most a few bodies are received at once.
-- **Quota and limits** (per building): photos may not use the last 20% of `FILES_QUOTA_MB`. A
+- **Quota and limits** (per building): photos may not use the last 20% of `FILES_QUOTA_MB`;
+  documents may use everything except the reserve for official votes (5% of the quota, at least
+  100 MB, at most 20%). A
   route's cap is reserved in memory while its body is read (the backend is one process), and the
   final check runs again under a transaction-scoped advisory lock on the building
   (`core:files:<building_id>`) when the row is inserted, so parallel uploads cannot overshoot.
@@ -427,3 +429,21 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
   happens at import, so a one-off command in the running container cannot break an upload.
 - **Privacy:** the store never returns `created_by_user_id`; logs and spans carry the file id,
   the purpose and sizes, never a file name or content.
+
+## 11. Module `documents` (epic E11, task F3)
+
+Design: docs/epics/E11_FILE_STORAGE.md section 1a. Table: docs/SCHEMA.md section 13. API:
+docs/API.md section 13.
+
+- **Place:** owns `doc_documents`; the PDF goes through the core `FileStore` (purpose
+  `document`, owner = the document). Users, roles and badges come from `PropertyService`. No
+  other module imports it, and it publishes no events.
+- **Rules as pure functions** in `documents/policies.py`: who sees an audience, who uploads into
+  it, who edits and who deletes.
+- **Uploads are streamed to disk:** a PDF (at most 20,000,000 bytes) is written to `tmp/` while it
+  is counted and hashed, must start with `%PDF-`, is never parsed, and is renamed into place;
+  it is served only as an attachment, so a browser never renders it inside the app.
+- **Quota:** documents use the documents class of section 10 (everything except the reserve for
+  official votes); the daily limit per user applies to photos only (documents are uploaded by
+  staff and bounded by the quota).
+

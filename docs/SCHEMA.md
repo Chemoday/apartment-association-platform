@@ -754,7 +754,7 @@ expects. The bytes live on disk, never in the database. Migration 022.*
 | :--- | :--- | :--- | :--- |
 | `id` | `UUID` | `PK` | Also the name of the file's directory on disk |
 | `building_id` | `UUID` | `FK(property_buildings.id) ON DELETE CASCADE, NOT NULL` | The association whose quota it uses |
-| `purpose` | `VARCHAR(32)` | `NOT NULL, CHECK` | `issue_photo` (more with later tasks: documents, meter photos, ballots) |
+| `purpose` | `VARCHAR(32)` | `NOT NULL, CHECK` | `issue_photo`, `document` (migration 023; more with later tasks: meter photos, ballots) |
 | `owner_ref` | `UUID` | `NOT NULL` | The id of what the file belongs to in its module (for `issue_photo`: the issue). No foreign key: core does not know module tables |
 | `content_type` | `VARCHAR(64)` | `NOT NULL` | Chosen by the server from a fixed list (`image/webp` for photos), never taken from the client |
 | `width`, `height` | `INTEGER` | `NULLABLE, CHECK > 0` | Size of the main variant of an image, for the layout of the client |
@@ -775,8 +775,37 @@ expects. The bytes live on disk, never in the database. Migration 022.*
 - `ix_core_files_expiring`: `(delete_after) WHERE deleted_at IS NULL AND delete_after IS NOT
   NULL`; `ix_core_files_purge`: `(purge_after) WHERE purge_after IS NOT NULL` (the janitor).
 - **On disk** (`FILES_DIR`, `/opt/aap/<env>/files` on the VPS): `blobs/<first 2 characters of
-  id>/<id>/` with `display.webp` and `thumb.webp` for a photo, and `tmp/`. A blob never changes
+  id>/<id>/` with `display.webp` and `thumb.webp` for a photo or `original.pdf` for a document,
+  and `tmp/`. A blob never changes
   after it is written. It is written (temporary file, `fsync`, rename, `fsync` of the directory)
   before its row is inserted, so a crash leaves at most a blob without a row (the janitor removes
   it), never a row without a blob.
 - The quota counts every row until it is purged, deleted ones included: they still use the disk.
+
+---
+
+## 13. Module: `documents` (epic E11 task F3: documents of the association)
+
+*Design: docs/epics/E11_FILE_STORAGE.md section 1a. API: docs/API.md section 13. Migration 023.
+The PDF itself is a row of `core_files` (section 12) with `purpose` `document` and `owner_ref` =
+the document's id; this table holds what the document is and who may see it.*
+
+### Table: `doc_documents`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | Also the `owner_ref` of its file |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `file_id` | `UUID` | `FK(core_files.id) ON DELETE SET NULL, NULLABLE` | The PDF; `NULL` once the file was purged after a delete |
+| `title` | `VARCHAR(200)` | `NOT NULL, CHECK btrim <> ''` | Shown in the list and used for the download's file name |
+| `category` | `VARCHAR(32)` | `NOT NULL, CHECK` | `ARTICLES`, `GENERAL_MEETING_MINUTES`, `BOARD_MINUTES`, `CONTRACT`, `INVOICE`, `FINANCIAL_REPORT`, `INSURANCE`, `HOUSE_RULES`, `OTHER` |
+| `audience` | `VARCHAR(32)` | `NOT NULL, CHECK` | `EVERYONE`, `BOARD_AND_ACCOUNTANT`, `BOARD` |
+| `document_date` | `DATE` | `NULLABLE` | The date of the document itself (a meeting, a contract), if given |
+| `size_bytes` | `BIGINT` | `NOT NULL, CHECK > 0` | The PDF's size, for the list |
+| `uploaded_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Shown to staff as a privacy badge only |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `deleted_at` | `TIMESTAMPTZ` | `NULLABLE` | Set by the chairman's delete; a deleted document is hidden everywhere |
+| `deleted_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who deleted it (never returned by the API) |
+
+- `ix_doc_documents_building_created`: `(building_id, created_at)`.
+- Seeding writes no documents.
+
