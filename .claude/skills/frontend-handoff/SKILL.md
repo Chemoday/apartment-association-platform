@@ -5,10 +5,12 @@ description: Hand merged backend work over to the frontend. Writes tasks into th
 
 # Frontend handoff
 
-The owner works on the client in Google AI Studio, which is connected to the **frontend
-repository**. AI Studio can only "sync git and read a file", so everything it needs must be in
-that repository. This skill puts it there. The process is described for people in
-docs/FRONTEND_GIT_WORKFLOW.md section 2 ("Tasks from the backend").
+The owner builds the client in **Google Antigravity** (an agent IDE working on a normal git
+checkout of the **frontend repository**; until 2026-11-13 it was Google AI Studio). The frontend
+agent there reads only that repository, so everything it needs must be in it. This skill puts it
+there **as a branch and a pull request** into the frontend's `main`, the way the frontend
+repository itself works (feature branches, pull requests, merge commits). The process is
+described for people in docs/FRONTEND_GIT_WORKFLOW.md section 2 ("Tasks from the backend").
 
 ## Repositories and access
 
@@ -39,7 +41,7 @@ docs/FRONTEND_GIT_WORKFLOW.md section 2 ("Tasks from the backend").
 
 ## What the skill may change in the frontend repository
 
-Only these, nothing else (never `src/`, configs, lock files or the AI Studio workspace):
+Only these, nothing else (never `src/`, configs, lock files or a tool's workspace):
 
 | Path | Content |
 | :--- | :--- |
@@ -47,34 +49,47 @@ Only these, nothing else (never `src/`, configs, lock files or the AI Studio wor
 | `docs/BACKEND_HANDOFF.md` | The last handed-over backend commit and a log (date, backend commit, items). It says that the originals and the files they link to (epics, workflow) live in the backend repository |
 | `docs/backlog/NNN-<slug>.md` | New files only, one per task, in the frontend's template (`docs/backlog/_template.md`) |
 | `docs/backlog/README.md` | Only new rows in the "Backlog Index" table (replace the placeholder row "No pending items yet" if present). Never change other rows, statuses or the text |
-| Tag `backend-handoff/<backend short sha>` | On the handoff commit. Tags survive a force push of `main`, so the next run can tell whether the handoff is still there |
+| Branch `handoff/backend-<backend short sha>` | The handoff commit, pushed for a pull request into the frontend's `main` |
+| Tag `backend-handoff/<backend short sha>` | On the handoff commit. The next run checks with it that the handoff reached `main` |
 
 Never edit or delete an existing backlog item and never mark one done: the frontend owns its
 backlog. A correction to a handed-over task is a new item that names the old one.
 
 ## Steps
 
-0. **Before anything, ask the owner** to sync the AI Studio workspace with GitHub (push or pull
-   all pending work). Unsynced AI Studio work is exactly what a later force push would use to
-   overwrite `main`, dropping the handoff. Wait for the answer.
+0. **Before anything, check that the frontend's `main` is current.** Ask the owner whether the
+   Antigravity work is pushed (the owner may have said so already in this conversation; then
+   do not ask again), and whether the previous handoff pull request (the newest
+   `handoff/backend-*` branch) is merged: `gh pr list --repo <frontend> --head <branch> --state
+   all --json number,state`. If it is still open, ask the owner to merge (or close) it first and
+   wait: a new handoff always starts from the frontend's `main`.
 1. **Pin both sides.** `git fetch` here and pin `sha=$(git rev-parse --short origin/main)`; use
    `git show $sha:<path>` and `$sha` everywhere below. Clone the frontend repository **fresh**
-   into the scratchpad (delete an old clone first: leftover commits must never be pushed again).
+   into the scratchpad (delete an old clone first: leftover commits must never be pushed again)
+   and create the branch at once: `git checkout -b handoff/backend-$sha origin/main`. Every
+   later step works on that branch.
 2. **Check that the previous handoff survived.** Take the newest tag `backend-handoff/*` in the
    clone (`git tag -l 'backend-handoff/*' --sort=-creatordate`); no tag means a first handoff, so
    skip this step. Run `git merge-base --is-ancestor <tag> origin/main`. If it is not an ancestor,
-   AI Studio pushed over it: compare the item files of the tagged commit with the `origin/main`
-   tree, re-add only the missing ones (as new items, see step 5) and tell the owner.
+   the handoff pull request was squashed, closed or overwritten: compare the item files of the
+   tagged commit with the `origin/main` tree, re-add only the missing ones (as new items, see
+   step 5) and tell the owner.
 3. **Find what changed for the client** since the last handed-over backend commit: the sha in the
-   newest tag name (not `docs/BACKEND_HANDOFF.md`, which a force push can roll back). First
+   newest tag name (not `docs/BACKEND_HANDOFF.md` on `main`, whose copy lags behind while a
+   handoff pull request is unmerged, or after a squash). First
    handoff: compare the frontend's `docs/openapi.json` with this repository's:
    - `git log --oneline <last>..$sha -- docs/API.md docs/FRONTEND_GUIDE.md docs/openapi.json`;
    - new or changed paths and schemas between the two `openapi.json` files (a short Python
      comparison of `paths` and `components.schemas`);
    - what the frontend already built (grep its `src/` for the endpoints), so a task does not
-     repeat finished work.
+     repeat finished work;
+   - **client code that relies on an answer whose meaning changed** (grep `src/` for every error
+     code and field the change touched). Example from 2026-11-13: the photo queue retried
+     `IDEMPOTENCY_KEY_REUSED` with a new key, which after the backend change would have brought
+     removed photos back; that needs a correcting item that names the old one.
 4. **Cut tasks** the way a person would review them: one item per user-visible feature (a screen
-   or a flow), small enough for one AI Studio session. Ask the owner only if the cut is unclear.
+   or a flow), small enough for one session of the frontend agent. Ask the owner only if the cut
+   is unclear. Suggest an order when one item fixes something the others build on.
 5. **Write each item** (English, no competitor names) from `docs/backlog/_template.md`:
    - `NNN`: the next number after the highest one among the files in `docs/backlog/` and the
      index rows, zero-padded to 3 digits;
@@ -103,22 +118,25 @@ backlog. A correction to a handed-over task is a new item that names the old one
    - anything else: stop and tell the owner.
 9. **Confirm with the owner**: show the item titles and `git diff --cached --stat`, and push only
    after an explicit yes, unless the owner said beforehand to push without asking.
-10. **Commit, tag and push**: one commit `docs(frontend): hand over <features> from backend
-    $sha`, `git pull --rebase`; if the rebase brought new commits, check again that every new
-    `NNN` is unique and rerun the step 8 guard on `git diff origin/main..HEAD`. Then
-    `git push origin main`, then
-    `git tag backend-handoff/$sha && git push origin backend-handoff/$sha`. Never force-push.
-    Confirm the commit is on `origin/main`.
-11. **Tell the owner** (in Russian, short): the item numbers and titles, and what to say in AI
-    Studio: sync with GitHub first, then the implement phrase from the frontend backlog README
-    with the item number, one item at a time.
+10. **Commit, tag, push and open the pull request**: one commit `docs(frontend): hand over
+    <features> from backend $sha` on the branch of step 1. Then `git fetch`; if `origin/main`
+    moved, `git rebase origin/main`, rerun the step 8 guard on `git diff origin/main..HEAD` and
+    check again that every new `NNN` is unique. Push the branch, then
+    `git tag backend-handoff/$sha && git push origin backend-handoff/$sha`. Open the pull request
+    into the frontend's `main` (`gh pr create --repo <frontend>`) with the items, the suggested
+    order and the request to **merge with a merge commit, not squash** (a squash leaves the
+    tagged commit outside `main`). Never push to the frontend's `main` directly and never
+    force-push.
+11. **Tell the owner** (in Russian, short): the pull request, the item numbers and titles, the
+    suggested order, and what to say in Antigravity after the merge: pull `main`, then the
+    implement phrase from the frontend backlog README with the item number, one item at a time.
 
 ## Notes
 
 - The owner's local folder `docs/frontend/` here is theirs: never read it as a source, never
   stage it.
-- The frontend also works against its mock API (AI Studio has no backend), so every item must
-  keep the mock in step with the contract.
+- The frontend also works against its mock API (the client can run without a backend), so every
+  item must keep the mock in step with the contract.
 - A frontend version that uses a handed-over item must reach `main` here only after the backend
   change is on `main` (docs/FRONTEND_GIT_WORKFLOW.md section 2).
 - If the frontend needs data the contract lacks, that is a `backend-request` issue in this
