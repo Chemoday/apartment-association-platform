@@ -2881,6 +2881,188 @@
         }
       }
     },
+    "/api/v1/meters/apartments/{apartment_id}/consumption": {
+      "get": {
+        "tags": [
+          "meters"
+        ],
+        "summary": "Apartment Consumption",
+        "description": "An apartment's consumption per month for a chart: staff, or the apartment's members.",
+        "operationId": "apartment_consumption_api_v1_meters_apartments__apartment_id__consumption_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "apartment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Apartment Id"
+            }
+          },
+          {
+            "name": "months",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 24,
+              "minimum": 1,
+              "description": "How many of the building's latest periods (1-24).",
+              "default": 12,
+              "title": "Months"
+            },
+            "description": "How many of the building's latest periods (1-24)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApartmentConsumptionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `APARTMENT_NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meters/consumption": {
+      "get": {
+        "tags": [
+          "meters"
+        ],
+        "summary": "Building Consumption",
+        "description": "The building's consumption and averages per month: chairman, board and accountant.",
+        "operationId": "building_consumption_api_v1_meters_consumption_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "months",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 24,
+              "minimum": 1,
+              "description": "How many of the building's latest periods (1-24).",
+              "default": 12,
+              "title": "Months"
+            },
+            "description": "How many of the building's latest periods (1-24)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildingConsumptionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meters/periods": {
       "get": {
         "tags": [
@@ -9895,6 +10077,100 @@
         ],
         "title": "ApartmentCard"
       },
+      "ApartmentConsumptionMonth": {
+        "properties": {
+          "period_code": {
+            "type": "string",
+            "title": "Period Code"
+          },
+          "consumption": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+\\.[0-9]{3}$",
+                "examples": [
+                  "1254.000"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumption"
+          },
+          "estimated": {
+            "type": "boolean",
+            "title": "Estimated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period_code",
+          "consumption",
+          "estimated"
+        ],
+        "title": "ApartmentConsumptionMonth"
+      },
+      "ApartmentConsumptionResponse": {
+        "properties": {
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Apartment Id"
+          },
+          "apartment_number": {
+            "type": "string",
+            "title": "Apartment Number"
+          },
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/PeriodDTO"
+            },
+            "type": "array",
+            "title": "Periods"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/ApartmentConsumptionSeries"
+            },
+            "type": "array",
+            "title": "Resources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "apartment_id",
+          "apartment_number",
+          "periods",
+          "resources"
+        ],
+        "title": "ApartmentConsumptionResponse",
+        "description": "One apartment's consumption per month, ready for a chart; never building averages."
+      },
+      "ApartmentConsumptionSeries": {
+        "properties": {
+          "resource_type": {
+            "$ref": "#/components/schemas/ResourceType"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/MeterUnit"
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/ApartmentConsumptionMonth"
+            },
+            "type": "array",
+            "title": "Months"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resource_type",
+          "unit",
+          "months"
+        ],
+        "title": "ApartmentConsumptionSeries"
+      },
       "ApartmentListResponse": {
         "properties": {
           "apartments": {
@@ -10233,6 +10509,126 @@
         ],
         "title": "BoardStatus",
         "description": "The statuses the board sets (REPORTED and WITHDRAWN belong to the reporter)."
+      },
+      "BuildingConsumptionMonth": {
+        "properties": {
+          "period_code": {
+            "type": "string",
+            "title": "Period Code"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+\\.[0-9]{3}$",
+                "examples": [
+                  "1254.000"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "apartments_counted": {
+            "type": "integer",
+            "title": "Apartments Counted"
+          },
+          "average_per_apartment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+\\.[0-9]{3}$",
+                "examples": [
+                  "1254.000"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Per Apartment"
+          },
+          "average_per_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+\\.[0-9]{4}$",
+                "examples": [
+                  "0.0951"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Per M2"
+          },
+          "estimated_readings": {
+            "type": "integer",
+            "title": "Estimated Readings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period_code",
+          "total",
+          "apartments_counted",
+          "average_per_apartment",
+          "average_per_m2",
+          "estimated_readings"
+        ],
+        "title": "BuildingConsumptionMonth"
+      },
+      "BuildingConsumptionResponse": {
+        "properties": {
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/PeriodDTO"
+            },
+            "type": "array",
+            "title": "Periods"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/BuildingConsumptionSeries"
+            },
+            "type": "array",
+            "title": "Resources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periods",
+          "resources"
+        ],
+        "title": "BuildingConsumptionResponse",
+        "description": "The building's apartment meters per month (staff only); master meters are left out."
+      },
+      "BuildingConsumptionSeries": {
+        "properties": {
+          "resource_type": {
+            "$ref": "#/components/schemas/ResourceType"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/MeterUnit"
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/BuildingConsumptionMonth"
+            },
+            "type": "array",
+            "title": "Months"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resource_type",
+          "unit",
+          "months"
+        ],
+        "title": "BuildingConsumptionSeries"
       },
       "BuildingResponse": {
         "properties": {

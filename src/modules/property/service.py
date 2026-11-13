@@ -470,6 +470,13 @@ class PropertyService:
             for a in apartments
         ]
 
+    async def apartment_areas(self, building_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
+        """The recorded area (m2) of each apartment of a building, for consumption per m2."""
+        rows = await self.session.execute(
+            select(Apartment.id, Apartment.area_m2).where(Apartment.building_id == building_id)
+        )
+        return {apartment_id: area for apartment_id, area in rows}
+
     # --- Privacy masker for other modules -------------------------------------------------------
 
     async def get_masked_author_badge(

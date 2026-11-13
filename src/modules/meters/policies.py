@@ -7,7 +7,7 @@ import calendar
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
@@ -121,6 +121,45 @@ def rolling_average_delta(historical_deltas: Sequence[Decimal]) -> Decimal | Non
         return None
     average = sum(usable, start=Decimal(0)) / len(usable)
     return canonical_meter_value(average.quantize(METER_PRECISION, rounding=ROUND_HALF_UP))
+
+
+# --- Consumption per month (docs/API.md section 3) ----------------------------------------------
+
+AREA_RATE_PRECISION = Decimal("0.0001")  # consumption per m2: 4 decimals
+_CONSUMPTION_DIGITS = 60  # any building's sums and areas, far beyond NUMERIC(12, 3)
+
+
+def total_consumption(deltas: Iterable[Decimal]) -> Decimal:
+    """The exact sum of consumption deltas with 3 decimals (never -0)."""
+    with localcontext() as context:
+        context.prec = _CONSUMPTION_DIGITS
+        total = sum((_require_decimal("delta", delta) for delta in deltas), start=Decimal("0.000"))
+    return canonical_meter_value(total.quantize(METER_PRECISION))
+
+
+def average_per_apartment(total: Decimal, apartments: int) -> Decimal | None:
+    """The total over the apartments that have a reading, 3 decimals rounded half up."""
+    if apartments <= 0:
+        return None
+    with localcontext() as context:
+        context.prec = _CONSUMPTION_DIGITS
+        average = (_require_decimal("total", total) / apartments).quantize(
+            METER_PRECISION, rounding=ROUND_HALF_UP
+        )
+    return canonical_meter_value(average)
+
+
+def consumption_per_area(total: Decimal, area_m2: Decimal) -> Decimal | None:
+    """The total per m2 of the counted apartments, 4 decimals rounded half up; None without area."""
+    area_m2 = _require_decimal("area_m2", area_m2)
+    if area_m2 <= 0:
+        return None
+    with localcontext() as context:
+        context.prec = _CONSUMPTION_DIGITS
+        rate = (_require_decimal("total", total) / area_m2).quantize(
+            AREA_RATE_PRECISION, rounding=ROUND_HALF_UP
+        )
+    return rate.copy_abs() if rate.is_zero() else rate
 
 
 # --- Period state machine ------------------------------------------------------------------------
