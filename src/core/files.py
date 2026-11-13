@@ -84,7 +84,16 @@ DAY = timedelta(days=1)
 # Photos may not use the last 20% of the quota: it stays for documents and official votes.
 PHOTO_SHARE_OF_QUOTA = 0.8
 # Bodies received at once, photos being re-encoded at once, and photos waiting for that.
-MAX_BODIES_IN_FLIGHT = 8
+MAX_BODIES_IN_FLIGHT = 16
+# One account cannot hold the pool: at most this many of its bodies at once.
+MAX_BODIES_PER_USER = 2
+# A body must arrive within this time (the edge's read_body limit), else 408; a stalled client
+# never keeps its slot.
+UPLOAD_READ_SECONDS = 180
+# Deleted files still use the disk until they are purged; they may fill at most this share of the
+# quota (a whole quota: an ordinary clean-up never blocks uploads), so deleting and uploading
+# again in a loop keeps the disk at most at twice the quota.
+PENDING_DELETION_SHARE = 1.0
 MAX_CONCURRENT_PHOTOS = 1
 MAX_QUEUED_PHOTOS = 4
 BUSY_RETRY_SECONDS = 5
@@ -310,6 +319,16 @@ def _quota_exceeded() -> DomainError:
     )
 
 
+def _deletions_pending() -> DomainError:
+    return DomainError(
+        status_code=507,
+        error_code="STORAGE_QUOTA_EXCEEDED",
+        message="Many files were deleted recently and still use the disk until they are erased "
+        "(within 14 days); uploads resume then.",
+        extra={"reason": "DELETIONS_PENDING"},
+    )
+
+
 def _low_disk() -> DomainError:
     return DomainError(
         status_code=507,
@@ -331,6 +350,14 @@ def key_reused() -> DomainError:
         status_code=409,
         error_code="IDEMPOTENCY_KEY_REUSED",
         message="This Idempotency-Key was used for another file; send a new key for every file.",
+    )
+
+
+def _too_slow() -> DomainError:
+    return DomainError(
+        status_code=408,
+        error_code="UPLOAD_TIMEOUT",
+        message="The file did not arrive in time; send it again on a better connection.",
     )
 
 
@@ -380,15 +407,19 @@ def require_content_type(request: Request, expected: str) -> None:
 
 
 async def read_body(request: Request, length: int, cap: int) -> bytes:
-    """Read at most the declared length; a longer body is cut off with 413."""
+    """Read at most the declared length within UPLOAD_READ_SECONDS; a longer body is cut off
+    with 413, a slower one with 408."""
     body = bytearray()
     try:
-        async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > length or len(body) > cap:
-                raise _too_large(min(length, cap))
+        async with asyncio.timeout(UPLOAD_READ_SECONDS):
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > length or len(body) > cap:
+                    raise _too_large(min(length, cap))
     except ClientDisconnect as exc:  # common on a mobile network; not a server error
         raise _interrupted() from exc
+    except TimeoutError as exc:
+        raise _too_slow() from exc
     return bytes(body)
 
 
@@ -418,42 +449,49 @@ class ReceivedFile:
 async def receive_to_disk(
     request: Request, disk: "LocalDisk", length: int, cap: int, signature: bytes
 ) -> ReceivedFile:
-    """Stream a body to a temporary file: at most the declared length and the cap, fsynced, and
-    starting with `signature` (else 415, and nothing stays on disk)."""
+    """Stream a body to a temporary file within UPLOAD_READ_SECONDS: at most the declared length
+    and the cap, fsynced, and starting with `signature` (else 415, 413 or 408, and nothing stays
+    on disk)."""
     path = disk.new_temporary()
     digest = hashlib.sha256()
-    size = 0
-    head = b""
-    buffer = bytearray()
     try:
         handle = await asyncio.to_thread(open, path, "wb")
     except OSError as exc:  # a full disk or too many open files: nothing was written
         if exc.errno == errno.ENOSPC:
             raise _low_disk() from exc
         raise
-    try:
-        try:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                if len(head) < len(signature):
-                    head += chunk[: len(signature) - len(head)]
-                    if not signature.startswith(head):
-                        raise _not_that_type()
-                size += len(chunk)
-                if size > length or size > cap:
-                    raise _too_large(min(length, cap))
-                digest.update(chunk)
-                buffer.extend(chunk)
-                if len(buffer) >= WRITE_BUFFER:  # one hand-off to a thread per MB, not per chunk
-                    await asyncio.to_thread(handle.write, bytes(buffer))
-                    buffer.clear()
-        except ClientDisconnect as exc:
-            raise _interrupted() from exc
+
+    async def stream() -> int:
+        size, head, buffer = 0, b"", bytearray()
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            if len(head) < len(signature):
+                head += chunk[: len(signature) - len(head)]
+                if not signature.startswith(head):
+                    raise _not_that_type()
+            size += len(chunk)
+            if size > length or size > cap:
+                raise _too_large(min(length, cap))
+            digest.update(chunk)
+            buffer.extend(chunk)
+            if len(buffer) >= WRITE_BUFFER:  # one hand-off to a thread per MB, not per chunk
+                await asyncio.to_thread(handle.write, bytes(buffer))
+                buffer.clear()
         if head != signature:
             raise _not_that_type()
         if buffer:
             await asyncio.to_thread(handle.write, bytes(buffer))
+        return size
+
+    try:
+        try:
+            async with asyncio.timeout(UPLOAD_READ_SECONDS):
+                size = await stream()
+        except ClientDisconnect as exc:  # common on a mobile network; not a server error
+            raise _interrupted() from exc
+        except TimeoutError as exc:
+            raise _too_slow() from exc
         await asyncio.to_thread(_flush_and_sync, handle)
         await asyncio.to_thread(handle.close)
     except BaseException as exc:
@@ -658,18 +696,25 @@ class UploadGate:
 
     def __init__(self) -> None:
         self._bodies = 0
+        self._bodies_of: defaultdict[uuid.UUID, int] = defaultdict(int)
         self._photo_slots = asyncio.Semaphore(MAX_CONCURRENT_PHOTOS)
         self._photos_waiting = 0
 
     @contextlib.contextmanager
-    def receiving(self) -> Iterator[None]:
-        if self._bodies >= MAX_BODIES_IN_FLIGHT:
+    def receiving(self, user_id: uuid.UUID) -> Iterator[None]:
+        """One body being received: at most MAX_BODIES_IN_FLIGHT in all and MAX_BODIES_PER_USER
+        of one account, so a single account that stalls its uploads cannot block everyone."""
+        if self._bodies >= MAX_BODIES_IN_FLIGHT or self._bodies_of[user_id] >= MAX_BODIES_PER_USER:
             raise busy()
         self._bodies += 1
+        self._bodies_of[user_id] += 1
         try:
             yield
         finally:
             self._bodies -= 1
+            self._bodies_of[user_id] -= 1
+            if self._bodies_of[user_id] <= 0:
+                del self._bodies_of[user_id]
 
     async def reencode(self, data: bytes) -> EncodedPhoto:
         if self._photos_waiting >= MAX_CONCURRENT_PHOTOS + MAX_QUEUED_PHOTOS:
@@ -896,6 +941,8 @@ class FileStore:
         limit = class_limit(self.limits.quota_bytes, PURPOSE_CLASS[purpose])
         if used + self.reservations.held(building_id) + cap > limit:
             raise _quota_exceeded()
+        if await self._pending(building_id) > self.limits.quota_bytes * PENDING_DELETION_SHARE:
+            raise _deletions_pending()
         if PURPOSE_CLASS[purpose] != QuotaClass.PHOTOS:
             return  # the daily limit is for the residents' stream; staff files have the quota
         now = _now()
@@ -915,10 +962,22 @@ class FileStore:
             raise _daily_limit(max(1, int((oldest + DAY - now).total_seconds()) + 1))
 
     async def _used(self, building_id: uuid.UUID) -> int:
+        """The live files of a building: what the quota counts. A deleted file frees its room
+        at once; until it is purged it counts against PENDING_DELETION_SHARE instead."""
         return int(
             await self.session.scalar(
                 select(func.coalesce(func.sum(StoredFile.size_bytes), 0)).where(
-                    StoredFile.building_id == building_id
+                    StoredFile.building_id == building_id, StoredFile.deleted_at.is_(None)
+                )
+            )
+            or 0
+        )
+
+    async def _pending(self, building_id: uuid.UUID) -> int:
+        return int(
+            await self.session.scalar(
+                select(func.coalesce(func.sum(StoredFile.size_bytes), 0)).where(
+                    StoredFile.building_id == building_id, StoredFile.deleted_at.is_not(None)
                 )
             )
             or 0
@@ -1088,11 +1147,12 @@ class FileStore:
         by_class: dict[QuotaClass, int] = dict.fromkeys(QuotaClass, 0)
         used = pending = 0
         for purpose, size, deleted in rows:
-            used += int(size or 0)  # every row, like the quota check
+            live = int(size or 0) - int(deleted or 0)
+            used += live  # the live files, like the quota check
             pending += int(deleted or 0)
             purpose_known = _known_purpose(purpose)
             if purpose_known is not None:  # an unknown purpose is in the total only
-                by_class[PURPOSE_CLASS[purpose_known]] += int(size or 0)
+                by_class[PURPOSE_CLASS[purpose_known]] += live
         quota = self.limits.quota_bytes
         return FileUsage(
             quota_bytes=quota,
@@ -1262,7 +1322,10 @@ async def janitor_tick(
         if quota_bytes is not None:  # usage fell well below a threshold: it may be told again
             used = (
                 select(func.coalesce(func.sum(StoredFile.size_bytes), 0))
-                .where(StoredFile.building_id == FileAlert.building_id)
+                .where(
+                    StoredFile.building_id == FileAlert.building_id,
+                    StoredFile.deleted_at.is_(None),
+                )
                 .scalar_subquery()
             )
             await session.execute(

@@ -522,7 +522,7 @@ class IssuesService:
         length = declared_length(request, PHOTO_MAX_BYTES)
         await self.session.commit()
         with files.reservations.hold(user.building_id, length):
-            with files.gate.receiving():
+            with files.gate.receiving(user.id):
                 data = await read_body(request, length, PHOTO_MAX_BYTES)
             photo = await files.gate.reencode(data)
             issue = await self._photo_target(user, issue_id, lock=True)

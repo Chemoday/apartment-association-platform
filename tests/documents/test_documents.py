@@ -200,7 +200,7 @@ async def test_what_is_not_an_acceptable_document(
     assert await titles(api_client, world.chairman) == []
 
 
-@pytest.mark.parametrize("title", ["   ", "a\x00b", "x" * 201])
+@pytest.mark.parametrize("title", ["   ", "a\x00b", "x" * 201, "line\nbreak", "tab\there", "cr\rx"])
 async def test_a_title_must_be_text(api_client: AsyncClient, world: IssueWorld, title: str) -> None:
     response = await upload(api_client, world.chairman, title=title)
 
@@ -364,3 +364,17 @@ async def test_a_title_in_another_script_still_downloads_with_a_readable_fallbac
     file = await api_client.get(f"{API}/{document['id']}/file", headers=as_user(world.chairman))
 
     assert 'filename="document.pdf"' in file.headers["content-disposition"]
+
+
+async def test_an_edited_title_must_be_one_line_too(
+    api_client: AsyncClient, world: IssueWorld
+) -> None:
+    document = await uploaded(api_client, world.chairman)
+
+    response = await api_client.patch(
+        f"{API}/{document['id']}",
+        json={"title": "a\r\n<script>x</script>"},
+        headers=as_user(world.chairman),
+    )
+
+    assert (response.status_code, response.json()["error_code"]) == (422, "VALIDATION_ERROR")

@@ -45,6 +45,7 @@ from src.modules.documents.schemas import (
     DocumentCategory,
     DocumentEdit,
     DocumentView,
+    single_line,
 )
 from src.modules.property.schemas import CurrentUserDTO
 from src.modules.property.service import PropertyService, get_property_service
@@ -79,7 +80,7 @@ def _invalid_title(message: str) -> DomainError:
 
 def _clean_title(title: str) -> str:
     try:
-        cleaned = clean_required_text(title)
+        cleaned = single_line(clean_required_text(title))
     except ValueError as exc:
         raise _invalid_title(str(exc)) from exc
     if len(cleaned) > TITLE_MAX:
@@ -125,7 +126,7 @@ class DocumentsService:
         length = declared_length(request, DOCUMENT_MAX_BYTES)
         await self.session.commit()
         with self.files.reservations.hold(user.building_id, length):
-            with self.files.gate.receiving():
+            with self.files.gate.receiving(user.id):
                 received = await receive_to_disk(
                     request, self.files.disk, length, DOCUMENT_MAX_BYTES, PDF_SIGNATURE
                 )

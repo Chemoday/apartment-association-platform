@@ -6498,6 +6498,16 @@
               }
             }
           },
+          "408": {
+            "description": "Request timeout. error_code: `UPLOAD_TIMEOUT`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Conflict with the current state. error_code: `ISSUE_ENDED`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED`",
             "content": {
@@ -8131,6 +8141,16 @@
           },
           "400": {
             "description": "Bad request. error_code: `UPLOAD_INTERRUPTED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request timeout. error_code: `UPLOAD_TIMEOUT`",
             "content": {
               "application/json": {
                 "schema": {

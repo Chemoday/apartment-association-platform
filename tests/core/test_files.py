@@ -5,6 +5,7 @@ tested in tests/issues/test_photos.py.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import os
 import time
@@ -417,7 +418,7 @@ async def test_the_gate_answers_busy_instead_of_queueing_without_end() -> None:
     assert caught.value.status_code == 429
     assert started == 5  # one at a time, the four waiting ones after it
 
-    with gate.receiving():
+    with gate.receiving(uuid.uuid4()):
         pass
 
 
@@ -638,3 +639,74 @@ async def test_a_foreign_key_failure_is_not_mistaken_for_a_repeated_key(
         )
 
     assert list(disk.blob_ages()) == []  # the moved blob is removed again
+
+
+def test_one_account_cannot_hold_the_whole_upload_pool() -> None:
+    from src.core.files import MAX_BODIES_IN_FLIGHT, MAX_BODIES_PER_USER
+
+    gate = UploadGate()
+    attacker, neighbour = uuid.uuid4(), uuid.uuid4()
+    with contextlib.ExitStack() as held:
+        for _ in range(MAX_BODIES_PER_USER):
+            held.enter_context(gate.receiving(attacker))
+        with pytest.raises(DomainError) as caught:
+            held.enter_context(gate.receiving(attacker))
+        assert caught.value.status_code == 429
+        with gate.receiving(neighbour):  # everyone else still gets a slot
+            pass
+    others = [uuid.uuid4() for _ in range(MAX_BODIES_IN_FLIGHT)]
+    with contextlib.ExitStack() as held:
+        for user in others:
+            held.enter_context(gate.receiving(user))
+        with pytest.raises(DomainError):
+            held.enter_context(gate.receiving(uuid.uuid4()))
+
+
+async def test_a_stalled_body_times_out_and_leaves_nothing(
+    disk: LocalDisk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import src.core.files as files_module
+    from src.core.files import receive_to_disk
+
+    monkeypatch.setattr(files_module, "UPLOAD_READ_SECONDS", 0.2)
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": b"%PDF-1.7", "more_body": True}
+        await asyncio.sleep(10)  # the client stops sending
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {"type": "http", "method": "POST", "path": "/", "headers": []}
+    with pytest.raises(DomainError) as caught:
+        await receive_to_disk(Request(scope, receive), disk, 1000, 1000, b"%PDF-")
+    with pytest.raises(DomainError) as photo:
+        sent = False
+        await read_body(Request(scope, receive), 1000, 1000)
+
+    assert (caught.value.status_code, caught.value.error_code) == (408, "UPLOAD_TIMEOUT")
+    assert photo.value.error_code == "UPLOAD_TIMEOUT"
+    assert list(disk.tmp.iterdir()) == []
+
+
+async def test_deleting_frees_room_at_once_but_deletions_are_bounded(
+    db_session: AsyncSession, disk: LocalDisk, owner
+) -> None:
+    building, user = owner
+    files = make_store(db_session, disk, FILES_QUOTA_MB=10, FILES_USER_MB_PER_DAY=100)
+    big = EncodedPhoto(display=b"D" * (7 * MB), thumb=b"T", width=1, height=1)
+    stored, _ = await store(files, building, user, photo=big)
+    with pytest.raises(DomainError):
+        await files.admit(building.id, user.id, PURPOSE, 4 * MB)
+
+    await files.delete(stored.id, PURPOSE, stored.owner_ref)
+
+    await files.admit(building.id, user.id, PURPOSE, 4 * MB)  # the room is free again
+    # Deleting and uploading again cannot fill the disk: deleted bytes are capped too.
+    again, _ = await store(files, building, user, photo=EncodedPhoto(b"D" * (6 * MB), b"", 1, 1))
+    await files.delete(again.id, PURPOSE, again.owner_ref)
+    with pytest.raises(DomainError) as caught:
+        await files.admit(building.id, user.id, PURPOSE, 1 * MB)
+    assert (caught.value.status_code, caught.value.extra["reason"]) == (507, "DELETIONS_PENDING")
