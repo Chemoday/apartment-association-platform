@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -15,6 +16,13 @@ from src.core.demo import router as demo_router
 from src.core.domain_events import run_relay_loop
 from src.core.event_bus import InMemoryEventBus
 from src.core.exceptions import register_exception_handlers
+from src.core.files import (
+    LocalDisk,
+    Reservations,
+    UploadGate,
+    run_janitor_loop,
+    validate_files_settings,
+)
 from src.core.frontend import mount_frontend
 from src.core.headers import SecurityHeadersMiddleware
 from src.core.health import router as health_router
@@ -48,6 +56,8 @@ from src.plugins.registry import build_plugin_registry
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
+    # Uploaded files: empty tmp/ and prove FILES_DIR writable, else the server does not start.
+    await asyncio.to_thread(app.state.file_disk.prepare)
     loops: list[asyncio.Task[None]] = []
     if settings.DOMAIN_EVENTS_RELAY_ENABLED:
         loops.append(
@@ -80,6 +90,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         loops.append(
             asyncio.create_task(
                 run_opener_loop(app.state.meters_period_opener), name="meters-period-opener"
+            )
+        )
+    if settings.FILES_JANITOR_ENABLED:
+        loops.append(
+            asyncio.create_task(
+                run_janitor_loop(
+                    lambda: app.state.files_session_factory, lambda: app.state.file_disk
+                ),
+                name="files-janitor",
             )
         )
     if settings.AUTH_CLEANUP_ENABLED:
@@ -138,6 +157,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     validate_auth_settings(settings, plugins)  # no app without the secrets of every sign-in
     get_settings_registry()  # a wrong setting declaration fails here, not on first use
     auth_catalog()  # a broken messages.csv fails now, not after a 202
+    # Uploaded files (E11).
+    validate_files_settings(settings)
+    app.state.file_disk = LocalDisk(Path(settings.FILES_DIR))
+    app.state.file_disk.ensure_layout()  # emptying tmp/ and the write probe run at startup
+    app.state.upload_gate = UploadGate()
+    app.state.file_reservations = Reservations()
+    app.state.files_session_factory = async_session_factory  # the janitor; tests swap it
     app.state.auth_background = BackgroundWork()
     app.state.auth_passwords = PasswordHashing()  # at most 2 Argon2id hashes at once
     if settings.NOTIFICATIONS_ENABLED:

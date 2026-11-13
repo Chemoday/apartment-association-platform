@@ -7,6 +7,7 @@ Each module that introduces models MUST add its import here (see docs/BACKEND_CO
 from src.core.building_settings import BuildingSettingChange, BuildingSettingRecord  # noqa: F401
 from src.core.database import Base
 from src.core.domain_events import DomainEventRecord  # noqa: F401
+from src.core.files import StoredFile  # noqa: F401
 from src.modules.auth.models import (  # noqa: F401
     AuthAttempt,
     AuthInvitation,

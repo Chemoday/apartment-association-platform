@@ -28,8 +28,13 @@ services:
       NOTIFICATIONS_HASH_SECRET: local-only-notifications-hash-secret-0123456789
       SEED_DEMO_DATA: "true"
       LOG_LEVEL: INFO
+      # Uploaded files (epic E11) in a named volume; uploads work in the local demo.
+      FILES_DIR: /data/files
+      FILES_IN_DEMO: "true"
       # Traces, metrics and logs go to the collector, then to Grafana (docs/OBSERVABILITY.md).
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - files:/data/files
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
@@ -92,3 +97,4 @@ services:
 
 volumes:
   pgdata:
+  files:

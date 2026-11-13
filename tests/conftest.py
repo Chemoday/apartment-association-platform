@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 # Demo impersonation is off by default; the suite authenticates with X-Demo-User-Id. This must be
 # set before src.core.config builds the cached settings on import.
@@ -11,6 +12,13 @@ os.environ.setdefault("AUTH_HASH_SECRET", "test-only-auth-hash-secret-at-least-3
 os.environ.setdefault("NOTIFICATIONS_HASH_SECRET", "test-only-notifications-secret-32-bytes")
 os.environ.setdefault("AUTH_ALLOW_SESSIONLESS_TOKENS", "true")
 os.environ.setdefault("AUTH_CLEANUP_ENABLED", "false")
+# Uploaded files go to a throwaway directory; the janitor runs only when a test calls its tick.
+os.environ.setdefault("FILES_DIR", tempfile.mkdtemp(prefix="aap-test-files-"))
+os.environ.setdefault("FILES_JANITOR_ENABLED", "false")
+os.environ.setdefault("FILES_IN_DEMO", "true")
+os.environ.setdefault(
+    "FILES_MIN_FREE_MB", "0"
+)  # a nearly full disk of a dev machine is no reason to fail
 
 # Metric readers can only be attached when the global meter provider is created, and importing
 # src.main creates an app (and the provider) right away. So register the test reader first.
@@ -150,6 +158,7 @@ def db_app(app: FastAPI, db_session: AsyncSession) -> Iterator[FastAPI]:
     app.state.auth_session_factory = subscriber_session  # background work of module auth
     app.state.maintenance_session_factory = subscriber_session  # the publisher's ticks
     app.state.meters_session_factory = subscriber_session  # the period opener's ticks
+    app.state.files_session_factory = subscriber_session  # the files janitor's ticks
     yield app
     app.dependency_overrides.pop(get_db_session, None)
 

@@ -14,3 +14,5 @@ incidents/
 # Client build output (frontend/ itself is synced from the frontend repository)
 frontend/node_modules/
 frontend/dist/
+# Uploaded files of a local run without Docker (FILES_DIR)
+var/

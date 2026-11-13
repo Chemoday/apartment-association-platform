@@ -49,6 +49,20 @@ def test_backend_runs_read_only_with_a_small_tmpfs() -> None:
     assert backend["cpus"] == 2
 
 
+def test_backend_keeps_uploaded_files_in_the_host_directory_of_its_environment() -> None:
+    backend = _compose("docker-compose.deploy.yml")["services"]["backend"]
+
+    [mount] = backend["volumes"]
+    assert mount["type"] == "bind"
+    assert mount["source"] == "${AAP_ROOT:-/opt/aap}/${APP_ENV}/files"
+    assert mount["target"] == backend["environment"]["FILES_DIR"] == "/data/files"
+    # A missing directory must fail the deploy, not become an empty root-owned one.
+    assert mount["bind"]["create_host_path"] is False
+    assert backend["environment"]["FILES_IN_DEMO"] == "${FILES_IN_DEMO:-false}"
+    deploy_script = (DEPLOY / "deploy.sh").read_text()
+    assert 'if [[ "$ENV_NAME" == dev ]]; then export FILES_IN_DEMO=true' in deploy_script
+
+
 def test_database_caps_its_write_ahead_log_and_temp_files() -> None:
     db = _compose("docker-compose.deploy.yml")["services"]["db"]
 

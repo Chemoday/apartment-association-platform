@@ -29,8 +29,11 @@ COPY alembic ./alembic
 COPY src ./src
 COPY --from=frontend /frontend/dist ./frontend/dist
 
+# /data/files: uploaded files (epic E11). A named volume mounted there takes this owner; on the
+# VPS it is a host directory owned by uid 1000 (deploy/bootstrap.sh).
 RUN useradd --system --uid 1000 --no-create-home app \
-    && chmod +x entrypoint.sh
+    && chmod +x entrypoint.sh \
+    && install -d -o app -g app -m 700 /data/files
 USER app
 
 EXPOSE 8000
