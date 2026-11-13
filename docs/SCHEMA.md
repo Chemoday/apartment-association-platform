@@ -787,7 +787,7 @@ expects. The bytes live on disk, never in the database. Migration 022.*
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
 | `building_id` | `UUID` | `PK`, `FK(property_buildings.id) ON DELETE CASCADE` | |
-| `threshold` | `INTEGER` | `PK, CHECK IN (80, 95)` | Percent of the quota |
+| `threshold` | `INTEGER` | `PK, CHECK IN (70, 90)` | Percent of the room for files (the quota minus the reserve for official votes) |
 | `reached_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 
 - A row is inserted (and the event `StorageUsageHigh` stored with it) when a stored file brings

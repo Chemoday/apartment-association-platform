@@ -428,7 +428,8 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
   to start when `FILES_DIR` is not writable (a deploy then rolls back). Emptying `tmp/` never
   happens at import, so a one-off command in the running container cannot break an upload.
 - **Usage and alerts** (task F4): `GET /api/v1/files/usage` (core router, the chairman and the
-  board). When a stored file brings a building to 80% or 95% of its quota, the store inserts a
+  board). When a stored file brings a building to 70% or 90% of its room for files (the quota
+  minus the votes reserve, so both fire before uploads are refused), the store inserts a
   `core_file_alerts` row and adds the durable event `StorageUsageHigh` (`src/core/file_events.py`)
   to the request's outbox; `notifications` turns it into `STORAGE_ALMOST_FULL` for the chairman
   and the board. The janitor deletes the row when the usage is 10 points below the threshold,

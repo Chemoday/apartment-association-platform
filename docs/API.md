@@ -694,7 +694,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
 | `MAINTENANCE_DUE` | the maintenance calendar published a task or reminded of an overdue one (section 11): the chairman and the board members | no |
 | `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target and the chairman and the board members (also without an apartment), once each, never its author | no |
-| `STORAGE_ALMOST_FULL` | the association's files reached 80% or 95% of its quota (section 12, epic E11 task F4): the chairman and the board members, once per threshold until the usage falls well below it again | no |
+| `STORAGE_ALMOST_FULL` | the association's files filled 70% or 90% of the room for files (section 12, epic E11 task F4): the chairman and the board members, once per threshold until the usage falls well below it again | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -806,7 +806,8 @@ reports, but not for urgent ones (epic E9).
   the merge notice, whose `status` is `DUPLICATE`); `MAINTENANCE_DUE` `occurrence_id`,
   `due_date`, `overdue` and `reminder_number` (0 for the publication; the title is loaded with
   the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`); `STORAGE_ALMOST_FULL`
-  `threshold` (80 or 95), `used_percent` (an integer).
+  `threshold` (70 or 90, percent of the room for files), `used_percent` (an integer, percent of
+  the whole quota, as `GET /api/v1/files/usage` shows it).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -2249,12 +2250,16 @@ How much of the association's quota its files use:
 }
 ```
 - `used_bytes` counts every stored file, also deleted ones that are not erased yet
-  (`pending_deletion_bytes`, erased within 14 days). `used_percent` is rounded down.
+  (`pending_deletion_bytes`, erased within 14 days): they still use the disk and the quota, so
+  deleting frees room only after those 14 days. `used_percent` is rounded down.
 - `categories`: the bytes of each class and the most it may fill (photos 80% of the quota,
   documents everything except the reserve for official votes). More categories come with later
   tasks.
-- At 80% and at 95% the chairman and the board get `STORAGE_ALMOST_FULL` (section 6), once per
-  threshold; it can come again only after the usage fell at least 10 points below it.
+- **The room for files** is the quota minus the reserve for official votes (what photos and
+  documents together may fill; photos stop earlier, at 80% of the quota). When the files fill 70%
+  and 90% of that room, the chairman and the board get `STORAGE_ALMOST_FULL` (section 6), once
+  per threshold, early enough to act before uploads are refused; it can come again only after the
+  usage fell at least 10 points below it.
 - Anyone else: `403 FORBIDDEN`.
 
 ### Error codes of this section

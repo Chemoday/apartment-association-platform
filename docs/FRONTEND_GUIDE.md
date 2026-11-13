@@ -646,7 +646,8 @@ Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
   ("Photos", "Documents"; translate, show an unknown one by its name) with its bytes. Mention
   `pending_deletion_bytes` as "of which deleted, erased within 14 days" when it is not zero.
 - **The notification** `STORAGE_ALMOST_FULL` (`subject_type` `storage`, open the storage block):
-  "The association's files use {used_percent}% of its storage. Delete old documents or ask the
-  operator for more room." Show it to the chairman and the board only in the preferences; the
+  "The association's files use {used_percent}% of its storage. Deleted files free their room after
+  14 days; ask the operator of the server if more room is needed." It comes at 70% and 90% of the
+  room for files, before uploads are refused. Show it to the chairman and the board only in the preferences; the
   matrix now has **52** rows (it had 48).
 
