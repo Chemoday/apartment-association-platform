@@ -70,7 +70,7 @@ jobs:
           if [ -f package.json ]; then echo "present=true" >> "$GITHUB_OUTPUT"
           else echo "present=false" >> "$GITHUB_OUTPUT"; echo "No client in frontend/ yet."; fi
 
-      # The client uses bun (bun.lock, as Google AI Studio creates it); its tests run on Node.
+      # The client uses bun (bun.lock at the root of the frontend); its tests run on Node.
       - if: steps.detect.outputs.present == 'true'
         uses: actions/setup-node@v4
         with:

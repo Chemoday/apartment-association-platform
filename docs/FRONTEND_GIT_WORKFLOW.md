@@ -1,12 +1,14 @@
-# Frontend Git Workflow (Google AI Studio → GitHub → dev)
+# Frontend Git Workflow (Antigravity → GitHub → dev)
 
-Rules for everyone who commits frontend code: Google AI Studio, the frontend agent and people.
+Rules for everyone who commits frontend code: the frontend agent in Google Antigravity and people.
+Until 2026-11-13 the client was built in Google AI Studio; the rules below that mention it apply
+to any tool that rewrites and force-pushes a whole repository.
 The code rules are in [FRONTEND_GUIDE.md](FRONTEND_GUIDE.md) and the API contract is
 [openapi.json](openapi.json); this file only covers repositories, commits and how a change reaches
 dev.
 
 ```text
-Google Stitch (mockup) ──► Google AI Studio (Build) ◄──two-way sync──► frontend repository
+Google Stitch (mockup) ──► Antigravity (local checkout) ──branches + PRs──► frontend repository
                                                                             │ Frontend sync workflow
                                                                             ▼
      this repository: branch frontend/sync ──► PR into main ──► CI (lint, test, build, pytest)
@@ -19,33 +21,33 @@ Google Stitch (mockup) ──► Google AI Studio (Build) ◄──two-way sync�
 
 | Repository | Owner of the content | Contains |
 | :--- | :--- | :--- |
-| **Frontend repository** (separate, e.g. `Chemoday/aap-frontend`) | Google AI Studio and you | The client app at the repository root, exactly as AI Studio builds it |
+| **Frontend repository** (separate, e.g. `Chemoday/aap-frontend`) | The frontend agent and you | The client app at the repository root; work arrives through branches and pull requests into its `main` |
 | **This repository** (`apartment-association-platform`) | Backend, CI, deploy | Backend, docs, and a copy of the client in `frontend/` |
 
-**Never connect Google AI Studio to this repository.** AI Studio treats the whole connected
-repository as its app, rewrites files to make the project build and pushes them with a force push
-(see the official guide *Sync your AI Studio apps with GitHub*). Connected here, it would overwrite
-the backend, the docs and the history of `main`.
+**Never point the frontend tool at this repository.** The frontend agent works in the frontend
+repository only. A tool that treats a whole repository as its app (Google AI Studio did: it
+rewrote files to make the project build and pushed with force) would overwrite the backend, the
+docs and the history of `main` here.
 
 ## 2. Rules for the frontend repository
 
-**Commits.** AI Studio pushes with commit messages it writes itself, so the messages there are not
-checked. When you commit by hand, use [Conventional Commits](https://www.conventionalcommits.org/)
-with the scope `frontend`:
+**Commits.** Use [Conventional Commits](https://www.conventionalcommits.org/) with the scope
+`frontend` (or the feature, as the frontend repository does), one branch and one pull request per
+backlog item:
 
 ```text
 feat(frontend): add the documents view
 fix(frontend): keep the meter value a string in the confirmation popup
 ```
 
-**One change per push.** Sync to GitHub after one view or one fix, not after a day of changes.
-Every push becomes a reviewable part of the next sync pull request.
+**One change per pull request.** One backlog item or one fix per branch, not a day of changes:
+every merged pull request becomes a reviewable part of the next sync pull request here.
 
-**Build contract.** CI and the Docker image rely on these, whatever AI Studio generates:
+**Build contract.** CI and the Docker image rely on these, whatever the tool generates:
 
 | Rule | Why |
 | :--- | :--- |
-| `package.json` and `bun.lock` at the repository root (AI Studio uses bun) | `bun install --frozen-lockfile` installs exactly what was tested |
+| `package.json` and `bun.lock` at the repository root (the project uses bun) | `bun install --frozen-lockfile` installs exactly what was tested |
 | `bun run build` writes static files to `dist/` | The image copies `dist/`; the backend serves it at `/` |
 | `bun run lint` and `npm run test` exist and pass (tests use `node:test`, so they run on Node) | CI runs them on every sync pull request |
 | Base path `/`; Vue Router in HTML5 history mode | The backend answers client routes with `index.html` |
@@ -53,13 +55,13 @@ Every push becomes a reviewable part of the next sync pull request.
 | `VITE_BACKEND_URL` for `bun run dev`: set, the dev server proxies `/api` to that backend; unset, it uses its built-in mock API | Local development against a local backend, the dev URL, or no backend at all |
 | `index.html` is a static file, configuration comes from the API | The backend never rewrites the client, so the client can move to its own server later |
 
-**Not part of the app:** the AI Studio workspace (`.aistudio/`), the mockups in
-`public/assets/aistudio/` and `docs/` (the frontend backlog and the contract copies handed over
-by the backend). The sync leaves them out, so they never reach this repository or a build. Keep
-app files out of these three folders.
+**Not part of the app:** `docs/` (the frontend backlog and the contract copies handed over by the
+backend), and from the AI Studio time the workspace `.aistudio/` and the mockups in
+`public/assets/aistudio/`. The sync leaves them out, so they never reach this repository or a
+build. Keep app files out of these folders.
 
 **Never commit:** `node_modules/`, `dist/`, `.env` files (only `.env.example`), API keys.
-AI Studio templates often read `GEMINI_API_KEY` / `process.env.API_KEY`: the client does not
+Generated templates often read `GEMINI_API_KEY` / `process.env.API_KEY`: the client does not
 call Gemini, so remove that code and the variable, and do not put any key in the bundle. Anything
 in the built JavaScript is public.
 
@@ -81,11 +83,13 @@ frontend.
 - `docs/BACKEND_HANDOFF.md`: which backend commit was handed over last, and the items of each
   handoff; the handoff commit also gets a tag `backend-handoff/<backend sha>`.
 
-Sync the AI Studio workspace with GitHub **before** a handoff (the backend agent asks for it) and
-**again right after it, before any other change**: AI Studio may push with force, and unsynced
-work would drop the handoff commit. Then ask it to implement the item. The Frontend sync workflow
-does not copy the frontend's `docs/` back into this repository. Merge a sync pull request that
-uses a handed-over item only after that backend change is on `main`.
+The handoff arrives as a branch `handoff/backend-<sha>` and a pull request into the frontend's
+`main` (since 2026-11-13; before, with AI Studio, it was pushed to `main` directly). Push the
+Antigravity work before a handoff (the backend agent asks), **merge the handoff pull request with
+a merge commit, not squash** (the tag must stay in `main`'s history), pull `main` in Antigravity,
+then ask the agent to implement the items one at a time. The Frontend sync workflow does not copy
+the frontend's `docs/` back into this repository. Merge a sync pull request that uses a
+handed-over item only after that backend change is on `main`.
 
 **Missing backend data.** Open an issue in **this** repository with the label `backend-request`:
 the screen, the mockup element, the fields you need and a suggested endpoint. The backend answers
@@ -96,7 +100,7 @@ with an API change and a new `docs/openapi.json`; the frontend then regenerates 
 The **Frontend sync** workflow (`.github/workflows/frontend-sync.yml`) runs **only by hand**: when
 a frontend version is ready, open *Actions → Frontend sync → Run workflow* (optionally with a
 branch or commit of the frontend repository; default: its `main`). Nothing is synced
-automatically, so work in progress in AI Studio never reaches this repository or dev. When the
+automatically, so work in progress in the frontend never reaches this repository or dev. When the
 frontend has a version that `main` does not:
 
 1. it copies the frontend repository into `frontend/`, without `.git`, `node_modules`, `dist`,
@@ -121,7 +125,7 @@ token is required: pushes and pull requests made with the default `GITHUB_TOKEN`
 Rules for the pull request:
 
 - **Never edit `frontend/` in this repository by hand.** The next sync overwrites it. Fix the code
-  in AI Studio or the frontend repository and sync again.
+  in the frontend repository and sync again.
 - Merge with **squash**: the pull request title becomes one Conventional Commit on `main`.
 - A sync pull request changes only `frontend/`. Backend changes go in their own pull requests,
   before the frontend that needs them.

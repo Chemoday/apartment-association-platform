@@ -1,4 +1,4 @@
-# Frontend sync: copies the client from the frontend repository (Google AI Studio pushes there)
+# Frontend sync: copies the client from the frontend repository (built in Antigravity)
 # into frontend/ and proposes it as one pull request into main (docs/FRONTEND_GIT_WORKFLOW.md).
 # Manual only: Actions -> Frontend sync -> Run workflow, when a frontend version is ready.
 #

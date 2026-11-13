@@ -90,7 +90,7 @@ Each task is atomic, self-contained, and designed to be executed sequentially by
 
 ### Task 6: Frontend UI — Resident Mobile View & Chairman Dashboard
 - **Tracking Issue:** [#7](https://github.com/Chemoday/apartment-association-platform/issues/7)
-- **Target Module:** `frontend/` at the repository root, built against the API contract [`docs/openapi.json`](openapi.json) (see [API.md](API.md)). The built files are served by the backend (`src/core/frontend.py`, see [FRONTEND_GIT_WORKFLOW.md](FRONTEND_GIT_WORKFLOW.md)); the client is built in Google AI Studio and synced into `frontend/` by the Frontend sync workflow.
+- **Target Module:** `frontend/` at the repository root, built against the API contract [`docs/openapi.json`](openapi.json) (see [API.md](API.md)). The built files are served by the backend (`src/core/frontend.py`, see [FRONTEND_GIT_WORKFLOW.md](FRONTEND_GIT_WORKFLOW.md)); the client is built in the frontend repository (Google AI Studio at the time of this task, Antigravity since 2026-11-13) and synced into `frontend/` by the Frontend sync workflow.
 - **Integration rules:** [FRONTEND_GUIDE.md](FRONTEND_GUIDE.md) (demo users, errors, decimal strings, the popup flow, shared demo state).
 - **Requirements:**
   - Role switcher / Demo login bar at the top for easy grading (`Switch Role: Resident Apt 14 | Resident Apt 2 | Chairman | Accountant`).
