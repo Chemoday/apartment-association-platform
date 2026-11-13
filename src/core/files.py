@@ -33,8 +33,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 import structlog
-from fastapi import Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -54,16 +55,21 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 from starlette.requests import ClientDisconnect
 
 from src.core.config import Settings
-from src.core.database import Base, varchar_enum
+from src.core.database import Base, DbSession, session_outbox, varchar_enum
 from src.core.domain_events import SessionFactory
-from src.core.exceptions import DomainError
+from src.core.event_bus import EventBus
+from src.core.exceptions import AUTH_ERRORS, DomainError, error_responses
+from src.core.file_events import StorageUsageHigh
 from src.core.images import EncodedPhoto, reencode_photo
+from src.core.security import get_current_user
+from src.modules.property.schemas import BuildingRole, CurrentUserDTO
 
 logger = structlog.get_logger(__name__)
 
@@ -190,6 +196,27 @@ class StoredFile(Base):
     delete_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# Usage thresholds the board is told about once (task F4), and how far below a threshold the
+# usage must fall before it can be told again.
+ALERT_THRESHOLDS = (80, 95)
+ALERT_RESET_POINTS = 10
+
+
+class FileAlert(Base):
+    __tablename__ = "core_file_alerts"
+    __table_args__ = (
+        CheckConstraint("threshold IN (80, 95)", name="ck_core_file_alerts_threshold"),
+    )
+
+    building_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("property_buildings.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    threshold: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reached_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 @dataclass(frozen=True)
@@ -687,8 +714,11 @@ class FileStore:
         disk: LocalDisk,
         gate: UploadGate,
         reservations: Reservations,
+        bus: EventBus | None = None,
     ) -> None:
         self.session = session
+        # Events (StorageUsageHigh) go to the request's outbox; None only where nothing listens.
+        self.bus = bus
         self.settings = settings
         self.disk = disk
         self.gate = gate
@@ -914,6 +944,7 @@ class FileStore:
                 raise key_reused() from None
             raise
         logger.info("file_stored", file_id=str(file_id), purpose=purpose.value, size_bytes=size)
+        await self._check_alerts(building_id, now)
         return _dto(row, created_by), True
 
     async def store_received(
@@ -971,7 +1002,69 @@ class FileStore:
         logger.info(
             "file_stored", file_id=str(file_id), purpose=purpose.value, size_bytes=received.size
         )
+        await self._check_alerts(building_id, now)
         return _dto(row, created_by)
+
+    async def _check_alerts(self, building_id: uuid.UUID, now: datetime) -> None:
+        """A threshold reached for the first time (since the usage last fell well below it):
+        insert its row and store the event, both in the caller's transaction."""
+        if self.bus is None:
+            return
+        used_percent = await self._used(building_id) * 100 // self.limits.quota_bytes
+        for threshold in ALERT_THRESHOLDS:
+            if used_percent < threshold:
+                continue
+            inserted = await self.session.scalar(
+                pg_insert(FileAlert)
+                .values(building_id=building_id, threshold=threshold, reached_at=now)
+                .on_conflict_do_nothing(index_elements=["building_id", "threshold"])
+                .returning(FileAlert.threshold)
+            )
+            if inserted is not None:
+                logger.warning(
+                    "file_storage_threshold", threshold=threshold, used_percent=used_percent
+                )
+                session_outbox(self.session, self.bus).add(
+                    StorageUsageHigh(
+                        building_id=building_id, threshold=threshold, used_percent=used_percent
+                    )
+                )
+
+    async def usage(self, building_id: uuid.UUID) -> "FileUsage":
+        rows = (
+            await self.session.execute(
+                select(
+                    StoredFile.purpose,
+                    func.sum(StoredFile.size_bytes),
+                    func.sum(StoredFile.size_bytes).filter(StoredFile.deleted_at.is_not(None)),
+                )
+                .where(StoredFile.building_id == building_id)
+                .group_by(StoredFile.purpose)
+            )
+        ).all()
+        by_class: dict[QuotaClass, int] = dict.fromkeys(QuotaClass, 0)
+        pending = 0
+        for purpose, used, deleted in rows:
+            known = _known_purpose(purpose)
+            if known is not None:  # a purpose of a newer release (after a rollback) is skipped
+                by_class[PURPOSE_CLASS[known]] += int(used or 0)
+            pending += int(deleted or 0)
+        quota = self.limits.quota_bytes
+        used = sum(by_class.values())
+        return FileUsage(
+            quota_bytes=quota,
+            used_bytes=used,
+            used_percent=used * 100 // quota,
+            pending_deletion_bytes=pending,
+            categories=[
+                CategoryUsage(
+                    category=quota_class.value,
+                    used_bytes=by_class[quota_class],
+                    limit_bytes=class_limit(quota, quota_class),
+                )
+                for quota_class in QuotaClass
+            ],
+        )
 
     async def find_by_key(
         self, user_id: uuid.UUID, key: str, purpose: FilePurpose
@@ -1031,8 +1124,56 @@ class FileStore:
 def get_file_store_factory(request: Request) -> Callable[[AsyncSession], FileStore]:
     state = request.app.state
     return lambda session: FileStore(
-        session, state.settings, state.file_disk, state.upload_gate, state.file_reservations
+        session,
+        state.settings,
+        state.file_disk,
+        state.upload_gate,
+        state.file_reservations,
+        state.event_bus,
     )
+
+
+# --- Usage (task F4; docs/API.md section 12) ------------------------------------------------------
+
+
+class CategoryUsage(BaseModel):
+    category: str
+    used_bytes: int
+    limit_bytes: int
+
+
+class FileUsage(BaseModel):
+    quota_bytes: int
+    used_bytes: int
+    used_percent: int
+    pending_deletion_bytes: int
+    categories: list[CategoryUsage]
+
+
+usage_router = APIRouter(
+    prefix="/api/v1/files",
+    tags=["files"],
+    responses=error_responses(
+        {401: AUTH_ERRORS, 403: ["FORBIDDEN"], 500: ["INTERNAL_SERVER_ERROR"]}
+    ),
+)
+_USAGE_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
+
+
+@usage_router.get("/usage", response_model=FileUsage)
+async def get_usage(
+    request: Request,
+    session: DbSession,
+    user: CurrentUserDTO = Depends(get_current_user),
+) -> FileUsage:
+    """How much of the association's quota its files use (the chairman and the board)."""
+    if user.building_role not in _USAGE_ROLES:
+        raise DomainError(
+            status_code=403,
+            error_code="FORBIDDEN",
+            message="Only the chairman and the board see the storage.",
+        )
+    return await get_file_store_factory(request)(session).usage(user.building_id)
 
 
 # --- Settings and startup ----------------------------------------------------------------------
@@ -1058,7 +1199,10 @@ class JanitorReport:
 
 
 async def janitor_tick(
-    session_factory: SessionFactory, disk: LocalDisk, now: datetime | None = None
+    session_factory: SessionFactory,
+    disk: LocalDisk,
+    now: datetime | None = None,
+    quota_bytes: int | None = None,
 ) -> JanitorReport | None:
     """One round of clean-up; None when another process held the lock."""
     now = now or _now()
@@ -1077,6 +1221,22 @@ async def janitor_tick(
             .execution_options(synchronize_session=False)
         )
         report.expired = expired.rowcount or 0
+        if quota_bytes is not None:  # usage fell well below a threshold: it may be told again
+            used = (
+                select(func.coalesce(func.sum(StoredFile.size_bytes), 0))
+                .where(StoredFile.building_id == FileAlert.building_id)
+                .scalar_subquery()
+            )
+            await session.execute(
+                delete(FileAlert)
+                # BIGINT throughout: any real quota times a percent overflows a 32-bit integer.
+                .where(
+                    cast(used, BigInteger) * 100
+                    < (cast(FileAlert.threshold, BigInteger) - ALERT_RESET_POINTS)
+                    * literal(quota_bytes, BigInteger)
+                )
+                .execution_options(synchronize_session=False)
+            )
         to_purge = list(
             await session.scalars(
                 select(StoredFile.id)
@@ -1156,11 +1316,16 @@ async def _reconcile(
 async def run_janitor_loop(
     session_factory_provider: Callable[[], SessionFactory],
     disk_provider: Callable[[], LocalDisk],
+    quota_provider: Callable[[], int] | None = None,
 ) -> None:
     """Run until cancelled: one tick, then wait an hour."""
     while True:
         try:
-            await janitor_tick(session_factory_provider(), disk_provider())
+            await janitor_tick(
+                session_factory_provider(),
+                disk_provider(),
+                quota_bytes=quota_provider() if quota_provider is not None else None,
+            )
         except Exception:  # CancelledError is not an Exception, so cancelling still stops it
             logger.exception("files_janitor_failed")
         await _sleep(JANITOR_INTERVAL.total_seconds())

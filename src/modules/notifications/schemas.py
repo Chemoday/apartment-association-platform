@@ -46,6 +46,8 @@ class NotificationEventType(StrEnum):
     # The maintenance calendar (epic E10): due tasks to the board; every official notice.
     MAINTENANCE_DUE = "MAINTENANCE_DUE"
     NOTICE_PUBLISHED = "NOTICE_PUBLISHED"
+    # The association's files reached 80% or 95% of its quota (epic E11, task F4).
+    STORAGE_ALMOST_FULL = "STORAGE_ALMOST_FULL"
 
 
 class DeliveryStatus(StrEnum):
@@ -62,6 +64,7 @@ class SubjectType(StrEnum):
     POLL = "poll"
     ISSUE = "issue"
     MAINTENANCE_TASK = "maintenance_task"
+    STORAGE = "storage"  # the subject is the building
 
 
 class UnavailableReason(StrEnum):

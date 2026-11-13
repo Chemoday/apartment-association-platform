@@ -27,6 +27,7 @@ from src.core.domain_events import (
 )
 from src.core.event_bus import DomainEvent, EventOutbox, InMemoryEventBus
 from src.core.events_registry import EventRegistry, UnknownEventTypeError, get_event_registry
+from src.core.file_events import StorageUsageHigh
 from src.modules.auth.events import UserAccountClosed
 from src.modules.communication.events import (
     ApartmentMessagePosted,
@@ -98,6 +99,7 @@ def _samples() -> dict[str, DomainEvent]:
             target_apartment_ids=(uuid.uuid4(),),
             published_by_user_id=user,
         ),
+        "StorageUsageHigh": StorageUsageHigh(building_id=building, threshold=80, used_percent=81),
         "MaintenanceTaskDue": MaintenanceTaskDue(
             task_id=post,
             occurrence_id=uuid.uuid4(),

@@ -5302,6 +5302,66 @@
         ]
       }
     },
+    "/api/v1/files/usage": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Get Usage",
+        "description": "How much of the association's quota its files use (the chairman and the board).",
+        "operationId": "get_usage_api_v1_files_usage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileUsage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/api/v1/issues/form": {
       "get": {
         "tags": [
@@ -10189,6 +10249,29 @@
         "title": "CardResident",
         "description": "A member on an apartment card: only the relation and since when, never who."
       },
+      "CategoryUsage": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "used_bytes": {
+            "type": "integer",
+            "title": "Used Bytes"
+          },
+          "limit_bytes": {
+            "type": "integer",
+            "title": "Limit Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "used_bytes",
+          "limit_bytes"
+        ],
+        "title": "CategoryUsage"
+      },
       "Channel": {
         "type": "string",
         "enum": [
@@ -11072,6 +11155,42 @@
           "consumption_delta"
         ],
         "title": "EstimatedReading"
+      },
+      "FileUsage": {
+        "properties": {
+          "quota_bytes": {
+            "type": "integer",
+            "title": "Quota Bytes"
+          },
+          "used_bytes": {
+            "type": "integer",
+            "title": "Used Bytes"
+          },
+          "used_percent": {
+            "type": "integer",
+            "title": "Used Percent"
+          },
+          "pending_deletion_bytes": {
+            "type": "integer",
+            "title": "Pending Deletion Bytes"
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryUsage"
+            },
+            "type": "array",
+            "title": "Categories"
+          }
+        },
+        "type": "object",
+        "required": [
+          "quota_bytes",
+          "used_bytes",
+          "used_percent",
+          "pending_deletion_bytes",
+          "categories"
+        ],
+        "title": "FileUsage"
       },
       "HistoryEntry": {
         "properties": {
@@ -12517,7 +12636,8 @@
           "ISSUE_URGENT",
           "ISSUE_STATUS_CHANGED",
           "MAINTENANCE_DUE",
-          "NOTICE_PUBLISHED"
+          "NOTICE_PUBLISHED",
+          "STORAGE_ALMOST_FULL"
         ],
         "title": "NotificationEventType"
       },
@@ -13858,7 +13978,7 @@
               "$ref": "#/components/schemas/PreferenceChange"
             },
             "type": "array",
-            "maxItems": 48,
+            "maxItems": 52,
             "title": "Preferences"
           }
         },
@@ -15065,7 +15185,8 @@
           "period",
           "poll",
           "issue",
-          "maintenance_task"
+          "maintenance_task",
+          "storage"
         ],
         "title": "SubjectType"
       },
