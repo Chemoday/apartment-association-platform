@@ -105,4 +105,5 @@ M1-M3 go into one pull request (one pull request per large feature).
 - Fixed-date periods ("every spring") if the "every 12 months from" form is not enough.
 - Residents who got a notice are not told when the board later moves, skips or cancels that
   occurrence (the board topic gets a comment); a follow-up notice could come with part B.
-- A yearly report of the log and its costs for the general meeting.
+- ~~A yearly report of the log and its costs for the general meeting.~~ Done (issue #132):
+  `GET /maintenance/report?year=` and its CSV export.

@@ -16,7 +16,7 @@ one pull request, with the contract and the code of each task in their own commi
 | E7 Login | 2 | [E7_LOGIN.md](E7_LOGIN.md) | done (A1-A5): sessions, e-mail link, invitations, password |
 | E8 Apartment profiles | 2 | [E8_APARTMENT_PROFILES.md](E8_APARTMENT_PROFILES.md) | done: P1 apartment cards, P2 board-apartment threads, P3 their notifications, P4 board micro-forum; frontend in the frontend backlog |
 | E9 Building issue tracker | 2 | [E9_ISSUE_TRACKER.md](E9_ISSUE_TRACKER.md) | done: I0 building settings, I1 the tracker, I2 the board's work, I3 notifications; photos (I4) after shared file storage |
-| E10 Maintenance calendar and log | 2 | [E10_MAINTENANCE_CALENDAR.md](E10_MAINTENANCE_CALENDAR.md) | designed (2026-11-08); part A (M1-M3, one pull request) in progress; part B (equipment, contractors) later |
+| E10 Maintenance calendar and log | 2 | [E10_MAINTENANCE_CALENDAR.md](E10_MAINTENANCE_CALENDAR.md) | part A done (M1-M3, #111; the yearly report, #132); part B (equipment, contractors) later |
 | E11 Shared file storage | 2 | [E11_FILE_STORAGE.md](E11_FILE_STORAGE.md) | designed (2026-11-12), done (#126, #128, #129); signed containers come with E3 part B, meter photos with E6. Foundation for photos (E9 I4, E6), documents and signed ballots (E3 part B) |
 
 Background for these choices: [docs/cli_planning/2026-10-31-post-course-epics.md](../cli_planning/2026-10-31-post-course-epics.md)

@@ -5,10 +5,15 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 
+from src.core.csv_safety import csv_lines
 from src.core.exceptions import AUTH_ERRORS, error_responses
 from src.core.security import get_current_user
 from src.modules.maintenance.schemas import (
+    REPORT_CSV_COLUMNS,
+    REPORT_YEAR_MAX,
+    REPORT_YEAR_MIN,
     TASKS_PAGE_MAX,
     ClosedOccurrence,
     DoneRequest,
@@ -21,6 +26,7 @@ from src.modules.maintenance.schemas import (
     TaskResume,
     TaskStatus,
     TaskView,
+    YearReport,
 )
 from src.modules.maintenance.service import MaintenanceService, get_maintenance_service
 from src.modules.property.schemas import CurrentUserDTO
@@ -158,3 +164,38 @@ async def edit_log_entry(
 ) -> LogEntryView:
     """Fix the note or the cost of an entry (the chairman and the board)."""
     return await service.edit_log(user, entry_id, body)
+
+
+Year = Annotated[int, Query(ge=REPORT_YEAR_MIN, le=REPORT_YEAR_MAX)]
+
+
+@router.get(
+    "/report",
+    response_model=YearReport,
+    responses=error_responses({422: ["VALIDATION_ERROR"]}),
+)
+async def yearly_report(year: Year, user: Caller, service: Service) -> YearReport:
+    """A year of the log: done and skipped counts and costs per task (chairman, board,
+    accountant)."""
+    return await service.report(user, year)
+
+
+@router.get(
+    "/report/export-csv",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "CSV file of the year's log entries (attachment).",
+            "content": {"text/csv": {"schema": {"type": "string"}}},
+        },
+        **error_responses({422: ["VALIDATION_ERROR"]}),
+    },
+)
+async def export_yearly_report(year: Year, user: Caller, service: Service) -> StreamingResponse:
+    """The year's log entries as CSV (chairman, board, accountant)."""
+    rows = await service.report_rows(user, year)
+    return StreamingResponse(
+        csv_lines(REPORT_CSV_COLUMNS, rows),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="maintenance-log-{year}.csv"'},
+    )
