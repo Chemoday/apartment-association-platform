@@ -162,7 +162,7 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `comments_enabled` | `BOOLEAN` | `NOT NULL, DEFAULT TRUE` | Board can disable comments on official notices. Always `TRUE` for `APARTMENT_THREAD` |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL, INDEX` | Creation timestamp |
 | `last_activity_at` | `TIMESTAMPTZ` | `NOT NULL` | `created_at` of the post, moved to the `created_at` of each new comment with `greatest()` (concurrent comments never move it back). Migration 012 fills existing rows from their newest comment. The thread inbox sorts by it |
-| `deleted_at` | `TIMESTAMPTZ` | `NULLABLE` | Set when a forum topic (by the chairman) or a board topic (by the chairman or a board member) was deleted (soft delete: hidden from every read) |
+| `deleted_at` | `TIMESTAMPTZ` | `NULLABLE` | Set when a forum topic or a board topic was deleted by the chairman or a board member (soft delete: hidden from every read) |
 | `deleted_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | Who deleted it |
 | `edited_at` | `TIMESTAMPTZ` | `NULLABLE` | When the author last changed the title or body (migration 025); only forum and board topics are edited |
 | `hidden_at` | `TIMESTAMPTZ` | `NULLABLE` | Set while the board hides a forum topic (migration 025); only `FORUM_TOPIC` rows can be hidden (check) |

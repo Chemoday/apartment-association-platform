@@ -25,7 +25,7 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 400 | `INVALID_LINK` | A sign-in or invitation link that is unknown, used, expired or no longer applies (section 7) |
 | 403 | `FORBIDDEN`, `NOT_ELIGIBLE` | Authenticated, but the building role or a membership flag (e.g. `can_submit_readings`) does not allow it; `NOT_ELIGIBLE`: not allowed to answer a poll |
 | 404 | `NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `METER_NOT_FOUND`, `PERIOD_NOT_FOUND`, `READING_NOT_FOUND`, `POST_NOT_FOUND`, `COMMENT_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `POLL_NOT_FOUND`, `ISSUE_NOT_FOUND`, `MAINTENANCE_TASK_NOT_FOUND`, `LOG_ENTRY_NOT_FOUND`, `EXPORTER_NOT_ENABLED` | Unknown route, a resource that does not exist or is not visible to you, or a disabled plugin |
-| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `WRONG_PERIOD`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POST_NOT_EDITABLE`, `COMMENT_NOT_EDITABLE`, `POST_NOT_HIDEABLE`, `COMMENT_NOT_HIDEABLE`, `POST_HIDDEN`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` | The request is valid, but conflicts with the current state |
+| 409 | `ANOMALY_CONFIRMATION_STEP_1/2`, `PERIOD_CLOSED`, `PERIOD_LOCKED`, `PERIOD_NOT_IN_REVIEW`, `WRONG_PERIOD`, `INVALID_PERIOD_TRANSITION`, `READING_SET_BY_BOARD`, `LATER_READING_EXISTS`, `COMMENTS_DISABLED`, `POST_NOT_DELETABLE`, `POST_NOT_EDITABLE`, `COMMENT_NOT_EDITABLE`, `POST_NOT_HIDEABLE`, `COMMENT_NOT_HIDEABLE`, `POST_HIDDEN`, `EDIT_WINDOW_CLOSED`, `POLL_NOT_DRAFT`, `POLL_NOT_OPEN`, `RESULTS_NOT_AVAILABLE`, `ISSUE_NOT_EDITABLE`, `ISSUE_ENDED`, `INVALID_ISSUE_TRANSITION`, `TASK_ARCHIVED`, `INVALID_TASK_TRANSITION`, `OCCURRENCE_CLOSED` | The request is valid, but conflicts with the current state |
 | 405 | `METHOD_NOT_ALLOWED` | The route exists but not for this HTTP method |
 | 422 | `VALIDATION_ERROR`, `READING_BELOW_PREVIOUS`, `REASON_REQUIRED`, `ESTIMATE_OUT_OF_RANGE`, `INVALID_TARGET`, `INVALID_AUTHOR_APARTMENT`, `APARTMENT_HAS_NO_RESIDENTS`, `PREFERENCE_MANDATORY`, `INVALID_DEADLINE`, `POLL_HAS_NO_ELECTORATE`, `INVALID_ANSWER`, `INVALID_LOCATION`, `INVALID_DUPLICATE` | Invalid input; for `VALIDATION_ERROR` the details are in `errors`. Free-text fields reject control characters, e.g. NUL |
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
@@ -597,10 +597,10 @@ Creates a post. Response `201 Created` with the post object.
 The post object plus one page of `comments`, oldest first: `[{"id", "post_id", "body", "author_badge", "is_mine", "created_at", "edited_at", "hidden_at", "hidden_reason"}]`. A hidden comment keeps its place; for everyone but its author and the board its `body` and `hidden_reason` are `null` (see "Hiding by the board"). `comments_limit` 1..500 (default 200), `comments_offset` 0..100000; `comments_count` is always the total. A post not visible to the caller is `404 POST_NOT_FOUND`.
 
 ### `DELETE /api/v1/communication/posts/{post_id}`
-(Requires role: `CHAIRMAN`, or `BOARD` for board topics)
-Moderation: deletes a forum topic (the chairman) or a board topic (the chairman or any board member) together with its comments, for everyone. Response `204 No Content`.
+(Requires role: `CHAIRMAN` or `BOARD`)
+Moderation: deletes a forum topic or a board topic together with its comments, for everyone; the chairman and any board member may (owner decision 2026-11-13: the board moderates the forum, docs/VISION.md). Response `204 No Content`.
 - A soft delete: the row keeps `deleted_at` and `deleted_by_user_id` for disputes, but every read treats the topic as gone (`404 POST_NOT_FOUND`, also for the chairman and for a second delete).
-- Only `FORUM_TOPIC` and `BOARD_TOPIC` posts: an emergency, an official notice or a thread returns `409 POST_NOT_DELETABLE` with its `post_type` (an emergency is resolved instead). A board member deleting a forum topic gets `403 FORBIDDEN`.
+- Only `FORUM_TOPIC` and `BOARD_TOPIC` posts: an emergency, an official notice or a thread returns `409 POST_NOT_DELETABLE` with its `post_type` (an emergency is resolved instead). Anyone else (an accountant, a resident) gets `403 FORBIDDEN`.
 - Every deletion emits `PostDeleted` (see "Domain events"), stored in the building's event history.
 - A post of another building, or an unknown one, is `404 POST_NOT_FOUND`.
 
@@ -618,6 +618,10 @@ Authors fix their own words; the edit is visible (`edited_at`), and nobody is no
   - `409 POST_NOT_EDITABLE` (with `post_type`) for an emergency or an official notice (official
     records; the emergency text has already gone out as a message), a thread (a record), a post
     the maintenance calendar published (`origin` set), and a hidden topic.
+  - A forum topic is editable for 24 hours after `created_at`; later it is
+    `409 EDIT_WINDOW_CLOSED` with `editable_until` (ISO 8601, UTC), so neighbours never find an old post
+    rewritten. A board topic has no time limit: its notes ("where the keys are") are kept
+    up to date for months (owner decision 2026-11-13).
 - `PATCH /api/v1/communication/posts/{post_id}/comments/{comment_id}` with `{"body": "..."}`.
   Response `200` with the comment object.
   - Only the comment's author (`403 FORBIDDEN` otherwise). The post must be visible to you
@@ -625,8 +629,14 @@ Authors fix their own words; the edit is visible (`edited_at`), and nobody is no
   - `409 COMMENT_NOT_EDITABLE` for a comment in a thread with the board (a record), any comment
     on a post the maintenance calendar published (`origin` set: it writes its "done", "skipped"
     and "moved" records there as comments), a hidden comment, and any comment on a hidden topic.
+  - Every comment is editable for 24 hours after its `created_at`, also in the board's
+    micro-forum; later it is `409 EDIT_WINDOW_CLOSED` with `editable_until` (ISO 8601, UTC).
 - `edited_at` is set to the time of the edit, and only when the text really changed; sending the
   same text again changes nothing. There is no edit history yet (backlog B-2).
+- The checks run in this order: visible (`404`), the author (`403`), editable at all (`409
+  POST_NOT_EDITABLE` / `COMMENT_NOT_EDITABLE`), within 24 hours (`409 EDIT_WINDOW_CLOSED`). The
+  client shows "Edit" on its own items while `created_at` + 24 h has not passed (for forum
+  topics and comments) and treats `EDIT_WINDOW_CLOSED` as "too late" (its clock may differ).
 
 ### Hiding by the board (moderation)
 The chairman and the board (`CHAIRMAN`, `BOARD`; anyone else `403 FORBIDDEN`) hide a forum topic
@@ -654,7 +664,8 @@ deleted, and can be shown again.
   the board only, and only the types above (`409 POST_NOT_HIDEABLE` / `COMMENT_NOT_HIDEABLE`).
 - Who hid it is not shown: the board acts as the board. The reason is free text: it is never
   logged and never put into an event.
-- The chairman can still delete a forum topic (`DELETE /posts/{post_id}`), hidden or not.
+- The chairman and the board can still delete a forum topic (`DELETE /posts/{post_id}`), hidden or
+  not.
 
 ### Domain events
 Published on the event bus **after** the request's transaction commits (never for a rolled-back change). Payloads carry ids, codes and the target only, no titles, bodies or names; a notifier reads the text through `CommunicationService`.

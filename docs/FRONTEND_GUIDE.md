@@ -71,7 +71,7 @@ Build the navigation from `GET /api/v1/property/me` (`building_role`, `membershi
 | Period status, estimate missing | no | no | yes | yes |
 | Publish emergency / notice | no | yes | yes | no |
 | Resolve an emergency | no | yes | yes | no |
-| Delete a forum topic | no | no | yes | no |
+| Delete a forum topic | no | yes | yes | no |
 | Forum: read, post topics, comment | yes | yes | yes | yes |
 | Apartment cards (`/property/apartments`) | no | yes | yes | no |
 | Apartment readings (`/meters/apartments/{id}/readings`) | own apartments | every apartment | every apartment | every apartment |
@@ -238,11 +238,13 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   offsets, so de-duplicate by `id` when loading more. Post detail pages its comments with
   `comments_limit` / `comments_offset`; `comments_count` is always the total.
 - `comments_enabled: false` hides the comment form (`409 COMMENTS_DISABLED` otherwise).
-- **Delete** (`DELETE /communication/posts/{id}`, chairman, forum topics only) answers `204`;
-  emergencies and notices answer `409 POST_NOT_DELETABLE`.
+- **Delete** (`DELETE /communication/posts/{id}`, chairman and board, forum and board topics)
+  answers `204`; emergencies, notices and threads answer `409 POST_NOT_DELETABLE`.
 - **Edit** (docs/API.md section 4, "Editing your own posts and comments"): show "Edit" on your
   own (`is_mine`) forum and board topics without `origin`, and on your own comments outside
-  threads. `PATCH /communication/posts/{id}` (`title`, `body`) and
+  threads and maintenance posts; forum topics and comments only during 24 hours after
+  `created_at` (board topics always). `409 EDIT_WINDOW_CLOSED` means "too late": hide the
+  button. The demo's seeded posts are older than a day, so "Edit" shows only on new ones. `PATCH /communication/posts/{id}` (`title`, `body`) and
   `PATCH /communication/posts/{id}/comments/{comment_id}` (`body`) return the updated object.
   Show "edited" next to the time when `edited_at` is set. `409 POST_NOT_EDITABLE` /
   `COMMENT_NOT_EDITABLE`: refresh, the item is no longer editable (for example, hidden).
