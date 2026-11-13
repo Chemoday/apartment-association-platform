@@ -74,25 +74,28 @@ async def test_the_board_is_told_once_when_a_threshold_is_reached(
     bus = InMemoryEventBus()
     files = store_with_bus(db_session, disk, bus)
 
-    await _photo(files, building, user, 7 * MB)  # 70%: nothing yet
+    # A quota of 10 MB keeps 2 MB for official votes: the room for files is 8 MB.
+    await _photo(files, building, user, 5 * MB)  # 62% of the room: nothing yet
     assert _alerts(db_session, bus) == []
-    await _photo(files, building, user, 1 * MB)  # 80%
-    await files._check_alerts(building.id, datetime.now(UTC))  # still 80%: told already
+    await _photo(files, building, user, 1 * MB)  # 75% of the room
+    await files._check_alerts(building.id, datetime.now(UTC), 6 * MB)  # told already
 
     [alert] = _alerts(db_session, bus)
-    assert (alert.building_id, alert.threshold, alert.used_percent) == (building.id, 80, 80)
-    rows = list(await db_session.scalars(select(FileAlert.threshold)))
-    assert rows == [80]
+    assert (alert.building_id, alert.threshold, alert.used_percent) == (building.id, 70, 60)
+    await _photo(files, building, user, 3 * MB // 2)  # 93% of the room, still below photos' 8 MB
+    assert [a.threshold for a in _alerts(db_session, bus)] == [70, 90]
+    rows = sorted(await db_session.scalars(select(FileAlert.threshold)))
+    assert rows == [70, 90]
 
 
 async def test_the_janitor_lets_a_threshold_be_told_again_after_the_usage_fell(
     db_session: AsyncSession, disk: LocalDisk
 ) -> None:
     building = await create_building(db_session)
-    db_session.add(FileAlert(building_id=building.id, threshold=80, reached_at=datetime.now(UTC)))
+    db_session.add(FileAlert(building_id=building.id, threshold=70, reached_at=datetime.now(UTC)))
     await db_session.flush()
 
-    # Nothing is stored: 0% is well below 80 - 10.
+    # Nothing is stored: 0% is well below 70 - 10.
     await janitor_tick(factory_of(db_session), disk, quota_bytes=QUOTA_MB * MB)
 
     assert list(await db_session.scalars(select(FileAlert))) == []
@@ -104,11 +107,11 @@ async def test_the_janitor_keeps_the_alert_while_the_usage_stays_near_the_thresh
     building = await create_building(db_session)
     user = await create_user(db_session, building, "Ivan Petrov")
     files = store_with_bus(db_session, disk, InMemoryEventBus())
-    await _photo(files, building, user, 8 * MB)  # 80%, alert row inserted
+    await _photo(files, building, user, 6 * MB)  # 75% of the room, the 70% row is inserted
 
     await janitor_tick(factory_of(db_session), disk, quota_bytes=QUOTA_MB * MB)
 
-    assert list(await db_session.scalars(select(FileAlert.threshold))) == [80]
+    assert list(await db_session.scalars(select(FileAlert.threshold))) == [70]
 
 
 async def test_the_chairman_and_the_board_see_the_usage(
@@ -151,10 +154,35 @@ async def test_the_janitor_resets_alerts_at_real_quotas_without_overflowing(
     user = await create_user(db_session, building, "Ivan Petrov")
     files = store_with_bus(db_session, disk, InMemoryEventBus())
     await _photo(files, building, user, 1 * MB)
-    db_session.add(FileAlert(building_id=building.id, threshold=95, reached_at=datetime.now(UTC)))
+    db_session.add(FileAlert(building_id=building.id, threshold=90, reached_at=datetime.now(UTC)))
     await db_session.flush()
 
     report = await janitor_tick(factory_of(db_session), disk, quota_bytes=quota_mb * MB)
 
     assert report is not None
-    assert list(await db_session.scalars(select(FileAlert))) == []  # 1 MB is far below 85%
+    assert list(await db_session.scalars(select(FileAlert))) == []  # 1 MB is far below 80%
+
+
+async def test_a_purpose_of_a_newer_release_is_counted_but_never_breaks_the_usage(
+    api_client: AsyncClient, db_session: AsyncSession, world: IssueWorld
+) -> None:
+    # After a rollback the database may hold purposes this release does not know.
+    from sqlalchemy import text
+
+    await db_session.execute(text("ALTER TABLE core_files DROP CONSTRAINT ck_core_files_purpose"))
+    await db_session.execute(
+        text(
+            "INSERT INTO core_files (id, building_id, purpose, owner_ref, content_type,"
+            " size_bytes, sha256) VALUES (gen_random_uuid(), :building, 'vote_ballot',"
+            " gen_random_uuid(), 'application/pdf', 5000, repeat('0', 64))"
+        ),
+        {"building": world.building.id},
+    )
+    await db_session.commit()
+
+    usage = await api_client.get("/api/v1/files/usage", headers=as_user(world.chairman))
+
+    assert usage.status_code == 200, usage.text
+    body = usage.json()
+    assert body["used_bytes"] == 5000  # like the quota check, every row counts
+    assert all(category["used_bytes"] == 0 for category in body["categories"])

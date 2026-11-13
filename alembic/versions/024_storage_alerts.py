@@ -56,7 +56,7 @@ def upgrade() -> None:
         sa.Column("building_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("threshold", sa.Integer(), nullable=False),
         sa.Column("reached_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint("threshold IN (80, 95)", name="ck_core_file_alerts_threshold"),
+        sa.CheckConstraint("threshold IN (70, 90)", name="ck_core_file_alerts_threshold"),
         sa.ForeignKeyConstraint(["building_id"], ["property_buildings.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("building_id", "threshold"),
     )

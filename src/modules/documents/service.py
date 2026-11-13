@@ -4,6 +4,7 @@ Users, roles and badges come only from PropertyService; the PDF goes through the
 (purpose `document`, owner = the document). The rules are pure functions in policies.py.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -164,7 +165,13 @@ class DocumentsService:
             updated_at=now,
         )
         self.session.add(document)
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except BaseException:
+            # The blob is in place but its row rolls back with this transaction: remove it now
+            # instead of leaving up to 20 MB to the weekly comparison.
+            await asyncio.to_thread(self.files.disk.remove, stored.id)
+            raise
         return await self._view(user, document), True
 
     async def _repeat(self, user: CurrentUserDTO, key: str) -> DocumentView | None:
@@ -200,7 +207,7 @@ class DocumentsService:
                 Document.building_id == user.building_id,
                 Document.deleted_at.is_(None),
                 Document.audience.in_(sorted(visible_audiences(user.building_role))),
-                Document.id.in_(self.files.live_owner_refs(DOCUMENT)),
+                FileStore.file_is_live(Document.file_id),
             )
             .order_by(Document.created_at.desc(), Document.id.desc())
             .limit(limit)
@@ -270,7 +277,7 @@ class DocumentsService:
             Document.building_id == user.building_id,
             Document.deleted_at.is_(None),
             # A file that expired (demo mode) or was purged hides its document too.
-            Document.id.in_(self.files.live_owner_refs(DOCUMENT)),
+            FileStore.file_is_live(Document.file_id),
         )
         if lock:
             statement = statement.with_for_update()

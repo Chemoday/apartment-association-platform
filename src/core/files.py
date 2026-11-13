@@ -44,7 +44,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    Select,
     String,
     cast,
     delete,
@@ -68,7 +67,7 @@ from src.core.event_bus import EventBus
 from src.core.exceptions import AUTH_ERRORS, DomainError, error_responses
 from src.core.file_events import StorageUsageHigh
 from src.core.images import EncodedPhoto, reencode_photo
-from src.core.security import get_current_user
+from src.core.security import require_building_roles
 from src.modules.property.schemas import BuildingRole, CurrentUserDTO
 
 logger = structlog.get_logger(__name__)
@@ -121,12 +120,18 @@ class FileVariant(StrEnum):
     ORIGINAL = "original"
 
 
-PhotoVariant = FileVariant  # the variants a photo has: DISPLAY and THUMB
+class PhotoVariant(StrEnum):
+    """The variants a photo has (a subset of FileVariant)."""
 
-_VARIANT_FILES = {
-    FileVariant.DISPLAY: "display.webp",
-    FileVariant.THUMB: "thumb.webp",
-    FileVariant.ORIGINAL: "original.pdf",
+    DISPLAY = "display"
+    THUMB = "thumb"
+
+
+# Keyed by the variant's value, so FileVariant and PhotoVariant members both work.
+_VARIANT_FILES: dict[str, str] = {
+    FileVariant.DISPLAY.value: "display.webp",
+    FileVariant.THUMB.value: "thumb.webp",
+    FileVariant.ORIGINAL.value: "original.pdf",
 }
 # The variant whose hash is stored and checked by the janitor.
 _MAIN_VARIANT = {
@@ -136,6 +141,7 @@ _MAIN_VARIANT = {
 PHOTO_CONTENT_TYPE = "image/webp"
 PDF_CONTENT_TYPE = "application/pdf"
 PDF_SIGNATURE = b"%PDF-"
+WRITE_BUFFER = 1024 * 1024
 # The reserve for official votes (E11 section 6): 5% of the quota, at least 100 MB, at most 20%.
 VOTES_RESERVE_SHARE = 0.05
 VOTES_RESERVE_MIN = 100 * 1024 * 1024
@@ -200,14 +206,14 @@ class StoredFile(Base):
 
 # Usage thresholds the board is told about once (task F4), and how far below a threshold the
 # usage must fall before it can be told again.
-ALERT_THRESHOLDS = (80, 95)
+ALERT_THRESHOLDS = (70, 90)  # percent of the room for files (quota minus the votes reserve)
 ALERT_RESET_POINTS = 10
 
 
 class FileAlert(Base):
     __tablename__ = "core_file_alerts"
     __table_args__ = (
-        CheckConstraint("threshold IN (80, 95)", name="ck_core_file_alerts_threshold"),
+        CheckConstraint("threshold IN (70, 90)", name="ck_core_file_alerts_threshold"),
     )
 
     building_id: Mapped[uuid.UUID] = mapped_column(
@@ -231,6 +237,11 @@ class FileDTO:
     created_at: datetime
     uploaded_by_caller: bool  # whether the user the module asked for uploaded it
     deleted: bool = False  # only find_repeat returns deleted files
+
+
+def _is_key_conflict(error: IntegrityError) -> bool:
+    """The insert met the Idempotency-Key index, not another constraint (a foreign key)."""
+    return "uq_core_files_idempotency" in str(error.orig)
 
 
 def _known_purpose(value: object) -> FilePurpose | None:
@@ -408,6 +419,7 @@ async def receive_to_disk(
     digest = hashlib.sha256()
     size = 0
     head = b""
+    buffer = bytearray()
     try:
         handle = await asyncio.to_thread(open, path, "wb")
     except OSError as exc:  # a full disk or too many open files: nothing was written
@@ -427,11 +439,16 @@ async def receive_to_disk(
                 if size > length or size > cap:
                     raise _too_large(min(length, cap))
                 digest.update(chunk)
-                await asyncio.to_thread(handle.write, chunk)
+                buffer.extend(chunk)
+                if len(buffer) >= WRITE_BUFFER:  # one hand-off to a thread per MB, not per chunk
+                    await asyncio.to_thread(handle.write, bytes(buffer))
+                    buffer.clear()
         except ClientDisconnect as exc:
             raise _interrupted() from exc
         if head != signature:
             raise _not_that_type()
+        if buffer:
+            await asyncio.to_thread(handle.write, bytes(buffer))
         await asyncio.to_thread(_flush_and_sync, handle)
         await asyncio.to_thread(handle.close)
     except BaseException as exc:
@@ -467,10 +484,10 @@ def streamed_file_response(path: Path, content_type: str, attachment_name: str) 
     return FileResponse(path, media_type=content_type, headers=_file_headers(attachment_name))
 
 
-def file_response(data: bytes, content_type: str, attachment_name: str | None = None) -> Response:
-    """A stored file: never sniffed, never scripted, cached for good (a file never changes).
-    With `attachment_name` the browser saves it instead of rendering it (documents)."""
-    return Response(content=data, media_type=content_type, headers=_file_headers(attachment_name))
+def file_response(data: bytes, content_type: str) -> Response:
+    """A small stored image shown inline: never sniffed, never scripted, cached for good (a file
+    never changes). Documents use `streamed_file_response`."""
+    return Response(content=data, media_type=content_type, headers=_file_headers(None))
 
 
 def attachment_name(title: str, extension: str) -> str:
@@ -553,6 +570,17 @@ class LocalDisk:
             return (self._dir(file_id) / name).read_bytes()
         except FileNotFoundError:
             return None
+
+    def sha256(self, file_id: uuid.UUID, name: str) -> str | None:
+        """The hash of a variant, read in chunks (a document can be 20 MB)."""
+        digest = hashlib.sha256()
+        try:
+            with open(self._dir(file_id) / name, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except FileNotFoundError:
+            return None
+        return digest.hexdigest()
 
     def path_of(self, file_id: uuid.UUID, name: str) -> Path | None:
         path = self._dir(file_id) / name
@@ -699,6 +727,12 @@ def votes_reserve(quota_bytes: int) -> int:
     return min(reserve, int(quota_bytes * VOTES_RESERVE_MAX_SHARE))
 
 
+def room_for_files(quota_bytes: int) -> int:
+    """What photos and documents together may fill: the quota minus the votes reserve. The
+    storage alerts are percentages of it, so they come before uploads are refused."""
+    return quota_bytes - votes_reserve(quota_bytes)
+
+
 def class_limit(quota_bytes: int, quota_class: QuotaClass) -> int:
     """How much of the quota a class may fill (all classes together count against it)."""
     if quota_class == QuotaClass.PHOTOS:
@@ -798,7 +832,7 @@ class FileStore:
         )
         return _dto(row, caller_id) if row is not None else None
 
-    async def read(self, file: FileDTO, variant: FileVariant) -> bytes | None:
+    async def read(self, file: FileDTO, variant: FileVariant | PhotoVariant) -> bytes | None:
         """The bytes of a variant; None (and an error in the log) when the blob is missing."""
         data = await asyncio.to_thread(self.disk.read, file.id, _VARIANT_FILES[variant])
         if data is None:
@@ -812,11 +846,14 @@ class FileStore:
             logger.error("file_blob_missing", file_id=str(file.id), purpose=file.purpose.value)
         return path
 
-    def live_owner_refs(self, purpose: FilePurpose) -> Select[tuple[uuid.UUID]]:
-        """A subquery of the owners that still have a live file of this purpose, for a module
-        that hides records whose file expired (demo mode) or was deleted."""
-        return select(StoredFile.owner_ref).where(
-            StoredFile.purpose == purpose, StoredFile.deleted_at.is_(None)
+    @staticmethod
+    def file_is_live(file_id: ColumnElement[uuid.UUID]) -> ColumnElement[bool]:
+        """A condition for a module's query: its file (by id) exists and is not deleted, so a
+        record whose file expired (demo mode) or was deleted is hidden. Uses the primary key."""
+        return (
+            select(StoredFile.id)
+            .where(StoredFile.id == file_id, StoredFile.deleted_at.is_(None))
+            .exists()
         )
 
     async def find_repeat(
@@ -903,9 +940,8 @@ class FileStore:
             )
         )
         size = len(photo.display) + len(photo.thumb)
-        if await self._used(building_id) + size > class_limit(
-            self.limits.quota_bytes, PURPOSE_CLASS[purpose]
-        ):
+        used_after = await self._used(building_id) + size
+        if used_after > class_limit(self.limits.quota_bytes, PURPOSE_CLASS[purpose]):
             raise _quota_exceeded()
         now = _now()
         if self.limits.demo_retention is not None:
@@ -935,16 +971,16 @@ class FileStore:
             async with self.session.begin_nested():
                 self.session.add(row)
                 await self.session.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
             await asyncio.to_thread(self.disk.remove, file_id)
-            if idempotency_key is not None:  # a parallel request with the same key won
+            if idempotency_key is not None and _is_key_conflict(exc):  # a parallel request won
                 repeat = await self.find_repeat(created_by, idempotency_key, purpose, owner_ref)
                 if repeat is not None and not repeat.deleted:
                     return repeat, False
                 raise key_reused() from None
             raise
         logger.info("file_stored", file_id=str(file_id), purpose=purpose.value, size_bytes=size)
-        await self._check_alerts(building_id, now)
+        await self._check_alerts(building_id, now, used_after)
         return _dto(row, created_by), True
 
     async def store_received(
@@ -966,9 +1002,8 @@ class FileStore:
                 func.pg_advisory_xact_lock(func.hashtextextended(f"core:files:{building_id}", 0))
             )
         )
-        if await self._used(building_id) + received.size > class_limit(
-            self.limits.quota_bytes, PURPOSE_CLASS[purpose]
-        ):
+        used_after = await self._used(building_id) + received.size
+        if used_after > class_limit(self.limits.quota_bytes, PURPOSE_CLASS[purpose]):
             raise _quota_exceeded()
         now = _now()
         file_id = uuid.uuid4()
@@ -994,25 +1029,26 @@ class FileStore:
             async with self.session.begin_nested():
                 self.session.add(row)
                 await self.session.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
             await asyncio.to_thread(self.disk.remove, file_id)
-            if idempotency_key is None:
+            if idempotency_key is None or not _is_key_conflict(exc):
                 raise
             raise key_reused() from None  # the same key won a race; the module looks it up
         logger.info(
             "file_stored", file_id=str(file_id), purpose=purpose.value, size_bytes=received.size
         )
-        await self._check_alerts(building_id, now)
+        await self._check_alerts(building_id, now, used_after)
         return _dto(row, created_by)
 
-    async def _check_alerts(self, building_id: uuid.UUID, now: datetime) -> None:
-        """A threshold reached for the first time (since the usage last fell well below it):
-        insert its row and store the event, both in the caller's transaction."""
+    async def _check_alerts(self, building_id: uuid.UUID, now: datetime, used: int) -> None:
+        """A threshold of the room for files reached for the first time (since the usage last
+        fell well below it): insert its row and store the event, in the caller's transaction."""
         if self.bus is None:
             return
-        used_percent = await self._used(building_id) * 100 // self.limits.quota_bytes
+        room_percent = used * 100 // room_for_files(self.limits.quota_bytes)
+        used_percent = used * 100 // self.limits.quota_bytes
         for threshold in ALERT_THRESHOLDS:
-            if used_percent < threshold:
+            if room_percent < threshold:
                 continue
             inserted = await self.session.scalar(
                 pg_insert(FileAlert)
@@ -1034,23 +1070,25 @@ class FileStore:
         rows = (
             await self.session.execute(
                 select(
-                    StoredFile.purpose,
+                    # As text: a purpose of a newer release (after a rollback) must not fail
+                    # the enum's strict result processing.
+                    cast(StoredFile.purpose, String),
                     func.sum(StoredFile.size_bytes),
                     func.sum(StoredFile.size_bytes).filter(StoredFile.deleted_at.is_not(None)),
                 )
                 .where(StoredFile.building_id == building_id)
-                .group_by(StoredFile.purpose)
+                .group_by(cast(StoredFile.purpose, String))
             )
         ).all()
         by_class: dict[QuotaClass, int] = dict.fromkeys(QuotaClass, 0)
-        pending = 0
-        for purpose, used, deleted in rows:
-            known = _known_purpose(purpose)
-            if known is not None:  # a purpose of a newer release (after a rollback) is skipped
-                by_class[PURPOSE_CLASS[known]] += int(used or 0)
+        used = pending = 0
+        for purpose, size, deleted in rows:
+            used += int(size or 0)  # every row, like the quota check
             pending += int(deleted or 0)
+            purpose_known = _known_purpose(purpose)
+            if purpose_known is not None:  # an unknown purpose is in the total only
+                by_class[PURPOSE_CLASS[purpose_known]] += int(size or 0)
         quota = self.limits.quota_bytes
-        used = sum(by_class.values())
         return FileUsage(
             quota_bytes=quota,
             used_bytes=used,
@@ -1157,22 +1195,17 @@ usage_router = APIRouter(
         {401: AUTH_ERRORS, 403: ["FORBIDDEN"], 500: ["INTERNAL_SERVER_ERROR"]}
     ),
 )
-_USAGE_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
 
 
 @usage_router.get("/usage", response_model=FileUsage)
 async def get_usage(
     request: Request,
     session: DbSession,
-    user: CurrentUserDTO = Depends(get_current_user),
+    user: CurrentUserDTO = Depends(
+        require_building_roles(BuildingRole.CHAIRMAN, BuildingRole.BOARD)
+    ),
 ) -> FileUsage:
     """How much of the association's quota its files use (the chairman and the board)."""
-    if user.building_role not in _USAGE_ROLES:
-        raise DomainError(
-            status_code=403,
-            error_code="FORBIDDEN",
-            message="Only the chairman and the board see the storage.",
-        )
     return await get_file_store_factory(request)(session).usage(user.building_id)
 
 
@@ -1233,7 +1266,7 @@ async def janitor_tick(
                 .where(
                     cast(used, BigInteger) * 100
                     < (cast(FileAlert.threshold, BigInteger) - ALERT_RESET_POINTS)
-                    * literal(quota_bytes, BigInteger)
+                    * literal(room_for_files(quota_bytes), BigInteger)
                 )
                 .execution_options(synchronize_session=False)
             )
@@ -1282,7 +1315,12 @@ async def _reconcile(
     async with session_factory() as session:
         rows = (
             await session.execute(
-                select(StoredFile.id, StoredFile.sha256, StoredFile.deleted_at, StoredFile.purpose)
+                select(
+                    StoredFile.id,
+                    StoredFile.sha256,
+                    StoredFile.deleted_at,
+                    cast(StoredFile.purpose, String),  # as text: see FileStore.usage
+                )
             )
         ).all()
     known = {file_id for file_id, _, _, _ in rows}
@@ -1302,11 +1340,13 @@ async def _reconcile(
             logger.error("file_blob_missing", file_id=str(file_id))
     sample = random.sample(live, min(CORRUPTION_SAMPLE, len(live)))
     for file_id, digest, purpose in sample:
-        known = _known_purpose(purpose)
-        if known is None:
+        purpose_known = _known_purpose(purpose)
+        if purpose_known is None:
             continue
-        data = await asyncio.to_thread(disk.read, file_id, _VARIANT_FILES[_MAIN_VARIANT[known]])
-        if data is not None and hashlib.sha256(data).hexdigest() != digest:
+        actual = await asyncio.to_thread(
+            disk.sha256, file_id, _VARIANT_FILES[_MAIN_VARIANT[purpose_known]]
+        )
+        if actual is not None and actual != digest:
             report.corrupt += 1
             logger.error("file_blob_corrupt", file_id=str(file_id))
     await asyncio.to_thread(disk.mark_reconciled)

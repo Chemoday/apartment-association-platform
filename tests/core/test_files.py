@@ -610,3 +610,31 @@ async def test_a_full_disk_while_receiving_answers_507_and_leaves_nothing(
 
     assert (caught.value.status_code, caught.value.error_code) == (507, "STORAGE_LOW_DISK")
     assert list(disk.tmp.iterdir()) == []
+
+
+async def test_a_foreign_key_failure_is_not_mistaken_for_a_repeated_key(
+    db_session: AsyncSession, disk: LocalDisk, owner
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.files import receive_to_disk
+
+    _, user = owner
+    files = make_store(db_session, disk)
+    data = b"%PDF-1.7 body"
+    received = await receive_to_disk(
+        _request({"Content-Length": str(len(data))}, [data]), disk, len(data), 1000, b"%PDF-"
+    )
+
+    with pytest.raises(IntegrityError):  # a building that does not exist
+        await files.store_received(
+            building_id=uuid.uuid4(),
+            purpose=FilePurpose.DOCUMENT,
+            owner_ref=uuid.uuid4(),
+            created_by=user.id,
+            received=received,
+            content_type="application/pdf",
+            idempotency_key="k-fk",
+        )
+
+    assert list(disk.blob_ages()) == []  # the moved blob is removed again
