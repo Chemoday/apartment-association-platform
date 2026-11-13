@@ -1,0 +1,10 @@
+# Installed by deploy/bootstrap.sh. Fails (visible in `systemctl --failed`) and writes a warning to
+# the journal when the disk needs attention; docs/DEPLOYMENT.md "Disk check".
+[Unit]
+Description=Disk check of the apartment association platform
+
+[Service]
+Type=oneshot
+ExecStart=/opt/aap/bin/aap-disk-check
+Nice=10
+IOSchedulingClass=idle

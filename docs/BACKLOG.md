@@ -362,8 +362,13 @@ outside the system meanwhile.
 
 ## B-11. Disk hygiene on the host
 
-- **Status:** open; small and independent of the other entries. **Raised:** 2026-11-12, by the
-  file storage session (docs/cli_planning/2026-11-12-file-storage-and-backups.md).
+- **Status:** mostly done by E11 task F0
+  ([#121](https://github.com/Chemoday/apartment-association-platform/issues/121)), see
+  docs/DEPLOYMENT.md "Resource limits and disk hygiene": items 1-4 are in place (images under
+  the old repository name only with `REMOVE_IMAGES_OF` in the host file, an owner decision);
+  item 5 waits for the owner (`HOST_JOURNAL_MAX` in the host file); open: where a disk alert goes
+  beyond the journal. **Raised:** 2026-11-12, by the file storage session
+  (docs/cli_planning/2026-11-12-file-storage-and-backups.md).
 
 ### Problem
 Several things grow on the VPS without a limit, long before any user file exists. Measured on
@@ -398,8 +403,11 @@ Several things grow on the VPS without a limit, long before any user file exists
 
 ## B-12. Resource limits per instance
 
-- **Status:** open; needed before the first upload route (epic E11, task F0) and before a second
-  association shares the host. **Raised:** 2026-11-12, by the same session.
+- **Status:** done by E11 task F0
+  ([#121](https://github.com/Chemoday/apartment-association-platform/issues/121)) except swap,
+  which waits for the owner (`HOST_SWAP_SIZE` in the host file); the CPU limit (2 CPUs) is to be
+  measured again with photo encoding (F1); "Later, for a managed cloud" stays open. **Raised:**
+  2026-11-12, by the same session.
 
 ### Problem
 Containers should carry memory, CPU and process limits, so that a fault in one instance cannot
@@ -412,8 +420,8 @@ Measured on 2026-11-12 (6 vCPU, 12 GB): an idle instance uses 80-100 MB for the 
 ### Suggested direction
 1. In `deploy/docker-compose.deploy.yml`: backend `mem_limit` 512 MB, a CPU limit and a
    process limit; database `mem_limit` 384 MB. Two password hashes at a time need 128 MB and a
-   decoded photo up to about 100 MB (E11 caps the pixels for that), so the backend limit leaves
-   room for both. The CPU limit is to be measured: the event loop must stay responsive while a
+   decoded photo about 30 MB (E11 accepts only JPEG of at most 2560 px), so the backend limit
+   leaves room for both. The CPU limit is to be measured: the event loop must stay responsive while a
    worker thread encodes a photo (a CPU weight, or 1.5-2 CPUs, instead of a hard limit of one).
 2. A read-only root filesystem for the backend with a small tmpfs for `/tmp`: nothing can grow
    inside the container layer, and uploads go only to the files volume (E11).

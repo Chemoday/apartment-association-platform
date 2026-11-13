@@ -1,7 +1,12 @@
 # E11. Shared file storage with strict limits
 
-- **Phase:** 2. **Status:** designed with the owner (2026-11-12); documentation only, no code yet.
-  Task issues are created when the epic is scheduled. Planning record:
+- **Phase:** 2. **Status:** designed with the owner (2026-11-12), scheduled on 2026-11-13: epic
+  [#125](https://github.com/Chemoday/apartment-association-platform/issues/125), tasks F0
+  [#121](https://github.com/Chemoday/apartment-association-platform/issues/121), F1
+  [#122](https://github.com/Chemoday/apartment-association-platform/issues/122), F2
+  [#103](https://github.com/Chemoday/apartment-association-platform/issues/103), F3
+  [#123](https://github.com/Chemoday/apartment-association-platform/issues/123), F4
+  [#124](https://github.com/Chemoday/apartment-association-platform/issues/124). Planning record:
   docs/cli_planning/2026-11-12-file-storage-and-backups.md.
 - **Goal:** photos of issues and meters, the board's documents and signed ballots are stored
   without any of them being able to fill the disk or load the server, so that many associations
@@ -29,8 +34,29 @@ the contract wins. All sizes below are estimates to be measured again in the fir
 - **This session produces documentation and backlog entries only.** No code, no change of the
   deployment.
 
-Proposed by the agent and still to be confirmed by the owner: uploads are refused in demo mode
-(section 6), and how signed containers, which hold personal data, are kept (section 9).
+## 1a. Owner decisions (2026-11-13), before the implementation
+
+- **The server accepts photos only as JPEG of at most 2560 px on the long edge.** Every client
+  (the web client now, a native phone app later) scales the photo and converts it to JPEG itself;
+  the operating systems and browsers do this with their own tools, HEIC photos of an iPhone
+  included. The server opens only the JPEG decoder, so a PNG or WebP bomb never reaches a
+  decoder, and decoding one photo needs about 30 MB at most (section 4). The requirement is part
+  of the API contract for every client; the server still checks it and still re-encodes.
+- **Uploads in demo mode only behind a flag:** `FILES_IN_DEMO=true`, set on dev only, with a small
+  demo quota and a short retention, after the pattern of `AUTH_MAIL_IN_DEMO`; without the flag
+  (prod) uploads in demo mode are refused (section 6).
+- **`Idempotency-Key` on photo uploads:** a client repeats an upload after a lost answer and gets
+  the same file back, not a second one that also counts against the quota and the daily limit.
+- **The instance marker `files/INSTANCE` waits for B-4** (docs/BACKLOG.md); there is one dev and
+  one prod today.
+- **Everything applied to the VPS is kept in the repository** (host configuration as code): the
+  configuration of the project's programs in `deploy/`, applied by idempotent scripts, the
+  parameters of each host without secrets in `deploy/hosts/`, and a log of what was applied in
+  `deploy/HOST_CHANGELOG.md`, so that a new VPS is set up from the repository alone
+  (docs/DEPLOYMENT.md). Task F0 introduces it.
+- **Three pull requests:** F0 alone; F1 with F2 (the store and its first consumer); F3 with F4.
+
+Still open: how signed containers, which hold personal data, are kept (section 9).
 
 ## 2. Principles
 
@@ -55,8 +81,8 @@ Proposed by the agent and still to be confirmed by the owner: uploads are refuse
 
 | Stream | Who | Accepted input | What is stored | Cap per file | Retention |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| Photo of an issue (E9 I4) | resident | JPEG, PNG, WebP | WebP, long edge 1920 px (about 300 KB), and a 320 px preview (about 15 KB) | 10 MB in, up to 3 per report | 12 months after the issue is closed (building setting) |
-| Photo of a meter (E6) | resident | the same | WebP, long edge 1280 px (about 150 KB) | 10 MB in | 13 months, to cover the yearly settlement (building setting, 1-24) |
+| Photo of an issue (E9 I4) | resident | JPEG of at most 2560 px, scaled by the client | WebP, long edge 1920 px (about 300 KB), and a 320 px preview (about 15 KB) | 4 MB in, up to 3 per report | 12 months after the issue is closed (building setting) |
+| Photo of a meter (E6) | resident | the same | WebP, long edge 1280 px (about 150 KB) | 4 MB in | 13 months, to cover the yearly settlement (building setting, 1-24) |
 | Documents: articles, minutes, contracts | the board only | PDF; a photo becomes WebP | the PDF as it is | 20 MB | kept until the board deletes it |
 | Attachments of the maintenance log (E10 part B) | the board | PDF or photo | as above | 20 MB | kept |
 | Ballots of an official vote | created by the server | - | PDF, 20-40 KB each, 2-3 per question | - | as long as the vote's record |
@@ -75,12 +101,14 @@ e-mail attachment from the board.
 
 ## 4. The upload path
 
-1. **Client.** The browser scales the photo down to 1920 px on the long edge and encodes it as
-   JPEG before sending (a 12 MP photo of 4 MB becomes about 0.5 MB). This saves mobile traffic and
-   server CPU. When scaling fails, the original is sent if it is a JPEG, PNG or WebP within the
-   cap; anything else is refused with a clear message.
+1. **Client.** The client scales the photo down to 1920 px on the long edge (2560 px at most)
+   and encodes it as JPEG before sending (a 12 MP photo of 4 MB becomes about 0.5 MB): a browser
+   with `createImageBitmap` and a canvas in a worker, a native app with the image tools of the
+   operating system. This saves mobile traffic and server CPU, and the location in the photo's
+   metadata never leaves the phone. When scaling or converting fails, nothing is sent and the
+   person sees a clear message (a photo taken with the camera is a JPEG anyway).
 2. **Edge (Caddy).** A request body limit of 1 MB for the whole API, raised only on the upload
-   routes (10 MB photos, 20 MB documents, 2 MB signed containers), and a timeout for reading a
+   routes (4 MB photos, 20 MB documents, 2 MB signed containers), and a timeout for reading a
    body that still fits the largest file on a slow mobile link (20 MB at 1 Mbit/s takes about
    three minutes).
 3. **Backend, before the first byte.** An upload is a raw request body (`Content-Type` of the
@@ -95,16 +123,14 @@ e-mail attachment from the board.
    instance (the backend runs as one process), a short bounded queue, and 429 when the queue is
    full, like the password hashing of E7. The number of bodies being received at once is capped
    the same way.
-   - Only JPEG, PNG and WebP are opened.
-   - The header is read first; more than 25 megapixels (a baseline JPEG) or 16 megapixels (a
-     progressive JPEG, PNG, WebP) is refused before decoding.
-   - A baseline JPEG is decoded already reduced (DCT scaling), in roughly 10-40 MB instead of
-     up to 75 MB. A progressive JPEG is not reduced that way and needs about 3-6 bytes per
-     pixel, so it gets the lower cap (at most about 100 MB); F1 measures both.
-   - The orientation is applied, all metadata is dropped, only the first frame of an animation
-     is kept.
+   - Only the JPEG decoder is opened (`Image.open(..., formats=["JPEG"])`); a PNG, a WebP or
+     anything else is refused (415) and no other decoder ever runs.
+   - The header is read first; a photo longer than 2560 px on either edge is refused before
+     decoding (422). Decoding needs about 3 bytes per pixel, so at most about 20-30 MB, also for
+     a progressive JPEG; F1 measures both kinds.
+   - The orientation is applied and all metadata is dropped.
    - The result is written as WebP: the display size and the preview.
-   About 0.2 s of CPU for a photo the client has scaled, about 1 s for a raw 12 MP photo.
+   About 0.2 s of CPU for one photo.
 5. **A document.** Streamed to a temporary file on the files volume while its SHA-256 is
    computed; it must start with the PDF signature; it is not parsed.
 6. **A signed container.** Held in memory (2 MB at most) and checked without unpacking to disk:
@@ -180,9 +206,10 @@ network only the photo is retried.
 - **Low disk guard:** when the host has less than 5 GB free, uploads are refused whatever the
   quota says, so that the database and the neighbours keep working. Signed containers are
   still accepted down to 1 GB.
-- **Demo mode (proposed):** with `DEMO_MODE_ENABLED` callers are not signed in, so uploads are
-  refused there, like the external notification channels; a demo shows seeded sample files
-  only. Otherwise a public demo would host files for anyone.
+- **Demo mode (owner decision 2026-11-13):** with `DEMO_MODE_ENABLED` callers are not signed in,
+  so a public demo would host files for anyone. Uploads in demo mode are therefore refused unless
+  `FILES_IN_DEMO=true`, which is set on dev only so that the client can be tried there; the demo
+  then has a small quota of its own (about 100 MB) and keeps files for about a day.
 
 ## 7. What can fill the disk
 
@@ -204,7 +231,7 @@ network only the photo is retried.
 | Operation | Worst case | Control |
 | :--- | :--- | :--- |
 | Receiving a body | a body far larger than any real file, or many at once | the edge limit, the raw-body upload checked before the first byte, a cap on bodies in flight (section 4, steps 2-4) |
-| Decoding a photo | a large photo needs tens of MB decoded; a progressive JPEG cannot be reduced while decoding; a crafted PNG is worse | the client scales first; pixel caps from the header; reduced decoding; three formats only |
+| Decoding a photo | a large photo needs tens of MB decoded; a crafted PNG or WebP is worse | the client scales and converts; only JPEG of at most 2560 px is accepted, checked from the header; no other decoder is opened |
 | Re-encoding | several photos at once | a worker thread, a semaphore of one per instance, a bounded queue |
 | Checking a signed container | decompression bomb, XML entities, network calls during the check | size and entry caps, bounded reading, a hardened XML parser, verification without network calls (section 9) |
 | Creating a PDF (ballots, record of voting) | heavy HTML-to-PDF tool chains | a small pure-Python PDF library with an embedded font; created once, then stored |
@@ -323,7 +350,7 @@ managed cloud is in the roadmap).
 
 | Task | What | Done when |
 | :--- | :--- | :--- |
-| F0 | Limits at the edge: the request body limit with per-route exceptions, timeouts for reading a body; resource limits per container (B-12) | an oversized or slow body is refused before the backend reads it; a runaway instance is stopped by its own limits |
+| F0 | Limits at the edge: the request body limit with per-route exceptions, timeouts for reading a body; resource limits per container (B-12); disk hygiene (B-11); host configuration as code (section 1a) | the backend never receives more of a body than the edge limit, and a slow body times out; a runaway instance is stopped by its own limits; a new VPS is set up from the repository alone |
 | F1 | Core `FileStore`: `core_files`, the local disk implementation, the photo pipeline, the janitor loop, quotas, the low disk guard, the refusal in demo mode; the contract | a module stores, serves and deletes a file through the port; caps, quota and retention are enforced; crash points leave no row without a blob; memory of decoding measured for baseline and progressive files; tests |
 | F2 | Photos of issue reports (E9 I4, [#103](https://github.com/Chemoday/apartment-association-platform/issues/103)); frontend handoff with the client-side scaling | up to 3 photos per report, re-encoded, without metadata; visible to whoever sees the issue; another building gets 404; tests |
 | F3 | Documents of the board (a small module of its own) | the board uploads, lists and deletes PDF documents; residents download them as attachments; tests |
@@ -335,8 +362,7 @@ exist before the first real association stores files.
 
 ## 13. Open
 
-- **For the owner:** uploads refused in demo mode (section 6); signed containers as personal
-  data and who may download them (section 9).
+- **For the owner:** signed containers as personal data and who may download them (section 9).
 - The exact numbers: caps, the default quota and the retention periods, after measuring real
   photos in F1.
 - WebP or JPEG for stored photos (WebP is about a quarter smaller; JPEG is more universal when a

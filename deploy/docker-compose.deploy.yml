@@ -1,10 +1,24 @@
 # One environment (dev or prod) on the VPS. Started by deploy.sh as Compose project "aap-<env>":
 #   IMAGE_REF, APP_ENV come from deploy.sh; POSTGRES_PASSWORD from /opt/aap/<env>/.env.
 # No host ports are published: Caddy (deploy/edge) reaches the backend over the "aap-edge" network.
+#
+# Limits (docs/DEPLOYMENT.md "Resource limits"): several instances and unrelated services share
+# the host, so no container may grow without a bound. Logs are rotated per service.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # The write-ahead log may otherwise grow to 1 GB per instance; temp files are capped per session.
+    command: ["postgres", "-c", "max_wal_size=256MB", "-c", "temp_file_limit=512MB"]
+    mem_limit: 384m
+    pids_limit: 200
+    logging: *logging
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in /opt/aap/<env>/.env}
@@ -23,6 +37,16 @@ services:
     image: ${IMAGE_REF:?set by deploy.sh}
     pull_policy: never
     restart: unless-stopped
+    # Two password hashes at a time need 128 MB (E7) and one decoded photo about 30 MB (E11).
+    # The CPU cap leaves the event loop room while a worker thread encodes a photo.
+    mem_limit: 512m
+    cpus: 2
+    pids_limit: 200
+    # Nothing grows inside the container layer; temporary files go to a small tmpfs.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    logging: *logging
     environment:
       DATABASE_URL: postgresql+asyncpg://app:${POSTGRES_PASSWORD}@db:5432/app
       ENVIRONMENT: ${APP_ENV:?set by deploy.sh}

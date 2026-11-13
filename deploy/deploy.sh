@@ -8,7 +8,7 @@
 set -euo pipefail
 
 # shellcheck source=/dev/null
-source /opt/aap/aap.conf  # AAP_ROOT, IMAGE
+source "${AAP_CONF:-/opt/aap/aap.conf}"  # AAP_ROOT, IMAGE
 
 ENV_NAME=$1
 SHA=$2
@@ -53,6 +53,11 @@ pull_image() {
 
 previous=$(cat "$ENV_DIR/current_sha" 2>/dev/null || true)
 
+# A shared lock while this deploy pulls and starts its image: cleanup.sh (run by a deploy of the
+# other environment) removes nothing while any deploy holds it.
+exec 9> "$AAP_ROOT/releases/.deploy.lock"
+flock -s 9
+
 pull_image
 log "starting $SHA (previous: ${previous:-none})"
 
@@ -64,7 +69,8 @@ if compose up -d --remove-orphans --wait --wait-timeout 180; then
     echo "$SHA" > "$ENV_DIR/current_sha"
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $SHA" >> "$ENV_DIR/history"
     log "healthy: $ENV_NAME now runs $SHA"
-    docker image prune -f --filter "until=168h" > /dev/null || true
+    flock -u 9
+    bash "$RELEASE_DIR/cleanup.sh" || log "cleanup failed (the deploy itself succeeded)"
     exit 0
 fi
 
