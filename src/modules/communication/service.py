@@ -8,6 +8,7 @@ badges come from PropertyService; property models are never imported or joined.
 import uuid
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import Depends
 from sqlalchemy import (
@@ -31,31 +32,46 @@ from src.core.event_bus import EventOutbox
 from src.core.exceptions import DomainError
 from src.modules.communication.events import (
     ApartmentMessagePosted,
+    CommentHidden,
+    CommentUnhidden,
     EmergencyAlertPublished,
     EmergencyAlertResolved,
     OfficialNoticePublished,
     PostDeleted,
+    PostHidden,
+    PostUnhidden,
 )
 from src.modules.communication.models import Comment, EmergencyAck, Post
 from src.modules.communication.policies import (
     ACTIVITY_SORTED_TYPES,
+    COMMENT_HIDEABLE_ON,
     FEED_HIDDEN_TYPES,
+    HIDEABLE_POST_TYPES,
     can_publish,
+    comment_editable_until,
+    comment_is_editable,
     deletable_types,
+    edit_window_closed,
     is_deletable,
+    post_editable_until,
+    post_is_editable,
     sees_all_targets,
+    sees_hidden_text,
     target_problem,
     thread_author_apartment,
 )
 from src.modules.communication.schemas import (
     AcknowledgeResponse,
     CommentCreateRequest,
+    CommentEditRequest,
     CommentView,
     EmergencyRefDTO,
     EmergencyView,
+    HideRequest,
     PostCategory,
     PostCreateRequest,
     PostDetail,
+    PostEditRequest,
     PostOrigin,
     PostType,
     PostView,
@@ -81,6 +97,26 @@ def _invalid_author_apartment() -> DomainError:
         status_code=422,
         error_code="INVALID_AUTHOR_APARTMENT",
         message="You can only write on behalf of an apartment you belong to.",
+    )
+
+
+def _post_hidden() -> DomainError:
+    return DomainError(
+        status_code=409,
+        error_code="POST_HIDDEN",
+        message="The board has hidden this topic; it takes no comments.",
+    )
+
+
+def _comment_not_found() -> DomainError:
+    return DomainError(
+        status_code=404, error_code="COMMENT_NOT_FOUND", message="Comment not found."
+    )
+
+
+def _not_the_author() -> DomainError:
+    return DomainError(
+        status_code=403, error_code="FORBIDDEN", message="Only the author edits what they wrote."
     )
 
 
@@ -410,6 +446,8 @@ class CommunicationService:
         self, user: CurrentUserDTO, post_id: uuid.UUID, request: CommentCreateRequest
     ) -> CommentView:
         post = await self._visible_post(user, post_id)
+        if post.hidden_at is not None:
+            raise _post_hidden()
         if not post.comments_enabled:
             raise DomainError(
                 status_code=409,
@@ -436,11 +474,16 @@ class CommunicationService:
         self.session.add(comment)
         await self.session.flush()
         # greatest(): a concurrent comment with a later time is never overwritten by this one.
-        await self.session.execute(
+        # The update waits for a concurrent hide and re-reads the row, so a comment never lands
+        # on a topic the board hid meanwhile (the request rolls back with POST_HIDDEN).
+        touched = await self.session.scalar(
             update(Post)
-            .where(Post.id == post.id)
+            .where(Post.id == post.id, Post.hidden_at.is_(None))
             .values(last_activity_at=func.greatest(Post.last_activity_at, comment.created_at))
+            .returning(Post.id)
         )
+        if touched is None:
+            raise _post_hidden()
         if post.post_type == PostType.APARTMENT_THREAD:
             self._message_posted(post, comment.id, user.id, author_apartment_id)
         key = (user.id, author_apartment_id)
@@ -449,7 +492,7 @@ class CommunicationService:
         return self._comment_view(user, comment, badges[key])
 
     async def delete_post(self, user: CurrentUserDTO, post_id: uuid.UUID) -> None:
-        """Moderation: soft-delete a forum topic (the chairman) or a board topic (any board
+        """Moderation: soft-delete a forum topic or a board topic (the chairman or any board
         member) with its comments, for everyone, and record it as PostDeleted.
 
         One conditional UPDATE, so a concurrent second delete finds nothing and gets 404.
@@ -493,9 +536,174 @@ class CommunicationService:
             raise DomainError(
                 status_code=403,
                 error_code="FORBIDDEN",
-                message="Only the chairman deletes forum topics.",
+                message="Only the chairman and the board delete topics.",
             )
         raise _post_not_found()  # unreachable unless the post changed meanwhile
+
+    # --- Author edits and hiding by the board (issue #135) --------------------------------------
+
+    async def edit_post(
+        self, user: CurrentUserDTO, post_id: uuid.UUID, request: PostEditRequest
+    ) -> PostView:
+        """The author changes the title or body of their forum or board topic (edited_at)."""
+        post = await self._visible_post(user, post_id, lock="update")
+        if post.author_user_id != user.id:
+            raise _not_the_author()
+        if not post_is_editable(
+            post.post_type, post.origin is not None, post.hidden_at is not None
+        ):
+            raise DomainError(
+                status_code=409,
+                error_code="POST_NOT_EDITABLE",
+                message="Only your own forum and board topics can be edited, while not hidden.",
+                extra={"post_type": PostType(post.post_type).value},
+            )
+        self._check_edit_window(post_editable_until(post.post_type, post.created_at))
+        changed = False
+        if request.title is not None and request.title != post.title:
+            post.title, changed = request.title, True
+        if request.body is not None and request.body != post.body:
+            post.body, changed = request.body, True
+        if changed:
+            post.edited_at = datetime.now(UTC)
+            await self.session.flush()
+        return await self._one_post_view(user, post)
+
+    async def edit_comment(
+        self,
+        user: CurrentUserDTO,
+        post_id: uuid.UUID,
+        comment_id: uuid.UUID,
+        request: CommentEditRequest,
+    ) -> CommentView:
+        """The author changes their comment (edited_at); never in a thread with the board."""
+        # A shared lock: a concurrent hide of the topic waits, and edits do not block each other.
+        post = await self._visible_post(user, post_id, lock="share")
+        comment = await self._comment_of(post, comment_id)
+        if comment.author_user_id != user.id:
+            raise _not_the_author()
+        if not comment_is_editable(
+            post.post_type,
+            post.origin is not None,
+            post.hidden_at is not None,
+            comment.hidden_at is not None,
+        ):
+            raise DomainError(
+                status_code=409,
+                error_code="COMMENT_NOT_EDITABLE",
+                message="This comment is a record or hidden by the board; it cannot be edited.",
+            )
+        self._check_edit_window(comment_editable_until(comment.created_at))
+        if request.body != comment.body:
+            comment.body = request.body
+            comment.edited_at = datetime.now(UTC)
+            await self.session.flush()
+        return await self._one_comment_view(user, post, comment)
+
+    async def set_post_hidden(
+        self, user: CurrentUserDTO, post_id: uuid.UUID, request: HideRequest | None
+    ) -> PostView:
+        """Hide a forum topic with a reason (request) or show it again (None); the board only.
+
+        Hiding what is hidden keeps the first time and reason; showing what is shown changes
+        nothing. Only a real change is recorded as PostHidden / PostUnhidden.
+        """
+        post = await self._visible_post(user, post_id, lock="update")
+        if post.post_type not in HIDEABLE_POST_TYPES:
+            raise DomainError(
+                status_code=409,
+                error_code="POST_NOT_HIDEABLE",
+                message="Only forum topics are hidden; delete a board topic, resolve an emergency.",
+                extra={"post_type": PostType(post.post_type).value},
+            )
+        if self._moderate(post, user, request):
+            assert self.outbox is not None, "writes need the request outbox"
+            self.outbox.add(
+                (PostHidden if request is not None else PostUnhidden)(
+                    post_id=post.id, building_id=post.building_id, moderator_user_id=user.id
+                )
+            )
+        return await self._one_post_view(user, post)
+
+    async def set_comment_hidden(
+        self,
+        user: CurrentUserDTO,
+        post_id: uuid.UUID,
+        comment_id: uuid.UUID,
+        request: HideRequest | None,
+    ) -> CommentView:
+        """Hide a comment with a reason (request) or show it again (None); the board only."""
+        post = await self._visible_post(user, post_id)
+        comment = await self._comment_of(post, comment_id)
+        if post.post_type not in COMMENT_HIDEABLE_ON:
+            raise DomainError(
+                status_code=409,
+                error_code="COMMENT_NOT_HIDEABLE",
+                message="Comments in threads and in the board's topics are not hidden.",
+                extra={"post_type": PostType(post.post_type).value},
+            )
+        if self._moderate(comment, user, request):
+            assert self.outbox is not None, "writes need the request outbox"
+            self.outbox.add(
+                (CommentHidden if request is not None else CommentUnhidden)(
+                    comment_id=comment.id,
+                    post_id=post.id,
+                    building_id=post.building_id,
+                    moderator_user_id=user.id,
+                )
+            )
+        return await self._one_comment_view(user, post, comment)
+
+    @staticmethod
+    def _check_edit_window(editable_until: datetime | None) -> None:
+        if edit_window_closed(editable_until, datetime.now(UTC)):
+            assert editable_until is not None
+            raise DomainError(
+                status_code=409,
+                error_code="EDIT_WINDOW_CLOSED",
+                message="Posts and comments can be edited only in the first 24 hours.",
+                # The same form as every timestamp in the responses ("...Z").
+                extra={"editable_until": editable_until.isoformat().replace("+00:00", "Z")},
+            )
+
+    @staticmethod
+    def _moderate(item: Post | Comment, user: CurrentUserDTO, request: HideRequest | None) -> bool:
+        """Set or clear the hidden columns; True when that changed something."""
+        if request is not None and item.hidden_at is None:
+            item.hidden_at = datetime.now(UTC)
+            item.hidden_by_user_id = user.id
+            item.hidden_reason = request.reason
+            return True
+        if request is None and item.hidden_at is not None:
+            item.hidden_at = item.hidden_by_user_id = item.hidden_reason = None
+            return True
+        return False
+
+    async def _comment_of(self, post: Post, comment_id: uuid.UUID) -> Comment:
+        """The post's comment, locked for this transaction (an edit and a hide never cross)."""
+        comment = await self.session.scalar(
+            select(Comment)
+            .where(Comment.id == comment_id, Comment.post_id == post.id)
+            .with_for_update()
+        )
+        if comment is None:
+            raise _comment_not_found()
+        return comment
+
+    async def _one_post_view(self, user: CurrentUserDTO, post: Post) -> PostView:
+        await self.session.flush()
+        count = (await self._comment_counts([post.id])).get(post.id, 0)
+        named = post.post_type == PostType.BOARD_TOPIC
+        badges = await self._badges(user.building_id, named, [_author_key(post)])
+        return self._post_view(user, post, badges[_author_key(post)], count)
+
+    async def _one_comment_view(
+        self, user: CurrentUserDTO, post: Post, comment: Comment
+    ) -> CommentView:
+        await self.session.flush()
+        named = post.post_type == PostType.BOARD_TOPIC
+        badges = await self._badges(user.building_id, named, [_author_key(comment)])
+        return self._comment_view(user, comment, badges[_author_key(comment)])
 
     # --- Internals ------------------------------------------------------------------------------
 
@@ -505,11 +713,15 @@ class CommunicationService:
 
         The board sees every post. Otherwise emergencies, notices and forum topics follow their
         target, threads the "since they moved in" rule (_visible_threads), and board topics
-        nobody. A deleted topic is hidden from everyone, the chairman included.
+        nobody. A deleted topic is hidden from everyone, the chairman included; a topic the
+        board hid is seen only by the board and its author.
         """
         in_building = and_(Post.building_id == user.building_id, Post.deleted_at.is_(None))
         if sees_all_targets(user.building_role):
             return in_building
+        in_building = and_(
+            in_building, or_(Post.hidden_at.is_(None), Post.author_user_id == user.id)
+        )
         targeted = and_(
             Post.post_type.not_in([PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC]),
             CommunicationService._targeting(user),
@@ -578,10 +790,20 @@ class CommunicationService:
             ),
         )
 
-    async def _visible_post(self, user: CurrentUserDTO, post_id: uuid.UUID) -> Post:
-        post = await self.session.scalar(
-            select(Post).where(Post.id == post_id, self._visible_to(user))
-        )
+    async def _visible_post(
+        self,
+        user: CurrentUserDTO,
+        post_id: uuid.UUID,
+        *,
+        lock: Literal["update", "share"] | None = None,
+    ) -> Post:
+        query = select(Post).where(Post.id == post_id, self._visible_to(user))
+        if lock is not None:
+            # The row as it is now, locked: an edit and a hide of the same post never cross.
+            query = query.with_for_update(of=Post, read=lock == "share").execution_options(
+                populate_existing=True
+            )
+        post = await self.session.scalar(query)
         if post is None:
             raise _post_not_found()
         return post
@@ -760,17 +982,27 @@ class CommunicationService:
             created_at=post.created_at,
             last_activity_at=post.last_activity_at,
             origin=post.origin,
+            edited_at=post.edited_at,
+            # Only the author and the board ever see a hidden topic (_visible_to).
+            hidden_at=post.hidden_at,
+            hidden_reason=post.hidden_reason,
         )
 
     @staticmethod
     def _comment_view(user: CurrentUserDTO, comment: Comment, badge: AuthorBadgeDTO) -> CommentView:
+        is_mine = comment.author_user_id == user.id
+        # A hidden comment is a placeholder, except for its author and the board.
+        readable = comment.hidden_at is None or sees_hidden_text(user.building_role, is_mine)
         return CommentView(
             id=comment.id,
             post_id=comment.post_id,
-            body=comment.body,
+            body=comment.body if readable else None,
             author_badge=badge,
-            is_mine=comment.author_user_id == user.id,
+            is_mine=is_mine,
             created_at=comment.created_at,
+            edited_at=comment.edited_at,
+            hidden_at=comment.hidden_at,
+            hidden_reason=comment.hidden_reason if readable else None,
         )
 
 

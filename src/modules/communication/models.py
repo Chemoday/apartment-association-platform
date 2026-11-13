@@ -54,6 +54,13 @@ THREAD_ONE_APARTMENT_CHECK = (
 )
 
 
+# Moderation (migration 025): the hidden columns are set and cleared together.
+HIDDEN_CONSISTENT_CHECK = (
+    "(hidden_at IS NULL) = (hidden_by_user_id IS NULL)"
+    " AND (hidden_at IS NULL) = (hidden_reason IS NULL)"
+)
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -123,6 +130,12 @@ class Post(Base):
         CheckConstraint(
             "last_activity_at >= created_at", name="ck_comm_posts_activity_after_creation"
         ),
+        # Moderation (migration 025): the board hides forum topics only.
+        CheckConstraint(HIDDEN_CONSISTENT_CHECK, name="ck_comm_posts_hidden_consistent"),
+        CheckConstraint(
+            "post_type = 'FORUM_TOPIC' OR hidden_at IS NULL",
+            name="ck_comm_posts_only_forum_hidden",
+        ),
         # The thread inbox: one building's threads by their newest activity.
         Index(
             "ix_comm_posts_building_type_activity", "building_id", "post_type", "last_activity_at"
@@ -182,6 +195,13 @@ class Post(Base):
     deleted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("core_users.id"), nullable=True
     )
+    # The author's last edit, and the board hiding it (docs/API.md section 4, moderation).
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hidden_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("core_users.id"), nullable=True
+    )
+    hidden_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class Comment(Base):
@@ -201,6 +221,7 @@ class Comment(Base):
             name="fk_comm_comments_author_apartment_building",
         ),
         CheckConstraint("btrim(body) <> ''", name="ck_comm_comments_body_not_blank"),
+        CheckConstraint(HIDDEN_CONSISTENT_CHECK, name="ck_comm_comments_hidden_consistent"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -214,6 +235,13 @@ class Comment(Base):
     author_apartment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = _timestamp()
+    # The author's last edit, and the board hiding it (docs/API.md section 4, moderation).
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hidden_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("core_users.id"), nullable=True
+    )
+    hidden_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class EmergencyAck(Base):

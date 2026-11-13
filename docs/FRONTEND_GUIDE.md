@@ -71,7 +71,7 @@ Build the navigation from `GET /api/v1/property/me` (`building_role`, `membershi
 | Period status, estimate missing | no | no | yes | yes |
 | Publish emergency / notice | no | yes | yes | no |
 | Resolve an emergency | no | yes | yes | no |
-| Delete a forum topic | no | no | yes | no |
+| Delete a forum topic | no | yes | yes | no |
 | Forum: read, post topics, comment | yes | yes | yes | yes |
 | Apartment cards (`/property/apartments`) | no | yes | yes | no |
 | Apartment readings (`/meters/apartments/{id}/readings`) | own apartments | every apartment | every apartment | every apartment |
@@ -250,8 +250,23 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   offsets, so de-duplicate by `id` when loading more. Post detail pages its comments with
   `comments_limit` / `comments_offset`; `comments_count` is always the total.
 - `comments_enabled: false` hides the comment form (`409 COMMENTS_DISABLED` otherwise).
-- **Delete** (`DELETE /communication/posts/{id}`, chairman, forum topics only) answers `204`;
-  emergencies and notices answer `409 POST_NOT_DELETABLE`.
+- **Delete** (`DELETE /communication/posts/{id}`, chairman and board, forum and board topics)
+  answers `204`; emergencies, notices and threads answer `409 POST_NOT_DELETABLE`.
+- **Edit** (docs/API.md section 4, "Editing your own posts and comments"): show "Edit" on your
+  own (`is_mine`) forum and board topics without `origin`, and on your own comments outside
+  threads and maintenance posts; forum topics and comments only during 24 hours after
+  `created_at` (board topics always). `409 EDIT_WINDOW_CLOSED` means "too late": hide the
+  button. The demo's seeded posts are older than a day, so "Edit" shows only on new ones. `PATCH /communication/posts/{id}` (`title`, `body`) and
+  `PATCH /communication/posts/{id}/comments/{comment_id}` (`body`) return the updated object.
+  Show "edited" next to the time when `edited_at` is set. `409 POST_NOT_EDITABLE` /
+  `COMMENT_NOT_EDITABLE`: refresh, the item is no longer editable (for example, hidden).
+- **Hide** (chairman and board): "Hide" on forum topics and on comments of forum topics,
+  notices and emergencies asks for a reason (1..500 characters) and calls `POST .../hide`;
+  `POST .../unhide` shows it again. A hidden topic is visible only to its author and the board:
+  show a banner "Hidden by the board: <hidden_reason>" and no comment form (`409 POST_HIDDEN`).
+  A hidden comment arrives with `hidden_at` set; when `body` is `null`, render a grey
+  placeholder "Hidden by the board" in its place, otherwise (the author, the board) show the
+  text greyed with the reason. Never show who hid it.
 - **Free text limits:** title 1..255, post body 1..10000, comment 1..4000 characters after
   trimming. Control characters are rejected. Show a counter and trim before checking "empty".
 - **Messages with the board** (`APARTMENT_THREAD`, docs/API.md section 4):

@@ -537,10 +537,12 @@ async def test_the_chairman_deletes_a_forum_topic_for_everyone(
     assert row.deleted_at is not None
 
 
-async def test_only_the_chairman_may_delete(api_client: AsyncClient, world: CommWorld) -> None:
+async def test_only_the_chairman_and_the_board_may_delete(
+    api_client: AsyncClient, world: CommWorld
+) -> None:
     topic = (await publish(api_client, world.owner_14)).json()
 
-    for user in (world.owner_14, world.board, world.accountant):
+    for user in (world.owner_14, world.tenant_2, world.accountant):
         response = await api_client.delete(f"{API}/posts/{topic['id']}", headers=as_user(user))
         assert response.status_code == 403
         assert response.json()["error_code"] == "FORBIDDEN"

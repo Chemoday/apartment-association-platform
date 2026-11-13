@@ -31,10 +31,14 @@ from src.core.file_events import StorageUsageHigh
 from src.modules.auth.events import UserAccountClosed
 from src.modules.communication.events import (
     ApartmentMessagePosted,
+    CommentHidden,
+    CommentUnhidden,
     EmergencyAlertPublished,
     EmergencyAlertResolved,
     OfficialNoticePublished,
     PostDeleted,
+    PostHidden,
+    PostUnhidden,
 )
 from src.modules.communication.schemas import PostCategory, PostType, TargetScope
 from src.modules.governance.events import PollOpened
@@ -130,6 +134,14 @@ def _samples() -> dict[str, DomainEvent]:
             building_id=building,
             post_type=PostType.BOARD_TOPIC,
             deleted_by_user_id=user,
+        ),
+        "PostHidden": PostHidden(post_id=post, building_id=building, moderator_user_id=user),
+        "PostUnhidden": PostUnhidden(post_id=post, building_id=building, moderator_user_id=user),
+        "CommentHidden": CommentHidden(
+            comment_id=uuid.uuid4(), post_id=post, building_id=building, moderator_user_id=user
+        ),
+        "CommentUnhidden": CommentUnhidden(
+            comment_id=uuid.uuid4(), post_id=post, building_id=building, moderator_user_id=user
         ),
         "MeterReadingSubmitted": MeterReadingSubmitted(
             reading_id=uuid.uuid4(),

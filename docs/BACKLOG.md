@@ -71,14 +71,25 @@ different cases exist:
 - **Raised:** 2026-10-25, during Task 5.
 
 ### Current state (MVP)
-The chairman can soft-delete a forum topic (`DELETE /api/v1/communication/posts/{id}`,
-[API.md](API.md), section 4). The topic and its comments disappear for everyone; the row keeps
+The chairman (and since 2026-11-13 the board) can soft-delete a forum topic
+(`DELETE /api/v1/communication/posts/{id}`, [API.md](API.md), section 4). The topic and its comments disappear for everyone; the row keeps
 `deleted_at` and `deleted_by_user_id`. Emergencies are resolved instead, and official notices
 cannot be deleted.
 
+### Done (2026-11-13, issue #18 part 1)
+- Authors edit their own forum and board topics and their comments (`edited_at` is shown);
+  emergencies, official notices, threads and maintenance posts stay as written.
+- The chairman and the board hide a forum topic or a single comment with a reason, and show it
+  again. A hidden topic is seen only by its author and the board; a hidden comment stays as a
+  placeholder. Every hide and unhide is stored as a domain event (`PostHidden`, `CommentHidden`,
+  ...) without the reason text. docs/API.md section 4.
+- Board members delete forum topics too; forum topics and comments are edited only in the first
+  24 hours (board topics without a limit).
+
 ### Missing
-- Authors edit or delete their own posts and comments.
-- The board hides or deletes single comments, not only whole topics.
+- Authors delete their own posts and comments.
+- The board deletes single comments (hiding covers the urgent case).
+- A notification to the author when the board hides their post or comment.
 - Residents report abusive posts or comments; the board works through a report queue.
 - A moderation log: who hid or deleted what, when and why, without PII in logs or spans.
 - Retention: soft-deleted content is purged after a fixed period (GDPR), keeping only the audit
@@ -86,8 +97,8 @@ cannot be deleted.
 - Edit history, so an edited post cannot silently change what neighbours already answered to.
 
 ### Open questions
-- Should `BOARD` members moderate too? [VISION.md](VISION.md) says the board moderates the
-  forum; the MVP allows only the chairman.
+- Decided 2026-11-13: board members delete forum topics too, and authors edit forum topics and
+  comments only in the first 24 hours (board topics without a limit).
 - Should a deleted topic show a placeholder ("Removed by the board") instead of vanishing, so the
   conversation history stays understandable?
 - How long is the retention period, and does it differ for reported content?

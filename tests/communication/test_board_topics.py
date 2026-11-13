@@ -190,7 +190,7 @@ async def test_any_board_member_deletes_a_topic_with_a_record(
     ]
 
 
-async def test_forum_topics_stay_with_the_chairman_and_their_deletion_is_recorded(
+async def test_a_board_member_deletes_a_forum_topic_and_it_is_recorded(
     api_client: AsyncClient, world: CommWorld, published_events
 ) -> None:
     forum = await api_client.post(
@@ -200,12 +200,12 @@ async def test_forum_topics_stay_with_the_chairman_and_their_deletion_is_recorde
     )
     url = f"{API}/posts/{forum.json()['id']}"
 
-    refused = await api_client.delete(url, headers=as_user(world.board))
-    assert refused.status_code == 403
-    assert refused.json()["error_code"] == "FORBIDDEN"
-    assert (await api_client.delete(url, headers=as_user(world.chairman))).status_code == 204
+    # Owner decision 2026-11-13: the board moderates the forum, deleting included.
+    assert (await api_client.delete(url, headers=as_user(world.board))).status_code == 204
+    again = await api_client.delete(url, headers=as_user(world.chairman))
+    assert (again.status_code, again.json()["error_code"]) == (404, "POST_NOT_FOUND")
     (event,) = [e for e in published_events if isinstance(e, PostDeleted)]
-    assert (event.post_type, event.deleted_by_user_id) == (PostType.FORUM_TOPIC, world.chairman.id)
+    assert (event.post_type, event.deleted_by_user_id) == (PostType.FORUM_TOPIC, world.board.id)
 
 
 async def test_board_topics_notify_nobody(

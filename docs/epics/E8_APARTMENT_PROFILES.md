@@ -158,7 +158,8 @@ From 2026-11-05:
 - **Deletion:** `DELETE /posts/{id}` works on a board topic for the chairman and every board
   member: the same soft delete as forum topics (`deleted_at`, `deleted_by_user_id`), and a durable
   domain event `PostDeleted` (post, building, type, who) in the building's event history. Forum
-  topics stay deletable by the chairman only.
+  topics were deletable by the chairman only; since 2026-11-13 the board deletes them too
+  (issue #135).
 - **No notifications** and no domain event for a new topic or comment.
 - **Groundwork for the passport and the calendar:** the calendar will later publish its
   reminders for the board as board topics, and the first, text-only building passport (keys,
@@ -187,5 +188,5 @@ The "My residents" page is frontend work on the A4 endpoints (docs/FRONTEND_GUID
 - "Reveal the real data with a reason" plus an audit log, if the board needs names for legal
   matters (meetings, debts).
 - Closing a thread, and "one notification until read" if the threads get busy.
-- Board members as moderators of the whole forum (deleting any topic), with a moderation log the
-  board can read (owner idea of 2026-11-05).
+- A moderation log the board can read (owner idea of 2026-11-05). Board members moderate the
+  whole forum since 2026-11-13: they hide and delete any forum topic (issue #135).
