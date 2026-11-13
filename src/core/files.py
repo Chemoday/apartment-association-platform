@@ -240,8 +240,13 @@ class FileDTO:
 
 
 def _is_key_conflict(error: IntegrityError) -> bool:
-    """The insert met the Idempotency-Key index, not another constraint (a foreign key)."""
-    return "uq_core_files_idempotency" in str(error.orig)
+    """The insert met the Idempotency-Key index, not another constraint (a foreign key). The
+    driver's own error names the constraint; its text is the fallback."""
+    name = "uq_core_files_idempotency"
+    driver_error = getattr(error.orig, "__cause__", None)
+    if getattr(driver_error, "constraint_name", None) == name:
+        return True
+    return name in str(error.orig)
 
 
 def _known_purpose(value: object) -> FilePurpose | None:

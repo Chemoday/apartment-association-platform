@@ -648,6 +648,6 @@ Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
 - **The notification** `STORAGE_ALMOST_FULL` (`subject_type` `storage`, open the storage block):
   "The association's files use {used_percent}% of its storage. Deleted files free their room after
   14 days; ask the operator of the server if more room is needed." It comes at 70% and 90% of the
-  room for files, before uploads are refused. Show it to the chairman and the board only in the preferences; the
-  matrix now has **52** rows (it had 48).
+  room for files, before uploads are refused. Show it to the chairman and the board only in the
+  preferences; the matrix now has **52** rows (it had 48).
 

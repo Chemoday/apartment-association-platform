@@ -384,6 +384,10 @@ exist before the first real association stores files.
 - A row without a blob after a restore from backups: the file is shown as unavailable and
   reported, never a server error.
 - An S3 implementation of the store and a hard disk wall per instance for a managed cloud.
+- Before a third upload route (signed containers, E3 part B): one `FileStore.receive(...)` that
+  owns the sequence every upload must follow (admission, content type, length, commit before the
+  body, reservation, gate, receive, store), and one lookup by `Idempotency-Key` instead of
+  `find_repeat` and `find_by_key` (the audit of #129).
 - Images in forum posts and in the threads between the board and an apartment.
 - An export of everything an association has (database and files) when it leaves the platform:
   created by the operator on request, not a self-service download (a multi-GB archive is itself
