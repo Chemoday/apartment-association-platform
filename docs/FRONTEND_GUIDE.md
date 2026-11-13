@@ -538,8 +538,7 @@ Contract: docs/API.md section 10; notifications in docs/API.md section 6.
   `entrance: null`. Never show an issue title in a notification. The preferences matrix now has 40
   rows; show `ISSUE_REPORTED` and `ISSUE_URGENT` only to the chairman and the board, and
   `ISSUE_STATUS_CHANGED` to everyone who can use the tracker.
-- **Photos** (up to 3 per issue): section 17. The settings page shows
-  `issues.photo_retention_months` (months the photos are kept after an issue ended).
+- **Photos** (up to 3 per issue): section 17.
 
 ## 16. Maintenance calendar and log (epic E10)
 
@@ -600,6 +599,10 @@ photo before sending it.**
   the photo is opened, with the access token as for every request, and show it from
   `URL.createObjectURL(blob)`. Responses are cacheable for good; a photo never changes.
 - **Deleting:** a bin icon where `can_delete` is true.
+- **Retention, told to people:** next to the "add photo" button: "Photos are kept while the issue
+  is open and deleted 30 days after it is resolved, to save space." On a resolved issue with
+  photos, show "Photos will be deleted on {photos_delete_at}". When the board marks an issue as a
+  duplicate or declines it, warn in the confirmation: "Its photos will be deleted".
 - **Errors:** `400 UPLOAD_INTERRUPTED`: retry that photo; `409 IDEMPOTENCY_KEY_REUSED`: a bug
   of the client (a key used twice), retry with a new key; `403 UPLOADS_DISABLED` "Photos are
   switched off in this demo"; `409

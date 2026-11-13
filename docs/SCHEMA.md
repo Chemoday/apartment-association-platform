@@ -647,8 +647,10 @@ and per cleared urgent flag.)*
 - **Photos** (task I4, epic E11 F2) are rows of `core_files` (section 12) with `purpose`
   `issue_photo` and `owner_ref` = the issue's id; the module has no table of its own for them.
   Adding a photo locks the issue (`FOR UPDATE`) and counts its photos again, so two parallel
-  uploads cannot make a fourth. The module sets `delete_after` when the issue ends (`ended_at` +
-  `issues.photo_retention_months`) and clears it when the issue is reopened.
+  uploads cannot make a fourth. When an issue is resolved the module sets `delete_after` to
+  `ended_at` + 30 days and clears it when the issue is reopened; when it ends otherwise
+  (`DUPLICATE`, `DECLINED`, `WITHDRAWN`) it deletes the photos at once (`deleted_at`, purged after
+  14 days like every deleted file).
 
 ---
 

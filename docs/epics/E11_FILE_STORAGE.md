@@ -81,7 +81,7 @@ Still open: how signed containers, which hold personal data, are kept (section 9
 
 | Stream | Who | Accepted input | What is stored | Cap per file | Retention |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| Photo of an issue (E9 I4) | resident | JPEG of at most 2560 px, scaled by the client | WebP, long edge 1920 px (about 300 KB), and a 320 px preview (about 15 KB) | 4 MB in, up to 3 per report | 12 months after the issue is closed (building setting) |
+| Photo of an issue (E9 I4) | resident | JPEG of at most 2560 px, scaled by the client | WebP, long edge 1920 px (about 300 KB), and a 320 px preview (about 15 KB) | 4 MB in, up to 3 per report | while the issue is open; 30 days after it is resolved; deleted at once when it ends otherwise (owner decision 2026-11-13) |
 | Photo of a meter (E6) | resident | the same | WebP, long edge 1280 px (about 150 KB) | 4 MB in | 13 months, to cover the yearly settlement (building setting, 1-24) |
 | Documents: articles, minutes, contracts | the board only | PDF; a photo becomes WebP | the PDF as it is | 20 MB | kept until the board deletes it |
 | Attachments of the maintenance log (E10 part B) | the board | PDF or photo | as above | 20 MB | kept |

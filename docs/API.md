@@ -1729,7 +1729,6 @@ Every endpoint needs a signed-in user of the building.
 | `issues.reports_per_apartment_per_day` | `INTEGER` | 3 | 1..20 | Issue reports one apartment may file in 24 hours (epic E9) |
 | `issues.urgent_enabled` | `BOOLEAN` | `false` | | Residents may mark an issue report urgent |
 | `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
-| `issues.photo_retention_months` | `INTEGER` | 12 | 1..60 | How long the photos of an issue are kept after it ended (epic E11); a change applies to issues that end afterwards |
 | `maintenance.overdue_reminder_days` | `INTEGER` | 7 | 1..30 | Days between the reminders of an overdue maintenance task (epic E10) |
 
 ### `GET /api/v1/settings` (chairman and board)
@@ -1800,7 +1799,8 @@ Every endpoint needs a signed-in user.
   "photos": [
     {"id": "uuid", "width": 1920, "height": 1440, "created_at": "2026-11-08T18:01:00Z", "mine": false, "can_delete": false}
   ],
-  "can_add_photo": false
+  "can_add_photo": false,
+  "photos_delete_at": null
 }
 ```
 - `category`: `LIGHTING`, `DOORS_AND_LOCKS`, `LIFT`, `HEATING`, `WATER_AND_SEWAGE`, `ELECTRICITY`,
@@ -1830,7 +1830,8 @@ Every endpoint needs a signed-in user.
   `mine`: the caller uploaded it; `can_delete`: the caller may delete it (below). Who uploaded a
   photo is never in a payload. `can_add_photo`: the caller may upload one now (the reporter or the
   board, the issue is open, fewer than 3 photos, and uploads are switched on: never in a demo
-  without uploads).
+  without uploads). `photos_delete_at`: when the photos of a `RESOLVED` issue will be deleted
+  (`ended_at` + 30 days), else `null`; show it so nobody is surprised (see "Retention").
 - Never in a payload: who reported (except `reporter` for the board), who follows, who uploaded a
   photo.
 
@@ -1948,9 +1949,15 @@ or its file is missing on the server: `404 PHOTO_NOT_FOUND`.
 issue is open, the chairman and the board at any time; anyone else `403 FORBIDDEN`. The photo
 disappears at once and is erased from the server after 14 days.
 
-**Retention:** when an issue ends, its photos are kept for `issues.photo_retention_months`
-(section 9, default 12; never less than the 30 days in which the issue can be reopened) and then
-deleted; reopening the issue keeps them again. In demo mode a photo is deleted after about a day.
+**Retention** (owner decision 2026-11-13: photos are working material, not an archive, and many
+add little information):
+- While the issue is open, its photos are kept.
+- `RESOLVED`: deleted 30 days after the issue was resolved (`photos_delete_at`), to save space;
+  reopening the issue within those 30 days keeps them again.
+- `DUPLICATE`, `DECLINED`, `WITHDRAWN`: deleted at once with the status change; reopening the
+  issue later does not bring them back.
+- There is no setting. In demo mode a photo is deleted after about a day at the latest
+  (`photos_delete_at` does not show that).
 
 ### Domain events
 Stored durably with the request (docs/ARCHITECTURE.md 2), ids and codes only (task I3):
@@ -2194,8 +2201,10 @@ section 10.*
 - **`Idempotency-Key`** (optional header, 1-64 characters `A-Z a-z 0-9 _ -`, a new random value
   per file, for example a UUID): an upload repeated with the same key by the same user, after a
   lost answer, returns the stored file with `200` instead of storing it again (also when the
-  issue ended meanwhile); the first upload answers `201`. The body of a repeated request is not
-  read. A key already used for another file, or for a file that was deleted, is `409
+  issue was resolved meanwhile); the first upload answers `201`. The body of a repeated request
+  is not read. When the file is gone meanwhile because its owner ended (for an issue: declined,
+  a duplicate, withdrawn), the repeat gets the owner's own answer (`409 ISSUE_ENDED`). A key
+  already used for another file, or for a file a person deleted, is `409
   IDEMPOTENCY_KEY_REUSED`: send a new key for every file.
 - **Order of the checks:** the route's own rules (404, 403, 409), then demo mode, the disk, the
   quota and the daily limit, then the size from `Content-Length`; only then the body is read.
