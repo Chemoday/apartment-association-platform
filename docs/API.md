@@ -694,6 +694,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_STATUS_CHANGED` | the board changed an issue's status, or merged it into another as a duplicate (section 10): its followers (the reporter and everyone who pressed "+1"), never the board member who changed it | no |
 | `MAINTENANCE_DUE` | the maintenance calendar published a task or reminded of an overdue one (section 11): the chairman and the board members | no |
 | `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target and the chairman and the board members (also without an apartment), once each, never its author | no |
+| `STORAGE_ALMOST_FULL` | the association's files reached 80% or 95% of its quota (section 12, epic E11 task F4): the chairman and the board members, once per threshold until the usage falls well below it again | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -768,6 +769,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `ISSUE_STATUS_CHANGED` | on | on | on | on |
 | `MAINTENANCE_DUE` | on | off | off | off |
 | `NOTICE_PUBLISHED` | on | on | on | on |
+| `STORAGE_ALMOST_FULL` | on | on | off | off |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
@@ -791,7 +793,8 @@ reports, but not for urgent ones (epic E9).
   the readings of that period (`params.period_code`); `poll` links to
   `GET /api/v1/governance/polls/{subject_id}`; `issue` links to
   `GET /api/v1/issues/{subject_id}` (for a merge notice, the original); `maintenance_task` links
-  to `GET /api/v1/maintenance/tasks/{subject_id}`.
+  to `GET /api/v1/maintenance/tasks/{subject_id}`; `storage` (the subject is the building) links
+  to `GET /api/v1/files/usage`.
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
@@ -802,7 +805,8 @@ reports, but not for urgent ones (epic E9).
   `ISSUE_STATUS_CHANGED` `category`, `entrance`, `status` (the new one) and `merged` (`true` for
   the merge notice, whose `status` is `DUPLICATE`); `MAINTENANCE_DUE` `occurrence_id`,
   `due_date`, `overdue` and `reminder_number` (0 for the publication; the title is loaded with
-  the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`).
+  the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`); `STORAGE_ALMOST_FULL`
+  `threshold` (80 or 95), `used_percent` (an integer).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -841,7 +845,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 48 combinations of `event_type` and `channel` (60 once
+- `preferences` always has all 52 combinations of `event_type` and `channel` (65 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -858,7 +862,7 @@ Only the listed combinations change. Response: the same body as the `GET`.
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
 `PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
-`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`, `STORAGE_ALMOST_FULL`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -2229,6 +2233,29 @@ section 10.*
   `retry_after_seconds`; retry that one file later.
 - **Demo mode:** uploads only where the server allows them (dev), with a small quota, and files
   are deleted after about a day; elsewhere `403 UPLOADS_DISABLED`.
+
+### `GET /api/v1/files/usage` (the chairman and the board; task F4)
+How much of the association's quota its files use:
+```json
+{
+  "quota_bytes": 2147483648,
+  "used_bytes": 412000000,
+  "used_percent": 19,
+  "pending_deletion_bytes": 12000000,
+  "categories": [
+    {"category": "photos", "used_bytes": 300000000, "limit_bytes": 1717986918},
+    {"category": "documents", "used_bytes": 112000000, "limit_bytes": 2040109466}
+  ]
+}
+```
+- `used_bytes` counts every stored file, also deleted ones that are not erased yet
+  (`pending_deletion_bytes`, erased within 14 days). `used_percent` is rounded down.
+- `categories`: the bytes of each class and the most it may fill (photos 80% of the quota,
+  documents everything except the reserve for official votes). More categories come with later
+  tasks.
+- At 80% and at 95% the chairman and the board get `STORAGE_ALMOST_FULL` (section 6), once per
+  threshold; it can come again only after the usage fell at least 10 points below it.
+- Anyone else: `403 FORBIDDEN`.
 
 ### Error codes of this section
 | Status | `error_code` | When |

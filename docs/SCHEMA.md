@@ -782,6 +782,19 @@ expects. The bytes live on disk, never in the database. Migration 022.*
   it), never a row without a blob.
 - The quota counts every row until it is purged, deleted ones included: they still use the disk.
 
+### Table: `core_file_alerts` (task F4, migration 024)
+*(Which usage thresholds the board was told about, so each is told once.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `building_id` | `UUID` | `PK`, `FK(property_buildings.id) ON DELETE CASCADE` | |
+| `threshold` | `INTEGER` | `PK, CHECK IN (80, 95)` | Percent of the quota |
+| `reached_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- A row is inserted (and the event `StorageUsageHigh` stored with it) when a stored file brings
+  the usage to the threshold; the janitor deletes it when the usage is 10 points below it again.
+- Migration 024 also adds `STORAGE_ALMOST_FULL` to the `event_type` checks of
+  `notif_preferences` and `notif_deliveries`, and `storage` to `subject_type` (section 5).
+
 ---
 
 ## 13. Module: `documents` (epic E11 task F3: documents of the association)

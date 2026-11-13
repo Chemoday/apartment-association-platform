@@ -427,6 +427,12 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
 - **Startup:** `create_app` creates `blobs/` and `tmp/`; the lifespan empties `tmp/` and refuses
   to start when `FILES_DIR` is not writable (a deploy then rolls back). Emptying `tmp/` never
   happens at import, so a one-off command in the running container cannot break an upload.
+- **Usage and alerts** (task F4): `GET /api/v1/files/usage` (core router, the chairman and the
+  board). When a stored file brings a building to 80% or 95% of its quota, the store inserts a
+  `core_file_alerts` row and adds the durable event `StorageUsageHigh` (`src/core/file_events.py`)
+  to the request's outbox; `notifications` turns it into `STORAGE_ALMOST_FULL` for the chairman
+  and the board. The janitor deletes the row when the usage is 10 points below the threshold,
+  so a later rise is told again.
 - **Privacy:** the store never returns `created_by_user_id`; logs and spans carry the file id,
   the purpose and sizes, never a file name or content.
 

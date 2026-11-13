@@ -636,3 +636,17 @@ Contract: docs/API.md section 13 (and section 12 for the upload rules).
 - Errors as in section 17 (photos), plus `415 UNSUPPORTED_MEDIA_TYPE` "Only PDF files" and
   `404 DOCUMENT_NOT_FOUND` "This document is not available".
 
+## 19. Storage used by the association (epic E11 task F4)
+
+Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
+(`STORAGE_ALMOST_FULL`).
+
+- **For the chairman and the board:** on the association settings page (section 14) a block
+  "Storage": a bar `used_percent` of the quota, the used and total size, and a line per category
+  ("Photos", "Documents"; translate, show an unknown one by its name) with its bytes. Mention
+  `pending_deletion_bytes` as "of which deleted, erased within 14 days" when it is not zero.
+- **The notification** `STORAGE_ALMOST_FULL` (`subject_type` `storage`, open the storage block):
+  "The association's files use {used_percent}% of its storage. Delete old documents or ask the
+  operator for more room." Show it to the chairman and the board only in the preferences; the
+  matrix now has **52** rows (it had 48).
+
