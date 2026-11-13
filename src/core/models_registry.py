@@ -17,6 +17,7 @@ from src.modules.auth.models import (  # noqa: F401
     UserIdentity,
 )
 from src.modules.communication.models import Comment, EmergencyAck, Post  # noqa: F401
+from src.modules.documents.models import Document  # noqa: F401
 from src.modules.governance.models import (  # noqa: F401
     Ballot,
     BallotAnswer,

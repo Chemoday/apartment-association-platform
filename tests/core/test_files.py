@@ -539,3 +539,74 @@ async def test_all_files_of_an_owner_are_deleted_at_once(
     assert await files.count(PURPOSE, uuid.UUID(int=1)) == 0
     assert await files.count(PURPOSE, kept.owner_ref) == 1
     assert await files.delete_all(PURPOSE, uuid.UUID(int=1)) == 0
+
+
+def test_documents_keep_off_the_reserve_for_official_votes() -> None:
+    from src.core.files import QuotaClass, class_limit, votes_reserve
+
+    assert votes_reserve(2048 * MB) == 102 * MB + int(0.4 * MB)  # 5% of 2 GB
+    assert votes_reserve(1000 * MB) == 100 * MB  # at least 100 MB
+    assert votes_reserve(100 * MB) == 20 * MB  # never more than 20% (the demo quota)
+    assert class_limit(1000 * MB, QuotaClass.DOCUMENTS) == 900 * MB
+    assert class_limit(1000 * MB, QuotaClass.PHOTOS) == 800 * MB
+
+
+async def test_the_daily_limit_is_for_photos_only(
+    db_session: AsyncSession, disk: LocalDisk, owner
+) -> None:
+    building, user = owner
+    files = make_store(db_session, disk, FILES_USER_MB_PER_DAY=5)
+    await store(files, building, user, photo=EncodedPhoto(b"D" * (3 * MB), b"", 1, 1))
+
+    await files.admit(building.id, user.id, FilePurpose.DOCUMENT, 20_000_000)
+    with pytest.raises(DomainError):
+        await files.admit(building.id, user.id, PURPOSE, 3 * MB)
+
+
+@pytest.mark.parametrize(
+    ("chunks", "ok"),
+    [
+        ([b"%P", b"DF-1.7 rest"], True),
+        ([b"%", b"P", b"D", b"F", b"-", b"x"], True),
+        ([b"%P", b"NG...."], False),
+        ([b"%PDF"], False),  # too short to be a PDF
+    ],
+)
+async def test_the_file_signature_is_checked_across_chunks(
+    disk: LocalDisk, chunks: list[bytes], ok: bool
+) -> None:
+    from src.core.files import receive_to_disk
+
+    length = sum(len(chunk) for chunk in chunks)
+    request = _request({"Content-Length": str(length)}, chunks)
+    if ok:
+        received = await receive_to_disk(request, disk, length, 1000, b"%PDF-")
+        assert received.path.read_bytes() == b"".join(chunks)
+        assert received.size == length
+        assert received.sha256 == hashlib.sha256(b"".join(chunks)).hexdigest()
+    else:
+        with pytest.raises(DomainError) as caught:
+            await receive_to_disk(request, disk, length, 1000, b"%PDF-")
+        assert caught.value.status_code == 415
+        assert list(disk.tmp.iterdir()) == []  # nothing left behind
+
+
+async def test_a_full_disk_while_receiving_answers_507_and_leaves_nothing(
+    disk: LocalDisk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno as errno_codes
+
+    import src.core.files as files_module
+
+    def full(_handle) -> None:
+        raise OSError(errno_codes.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(files_module, "_flush_and_sync", full)
+    data = b"%PDF-1.7 body"
+    request = _request({"Content-Length": str(len(data))}, [data])
+
+    with pytest.raises(DomainError) as caught:
+        await files_module.receive_to_disk(request, disk, len(data), 1000, b"%PDF-")
+
+    assert (caught.value.status_code, caught.value.error_code) == (507, "STORAGE_LOW_DISK")
+    assert list(disk.tmp.iterdir()) == []

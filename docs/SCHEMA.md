@@ -806,6 +806,8 @@ the document's id; this table holds what the document is and who may see it.*
 | `deleted_at` | `TIMESTAMPTZ` | `NULLABLE` | Set by the chairman's delete; a deleted document is hidden everywhere |
 | `deleted_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who deleted it (never returned by the API) |
 
-- `ix_doc_documents_building_created`: `(building_id, created_at)`.
+- `ix_doc_documents_building_created`: `(building_id, created_at)`; `ix_doc_documents_file`:
+  `(file_id)` (a purge sets it to `NULL`).
+- A document whose file is gone (deleted, or expired in demo mode) is hidden like a deleted one.
 - Seeding writes no documents.
 

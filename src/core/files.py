@@ -17,6 +17,7 @@ section 12, docs/API.md section 12.
 
 import asyncio
 import contextlib
+import errno
 import hashlib
 import os
 import random
@@ -29,9 +30,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import quote
 
 import structlog
 from fastapi import Request, Response
+from fastapi.responses import FileResponse
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -40,9 +43,12 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Select,
     String,
+    cast,
     delete,
     func,
+    literal,
     select,
     text,
     update,
@@ -57,7 +63,7 @@ from src.core.config import Settings
 from src.core.database import Base, varchar_enum
 from src.core.domain_events import SessionFactory
 from src.core.exceptions import DomainError
-from src.core.images import EncodedPhoto, reencode_photo, unsupported_media_type
+from src.core.images import EncodedPhoto, reencode_photo
 
 logger = structlog.get_logger(__name__)
 
@@ -89,23 +95,45 @@ def _now() -> datetime:
 
 class FilePurpose(StrEnum):
     ISSUE_PHOTO = "issue_photo"
+    DOCUMENT = "document"
 
 
 class QuotaClass(StrEnum):
     PHOTOS = "photos"
+    DOCUMENTS = "documents"
 
 
-PURPOSE_CLASS = {FilePurpose.ISSUE_PHOTO: QuotaClass.PHOTOS}
+PURPOSE_CLASS = {
+    FilePurpose.ISSUE_PHOTO: QuotaClass.PHOTOS,
+    FilePurpose.DOCUMENT: QuotaClass.DOCUMENTS,
+}
 
 
-class PhotoVariant(StrEnum):
+class FileVariant(StrEnum):
     DISPLAY = "display"
     THUMB = "thumb"
+    ORIGINAL = "original"
 
 
-_VARIANT_FILES = {PhotoVariant.DISPLAY: "display.webp", PhotoVariant.THUMB: "thumb.webp"}
-_MAIN_VARIANT = PhotoVariant.DISPLAY
+PhotoVariant = FileVariant  # the variants a photo has: DISPLAY and THUMB
+
+_VARIANT_FILES = {
+    FileVariant.DISPLAY: "display.webp",
+    FileVariant.THUMB: "thumb.webp",
+    FileVariant.ORIGINAL: "original.pdf",
+}
+# The variant whose hash is stored and checked by the janitor.
+_MAIN_VARIANT = {
+    FilePurpose.ISSUE_PHOTO: FileVariant.DISPLAY,
+    FilePurpose.DOCUMENT: FileVariant.ORIGINAL,
+}
 PHOTO_CONTENT_TYPE = "image/webp"
+PDF_CONTENT_TYPE = "application/pdf"
+PDF_SIGNATURE = b"%PDF-"
+# The reserve for official votes (E11 section 6): 5% of the quota, at least 100 MB, at most 20%.
+VOTES_RESERVE_SHARE = 0.05
+VOTES_RESERVE_MIN = 100 * 1024 * 1024
+VOTES_RESERVE_MAX_SHARE = 0.2
 
 
 # --- Table ---------------------------------------------------------------------------------------
@@ -178,6 +206,13 @@ class FileDTO:
     deleted: bool = False  # only find_repeat returns deleted files
 
 
+def _known_purpose(value: object) -> FilePurpose | None:
+    try:
+        return FilePurpose(value)
+    except ValueError:
+        return None
+
+
 def _dto(row: StoredFile, caller_id: uuid.UUID | None) -> FileDTO:
     return FileDTO(
         id=row.id,
@@ -240,6 +275,14 @@ def _low_disk() -> DomainError:
     )
 
 
+def _not_that_type() -> DomainError:
+    return DomainError(
+        status_code=415,
+        error_code="UNSUPPORTED_MEDIA_TYPE",
+        message="The file is not of the type it claims to be.",
+    )
+
+
 def key_reused() -> DomainError:
     return DomainError(
         status_code=409,
@@ -286,7 +329,11 @@ def declared_length(request: Request, cap: int) -> int:
 def require_content_type(request: Request, expected: str) -> None:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type != expected:
-        raise unsupported_media_type()
+        raise DomainError(
+            status_code=415,
+            error_code="UNSUPPORTED_MEDIA_TYPE",
+            message=f"Send the file as {expected}.",
+        )
 
 
 async def read_body(request: Request, length: int, cap: int) -> bytes:
@@ -302,18 +349,108 @@ async def read_body(request: Request, length: int, cap: int) -> bytes:
     return bytes(body)
 
 
-def file_response(data: bytes, content_type: str) -> Response:
-    """A stored file: never sniffed, never scripted, cached for good (a file never changes)."""
-    return Response(
-        content=data,
-        media_type=content_type,
-        headers={
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; sandbox",
-            "Cache-Control": "private, max-age=31536000, immutable",
-            "Content-Disposition": "inline",
-        },
+def _disposition(filename: str | None) -> str:
+    """inline for images; for a document an attachment with an ASCII fallback name and the full
+    UTF-8 name (RFC 6266 / RFC 5987)."""
+    if filename is None:
+        return "inline"
+    ascii_name = "".join(
+        ch if ch.isascii() and (ch.isalnum() or ch in " ._-") else "_" for ch in filename
     )
+    ascii_name = " ".join(ascii_name.split())
+    if not any(ch.isalnum() for ch in ascii_name.rsplit(".", 1)[0]):
+        ascii_name = "document." + filename.rsplit(".", 1)[-1] if "." in filename else "document"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+@dataclass(frozen=True)
+class ReceivedFile:
+    """A body written to tmp/ while it was counted and hashed (delete it if it is not stored)."""
+
+    path: Path
+    size: int
+    sha256: str
+
+
+async def receive_to_disk(
+    request: Request, disk: "LocalDisk", length: int, cap: int, signature: bytes
+) -> ReceivedFile:
+    """Stream a body to a temporary file: at most the declared length and the cap, fsynced, and
+    starting with `signature` (else 415, and nothing stays on disk)."""
+    path = disk.new_temporary()
+    digest = hashlib.sha256()
+    size = 0
+    head = b""
+    try:
+        handle = await asyncio.to_thread(open, path, "wb")
+    except OSError as exc:  # a full disk or too many open files: nothing was written
+        if exc.errno == errno.ENOSPC:
+            raise _low_disk() from exc
+        raise
+    try:
+        try:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                if len(head) < len(signature):
+                    head += chunk[: len(signature) - len(head)]
+                    if not signature.startswith(head):
+                        raise _not_that_type()
+                size += len(chunk)
+                if size > length or size > cap:
+                    raise _too_large(min(length, cap))
+                digest.update(chunk)
+                await asyncio.to_thread(handle.write, chunk)
+        except ClientDisconnect as exc:
+            raise _interrupted() from exc
+        if head != signature:
+            raise _not_that_type()
+        await asyncio.to_thread(_flush_and_sync, handle)
+        await asyncio.to_thread(handle.close)
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            await asyncio.to_thread(handle.close)
+        _remove(path)  # always: a half-written file never stays behind
+        if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+            raise _low_disk() from exc
+        raise
+    return ReceivedFile(path=path, size=size, sha256=digest.hexdigest())
+
+
+def _flush_and_sync(handle) -> None:  # type: ignore[no-untyped-def]
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+_IMMUTABLE = "private, max-age=31536000, immutable"
+
+
+def _file_headers(attachment_name: str | None) -> dict[str, str]:
+    return {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        # A document's name and audience can change: never keep a copy (a shared device).
+        "Cache-Control": _IMMUTABLE if attachment_name is None else "private, no-store",
+        "Content-Disposition": _disposition(attachment_name),
+    }
+
+
+def streamed_file_response(path: Path, content_type: str, attachment_name: str) -> FileResponse:
+    """A large stored file (a document) streamed from disk in chunks, never read whole."""
+    return FileResponse(path, media_type=content_type, headers=_file_headers(attachment_name))
+
+
+def file_response(data: bytes, content_type: str, attachment_name: str | None = None) -> Response:
+    """A stored file: never sniffed, never scripted, cached for good (a file never changes).
+    With `attachment_name` the browser saves it instead of rendering it (documents)."""
+    return Response(content=data, media_type=content_type, headers=_file_headers(attachment_name))
+
+
+def attachment_name(title: str, extension: str) -> str:
+    """A file name from a title: no path separators or control characters, at most 120 chars."""
+    cleaned = "".join(ch for ch in title if ch.isprintable() and ch not in '/\\:*?"<>|')
+    cleaned = " ".join(cleaned.split())[:120].strip(" .") or "document"
+    return f"{cleaned}.{extension}"
 
 
 # --- Disk ----------------------------------------------------------------------------------------
@@ -368,11 +505,31 @@ class LocalDisk:
             _remove(target)  # a full disk leaves no half-written blob behind
             raise
 
+    def adopt(self, file_id: uuid.UUID, temporary: Path, name: str) -> None:
+        """Move a fully received temporary file into place as the blob's only variant."""
+        target = self._dir(file_id)
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            os.replace(temporary, target / name)
+            _fsync_dir(target)
+            _fsync_dir(target.parent)
+        except BaseException:
+            _remove(temporary)
+            _remove(target)
+            raise
+
+    def new_temporary(self) -> Path:
+        return self.tmp / f"upload-{uuid.uuid4().hex}"
+
     def read(self, file_id: uuid.UUID, name: str) -> bytes | None:
         try:
             return (self._dir(file_id) / name).read_bytes()
         except FileNotFoundError:
             return None
+
+    def path_of(self, file_id: uuid.UUID, name: str) -> Path | None:
+        path = self._dir(file_id) / name
+        return path if path.is_file() else None
 
     def exists(self, file_id: uuid.UUID) -> bool:
         return self._dir(file_id).is_dir()
@@ -510,10 +667,16 @@ def file_limits(settings: Settings) -> FileLimits:
     )
 
 
+def votes_reserve(quota_bytes: int) -> int:
+    reserve = max(int(quota_bytes * VOTES_RESERVE_SHARE), VOTES_RESERVE_MIN)
+    return min(reserve, int(quota_bytes * VOTES_RESERVE_MAX_SHARE))
+
+
 def class_limit(quota_bytes: int, quota_class: QuotaClass) -> int:
+    """How much of the quota a class may fill (all classes together count against it)."""
     if quota_class == QuotaClass.PHOTOS:
         return int(quota_bytes * PHOTO_SHARE_OF_QUOTA)
-    return quota_bytes  # pragma: no cover - documents and votes come with F3 and E3 part B
+    return quota_bytes - votes_reserve(quota_bytes)
 
 
 class FileStore:
@@ -605,12 +768,26 @@ class FileStore:
         )
         return _dto(row, caller_id) if row is not None else None
 
-    async def read(self, file: FileDTO, variant: PhotoVariant) -> bytes | None:
+    async def read(self, file: FileDTO, variant: FileVariant) -> bytes | None:
         """The bytes of a variant; None (and an error in the log) when the blob is missing."""
         data = await asyncio.to_thread(self.disk.read, file.id, _VARIANT_FILES[variant])
         if data is None:
             logger.error("file_blob_missing", file_id=str(file.id), purpose=file.purpose.value)
         return data
+
+    async def blob_path(self, file: FileDTO, variant: FileVariant) -> Path | None:
+        """Where a variant lies on disk, for streaming; None (and an error) when it is missing."""
+        path = await asyncio.to_thread(self.disk.path_of, file.id, _VARIANT_FILES[variant])
+        if path is None:
+            logger.error("file_blob_missing", file_id=str(file.id), purpose=file.purpose.value)
+        return path
+
+    def live_owner_refs(self, purpose: FilePurpose) -> Select[tuple[uuid.UUID]]:
+        """A subquery of the owners that still have a live file of this purpose, for a module
+        that hides records whose file expired (demo mode) or was deleted."""
+        return select(StoredFile.owner_ref).where(
+            StoredFile.purpose == purpose, StoredFile.deleted_at.is_(None)
+        )
 
     async def find_repeat(
         self, user_id: uuid.UUID, key: str, purpose: FilePurpose, owner_ref: uuid.UUID
@@ -647,12 +824,16 @@ class FileStore:
         limit = class_limit(self.limits.quota_bytes, PURPOSE_CLASS[purpose])
         if used + self.reservations.held(building_id) + cap > limit:
             raise _quota_exceeded()
+        if PURPOSE_CLASS[purpose] != QuotaClass.PHOTOS:
+            return  # the daily limit is for the residents' stream; staff files have the quota
         now = _now()
+        photo_purposes = [p for p, c in PURPOSE_CLASS.items() if c == QuotaClass.PHOTOS]
         rows = (
             await self.session.execute(
                 select(StoredFile.created_at, StoredFile.size_bytes).where(
                     StoredFile.created_by_user_id == user_id,
                     StoredFile.created_at > now - DAY,
+                    StoredFile.purpose.in_(photo_purposes),
                 )
             )
         ).all()
@@ -714,7 +895,7 @@ class FileStore:
             width=photo.width,
             height=photo.height,
             size_bytes=size,
-            sha256=hashlib.sha256(variants[_VARIANT_FILES[_MAIN_VARIANT]]).hexdigest(),
+            sha256=hashlib.sha256(variants[_VARIANT_FILES[_MAIN_VARIANT[purpose]]]).hexdigest(),
             created_by_user_id=created_by,
             idempotency_key=idempotency_key,
             created_at=now,
@@ -734,6 +915,79 @@ class FileStore:
             raise
         logger.info("file_stored", file_id=str(file_id), purpose=purpose.value, size_bytes=size)
         return _dto(row, created_by), True
+
+    async def store_received(
+        self,
+        *,
+        building_id: uuid.UUID,
+        purpose: FilePurpose,
+        owner_ref: uuid.UUID,
+        created_by: uuid.UUID,
+        received: ReceivedFile,
+        content_type: str,
+        idempotency_key: str | None,
+    ) -> FileDTO:
+        """Store a streamed file (a document) in the caller's transaction: the final quota check
+        under the building's lock, the blob moved into place, then the row. The caller removes
+        `received.path` if this raises before the move."""
+        await self.session.execute(
+            select(
+                func.pg_advisory_xact_lock(func.hashtextextended(f"core:files:{building_id}", 0))
+            )
+        )
+        if await self._used(building_id) + received.size > class_limit(
+            self.limits.quota_bytes, PURPOSE_CLASS[purpose]
+        ):
+            raise _quota_exceeded()
+        now = _now()
+        file_id = uuid.uuid4()
+        await asyncio.to_thread(
+            self.disk.adopt, file_id, received.path, _VARIANT_FILES[_MAIN_VARIANT[purpose]]
+        )
+        row = StoredFile(
+            id=file_id,
+            building_id=building_id,
+            purpose=purpose,
+            owner_ref=owner_ref,
+            content_type=content_type,
+            size_bytes=received.size,
+            sha256=received.sha256,
+            created_by_user_id=created_by,
+            idempotency_key=idempotency_key,
+            created_at=now,
+            delete_after=(
+                now + self.limits.demo_retention if self.limits.demo_retention is not None else None
+            ),
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(row)
+                await self.session.flush()
+        except IntegrityError:
+            await asyncio.to_thread(self.disk.remove, file_id)
+            if idempotency_key is None:
+                raise
+            raise key_reused() from None  # the same key won a race; the module looks it up
+        logger.info(
+            "file_stored", file_id=str(file_id), purpose=purpose.value, size_bytes=received.size
+        )
+        return _dto(row, created_by)
+
+    async def find_by_key(
+        self, user_id: uuid.UUID, key: str, purpose: FilePurpose
+    ) -> FileDTO | None:
+        """The file a user stored with this Idempotency-Key for a purpose whose owner the module
+        creates with the upload (a document); another purpose is 409 IDEMPOTENCY_KEY_REUSED."""
+        row = await self.session.scalar(
+            select(StoredFile)
+            .where(StoredFile.created_by_user_id == user_id, StoredFile.idempotency_key == key)
+            .execution_options(populate_existing=True)
+        )
+        if row is None:
+            return None
+        if row.purpose != purpose:
+            raise key_reused()
+        return _dto(row, user_id)
 
     async def delete(self, file_id: uuid.UUID, purpose: FilePurpose, owner_ref: uuid.UUID) -> bool:
         """Hide a file now; the janitor erases it after PURGE_DELAY."""
@@ -867,22 +1121,31 @@ async def _reconcile(
     blobs are logged as errors."""
     async with session_factory() as session:
         rows = (
-            await session.execute(select(StoredFile.id, StoredFile.sha256, StoredFile.deleted_at))
+            await session.execute(
+                select(StoredFile.id, StoredFile.sha256, StoredFile.deleted_at, StoredFile.purpose)
+            )
         ).all()
-    known = {file_id for file_id, _, _ in rows}
+    known = {file_id for file_id, _, _, _ in rows}
     on_disk = await asyncio.to_thread(lambda: dict(disk.blob_ages()))
     for file_id, age in on_disk.items():
         if file_id not in known and age > ORPHAN_MIN_AGE.total_seconds():
             await asyncio.to_thread(disk.remove, file_id)
             report.orphans_removed += 1
-    live = [(file_id, digest) for file_id, digest, deleted_at in rows if deleted_at is None]
-    for file_id, _ in live:
+    live = [
+        (file_id, digest, purpose)
+        for file_id, digest, deleted_at, purpose in rows
+        if deleted_at is None
+    ]
+    for file_id, _, _ in live:
         if file_id not in on_disk:
             report.missing += 1
             logger.error("file_blob_missing", file_id=str(file_id))
     sample = random.sample(live, min(CORRUPTION_SAMPLE, len(live)))
-    for file_id, digest in sample:
-        data = await asyncio.to_thread(disk.read, file_id, _VARIANT_FILES[_MAIN_VARIANT])
+    for file_id, digest, purpose in sample:
+        known = _known_purpose(purpose)
+        if known is None:
+            continue
+        data = await asyncio.to_thread(disk.read, file_id, _VARIANT_FILES[_MAIN_VARIANT[known]])
         if data is not None and hashlib.sha256(data).hexdigest() != digest:
             report.corrupt += 1
             logger.error("file_blob_corrupt", file_id=str(file_id))

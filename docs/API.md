@@ -2265,7 +2265,10 @@ and errors shared by every upload: section 12.*
   server after 14 days.
 - Anyone without access to the module (no active membership and no staff role): `403 FORBIDDEN`.
   A document the caller may not see, of another building or deleted: `404 DOCUMENT_NOT_FOUND`.
-- Documents are kept until the chairman deletes them (in demo mode about a day at most).
+- Documents are kept until the chairman deletes them (in demo mode about a day at most: a
+  document whose file expired disappears from the list).
+- A repeat with the same `Idempotency-Key` of a document that was deleted, whose file expired, or
+  that moved into an audience the caller no longer sees: `409 IDEMPOTENCY_KEY_REUSED`.
 
 ### Document object (`DocumentView`)
 ```json
@@ -2310,8 +2313,9 @@ One `DocumentView`.
 
 ### `GET /api/v1/documents/{document_id}/file`
 The PDF, `Content-Type: application/pdf`, always as an attachment (`Content-Disposition:
-attachment` with a file name made from the title), with the headers of section 12. A document
-whose file is missing on the server: `404 DOCUMENT_NOT_FOUND`.
+attachment` with a file name made from the title), streamed from disk, with the headers of
+section 12 except the cache: `Cache-Control: private, no-store` (a document's name and audience
+can change). A document whose file is missing on the server: `404 DOCUMENT_NOT_FOUND`.
 
 ### `PATCH /api/v1/documents/{document_id}` (the chairman and the board)
 `{"title"?, "category"?, "audience"?, "document_date"?}` (`document_date: null` clears it).
