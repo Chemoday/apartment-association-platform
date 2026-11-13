@@ -64,6 +64,9 @@ SENSITIVE_KEY_MARKERS: tuple[str, ...] = (
     "user_agent",  # only a coarse device kind is ever kept
     "endpoint",  # a WebPush endpoint is a capability URL: whoever has it can push to the device
     "p256dh",
+    # Free text people write: a document's title travels in the upload's query string (E11 F3);
+    # titles of board documents may name residents.
+    "title",
 )
 
 # Free-text patterns masked inside any string value (log messages, URLs, exception texts).

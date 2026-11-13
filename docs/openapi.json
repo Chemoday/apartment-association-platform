@@ -6509,7 +6509,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state. error_code: `ISSUE_ENDED`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED`",
+            "description": "Conflict with the current state. error_code: `ISSUE_ENDED`, `PHOTO_LIMIT_REACHED`, `IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED`",
             "content": {
               "application/json": {
                 "schema": {
@@ -8007,6 +8007,66 @@
         }
       }
     },
+    "/api/v1/documents/upload-options": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Upload Options",
+        "description": "Whether the caller may upload now, into which audiences, and the size limit.",
+        "operationId": "upload_options_api_v1_documents_upload_options_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadOptions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/api/v1/documents": {
       "post": {
         "tags": [
@@ -8160,7 +8220,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state. error_code: `IDEMPOTENCY_KEY_REUSED`",
+            "description": "Conflict with the current state. error_code: `IDEMPOTENCY_KEY_REUSED`, `UPLOAD_REMOVED`",
             "content": {
               "application/json": {
                 "schema": {
@@ -15642,6 +15702,41 @@
         ],
         "title": "UnsubscribeResponse",
         "description": "What one unsubscribe turned off (N8): one event type on e-mail."
+      },
+      "UploadOptions": {
+        "properties": {
+          "can_upload": {
+            "type": "boolean",
+            "title": "Can Upload"
+          },
+          "audiences": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentAudience"
+            },
+            "type": "array",
+            "title": "Audiences"
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentCategory"
+            },
+            "type": "array",
+            "title": "Categories"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "title": "Max Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "can_upload",
+          "audiences",
+          "categories",
+          "max_bytes"
+        ],
+        "title": "UploadOptions",
+        "description": "What the upload form may offer the caller (no form when `can_upload` is false)."
       },
       "ValidationErrorItem": {
         "properties": {

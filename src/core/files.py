@@ -23,6 +23,7 @@ import os
 import random
 import shutil
 import time
+import unicodedata
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterator
@@ -30,6 +31,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 import structlog
@@ -121,6 +123,9 @@ PURPOSE_CLASS = {
     FilePurpose.ISSUE_PHOTO: QuotaClass.PHOTOS,
     FilePurpose.DOCUMENT: QuotaClass.DOCUMENTS,
 }
+
+
+_PHOTO_PURPOSES = sorted(p for p, c in PURPOSE_CLASS.items() if c == QuotaClass.PHOTOS)
 
 
 class FileVariant(StrEnum):
@@ -288,7 +293,7 @@ def busy() -> DomainError:
         status_code=429,
         error_code="RATE_LIMITED",
         message="The server is busy with other uploads; try this file again shortly.",
-        extra={"retry_after_seconds": BUSY_RETRY_SECONDS},
+        extra={"retry_after_seconds": BUSY_RETRY_SECONDS, "reason": "BUSY"},
         headers={"Retry-After": str(BUSY_RETRY_SECONDS)},
     )
 
@@ -298,7 +303,7 @@ def _daily_limit(wait: int) -> DomainError:
         status_code=429,
         error_code="RATE_LIMITED",
         message="You have stored the files allowed for a day; try again later.",
-        extra={"retry_after_seconds": wait},
+        extra={"retry_after_seconds": wait, "reason": "DAILY_LIMIT"},
         headers={"Retry-After": str(wait)},
     )
 
@@ -311,11 +316,13 @@ def _uploads_disabled() -> DomainError:
     )
 
 
-def _quota_exceeded() -> DomainError:
+def _quota_exceeded(quota_class: QuotaClass) -> DomainError:
+    what = "photos" if quota_class == QuotaClass.PHOTOS else "documents"
     return DomainError(
         status_code=507,
         error_code="STORAGE_QUOTA_EXCEEDED",
-        message="The association has used up its storage for files.",
+        message=f"The association's room for {what} is full.",
+        extra={"reason": "QUOTA", "category": quota_class.value},
     )
 
 
@@ -350,6 +357,14 @@ def key_reused() -> DomainError:
         status_code=409,
         error_code="IDEMPOTENCY_KEY_REUSED",
         message="This Idempotency-Key was used for another file; send a new key for every file.",
+    )
+
+
+def upload_removed() -> DomainError:
+    return DomainError(
+        status_code=409,
+        error_code="UPLOAD_REMOVED",
+        message="Your earlier upload of this file was removed; do not send it again.",
     )
 
 
@@ -396,9 +411,9 @@ def declared_length(request: Request, cap: int) -> int:
     return length
 
 
-def require_content_type(request: Request, expected: str) -> None:
+def require_content_type(request: Request, expected: str, *aliases: str) -> None:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if content_type != expected:
+    if content_type != expected and content_type not in aliases:
         raise DomainError(
             status_code=415,
             error_code="UNSUPPORTED_MEDIA_TYPE",
@@ -428,8 +443,11 @@ def _disposition(filename: str | None) -> str:
     UTF-8 name (RFC 6266 / RFC 5987)."""
     if filename is None:
         return "inline"
+    # Latin letters with accents keep their base letter ("Üldkoosolek" -> "Uldkoosolek").
+    folded = unicodedata.normalize("NFKD", filename)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
     ascii_name = "".join(
-        ch if ch.isascii() and (ch.isalnum() or ch in " ._-") else "_" for ch in filename
+        ch if ch.isascii() and (ch.isalnum() or ch in " ._-") else "_" for ch in folded
     )
     ascii_name = " ".join(ascii_name.split())
     if not any(ch.isalnum() for ch in ascii_name.rsplit(".", 1)[0]):
@@ -534,10 +552,17 @@ def file_response(data: bytes, content_type: str) -> Response:
 
 
 def attachment_name(title: str, extension: str) -> str:
-    """A file name from a title: no path separators or control characters, at most 120 chars."""
-    cleaned = "".join(ch for ch in title if ch.isprintable() and ch not in '/\\:*?"<>|')
-    cleaned = " ".join(cleaned.split())[:120].strip(" .") or "document"
-    return f"{cleaned}.{extension}"
+    """A file name from a title: one line, no path separators or invisible characters, at most
+    120 characters, and the extension once (a title prefilled from "scan.pdf" stays "scan.pdf")."""
+    cleaned = "".join(
+        " " if unicodedata.category(ch)[0] in "CZ" else ch for ch in title if ch not in '/\\:*?"<>|'
+    )
+    cleaned = " ".join(cleaned.split())
+    suffix = f".{extension}"
+    if cleaned.lower().endswith(suffix):
+        cleaned = cleaned[: -len(suffix)]
+    cleaned = cleaned[:120].strip(" .") or "document"
+    return f"{cleaned}{suffix}"
 
 
 # --- Disk ----------------------------------------------------------------------------------------
@@ -928,7 +953,13 @@ class FileStore:
     # --- Admission (before the body is read) ----------------------------------------------------
 
     async def admit(
-        self, building_id: uuid.UUID, user_id: uuid.UUID, purpose: FilePurpose, cap: int
+        self,
+        building_id: uuid.UUID,
+        user_id: uuid.UUID,
+        purpose: FilePurpose,
+        cap: int,
+        *,
+        daily_limit: bool = True,
     ) -> None:
         """Demo mode, the disk, the quota (with the bodies in flight) and the user's daily
         limit, all before a byte of the body is read."""
@@ -940,19 +971,18 @@ class FileStore:
         used = await self._used(building_id)
         limit = class_limit(self.limits.quota_bytes, PURPOSE_CLASS[purpose])
         if used + self.reservations.held(building_id) + cap > limit:
-            raise _quota_exceeded()
+            raise _quota_exceeded(PURPOSE_CLASS[purpose])
         if await self._pending(building_id) > self.limits.quota_bytes * PENDING_DELETION_SHARE:
             raise _deletions_pending()
-        if PURPOSE_CLASS[purpose] != QuotaClass.PHOTOS:
+        if PURPOSE_CLASS[purpose] != QuotaClass.PHOTOS or not daily_limit:
             return  # the daily limit is for the residents' stream; staff files have the quota
         now = _now()
-        photo_purposes = [p for p, c in PURPOSE_CLASS.items() if c == QuotaClass.PHOTOS]
         rows = (
             await self.session.execute(
                 select(StoredFile.created_at, StoredFile.size_bytes).where(
                     StoredFile.created_by_user_id == user_id,
                     StoredFile.created_at > now - DAY,
-                    StoredFile.purpose.in_(photo_purposes),
+                    StoredFile.purpose.in_(_PHOTO_PURPOSES),
                 )
             )
         ).all()
@@ -961,17 +991,15 @@ class FileStore:
             oldest = min(at for at, _ in rows)
             raise _daily_limit(max(1, int((oldest + DAY - now).total_seconds()) + 1))
 
-    async def _used(self, building_id: uuid.UUID) -> int:
+    async def _used(self, building_id: uuid.UUID, *, photos_only: bool = False) -> int:
         """The live files of a building: what the quota counts. A deleted file frees its room
         at once; until it is purged it counts against PENDING_DELETION_SHARE instead."""
-        return int(
-            await self.session.scalar(
-                select(func.coalesce(func.sum(StoredFile.size_bytes), 0)).where(
-                    StoredFile.building_id == building_id, StoredFile.deleted_at.is_(None)
-                )
-            )
-            or 0
+        statement = select(func.coalesce(func.sum(StoredFile.size_bytes), 0)).where(
+            StoredFile.building_id == building_id, StoredFile.deleted_at.is_(None)
         )
+        if photos_only:
+            statement = statement.where(StoredFile.purpose.in_(_PHOTO_PURPOSES))
+        return int(await self.session.scalar(statement) or 0)
 
     async def _pending(self, building_id: uuid.UUID) -> int:
         return int(
@@ -1006,7 +1034,7 @@ class FileStore:
         size = len(photo.display) + len(photo.thumb)
         used_after = await self._used(building_id) + size
         if used_after > class_limit(self.limits.quota_bytes, PURPOSE_CLASS[purpose]):
-            raise _quota_exceeded()
+            raise _quota_exceeded(PURPOSE_CLASS[purpose])
         now = _now()
         if self.limits.demo_retention is not None:
             delete_after = min(filter(None, [delete_after, now + self.limits.demo_retention]))
@@ -1068,7 +1096,7 @@ class FileStore:
         )
         used_after = await self._used(building_id) + received.size
         if used_after > class_limit(self.limits.quota_bytes, PURPOSE_CLASS[purpose]):
-            raise _quota_exceeded()
+            raise _quota_exceeded(PURPOSE_CLASS[purpose])
         now = _now()
         file_id = uuid.uuid4()
         await asyncio.to_thread(
@@ -1105,12 +1133,20 @@ class FileStore:
         return _dto(row, created_by)
 
     async def _check_alerts(self, building_id: uuid.UUID, now: datetime, used: int) -> None:
-        """A threshold of the room for files reached for the first time (since the usage last
-        fell well below it): insert its row and store the event, in the caller's transaction."""
+        """A threshold reached for the first time (since the usage last fell well below it):
+        insert its row and, for the highest threshold newly reached, store one event, in the
+        caller's transaction. The fuller of the room for files and the room for photos counts,
+        so the board hears before photos are refused too."""
         if self.bus is None:
             return
-        room_percent = used * 100 // room_for_files(self.limits.quota_bytes)
-        used_percent = used * 100 // self.limits.quota_bytes
+        quota = self.limits.quota_bytes
+        photos = await self._used(building_id, photos_only=True)
+        room_percent = max(
+            used * 100 // room_for_files(quota),
+            photos * 100 // class_limit(quota, QuotaClass.PHOTOS),
+        )
+        used_percent = used * 100 // quota
+        newly: list[int] = []
         for threshold in ALERT_THRESHOLDS:
             if room_percent < threshold:
                 continue
@@ -1121,14 +1157,15 @@ class FileStore:
                 .returning(FileAlert.threshold)
             )
             if inserted is not None:
-                logger.warning(
-                    "file_storage_threshold", threshold=threshold, used_percent=used_percent
+                newly.append(threshold)
+        if newly:  # one upload that passes both thresholds tells the board once
+            threshold = max(newly)
+            logger.warning("file_storage_threshold", threshold=threshold, used_percent=used_percent)
+            session_outbox(self.session, self.bus).add(
+                StorageUsageHigh(
+                    building_id=building_id, threshold=threshold, used_percent=used_percent
                 )
-                session_outbox(self.session, self.bus).add(
-                    StorageUsageHigh(
-                        building_id=building_id, threshold=threshold, used_percent=used_percent
-                    )
-                )
+            )
 
     async def usage(self, building_id: uuid.UUID) -> "FileUsage":
         rows = (
@@ -1320,21 +1357,27 @@ async def janitor_tick(
         )
         report.expired = expired.rowcount or 0
         if quota_bytes is not None:  # usage fell well below a threshold: it may be told again
-            used = (
-                select(func.coalesce(func.sum(StoredFile.size_bytes), 0))
-                .where(
-                    StoredFile.building_id == FileAlert.building_id,
-                    StoredFile.deleted_at.is_(None),
+
+            def live_sum(*conditions: ColumnElement[bool]) -> Any:
+                return cast(
+                    select(func.coalesce(func.sum(StoredFile.size_bytes), 0))
+                    .where(
+                        StoredFile.building_id == FileAlert.building_id,
+                        StoredFile.deleted_at.is_(None),
+                        *conditions,
+                    )
+                    .scalar_subquery(),
+                    BigInteger,
                 )
-                .scalar_subquery()
-            )
+
+            below = cast(FileAlert.threshold, BigInteger) - ALERT_RESET_POINTS
+            # BIGINT throughout: any real quota times a percent overflows a 32-bit integer.
             await session.execute(
                 delete(FileAlert)
-                # BIGINT throughout: any real quota times a percent overflows a 32-bit integer.
                 .where(
-                    cast(used, BigInteger) * 100
-                    < (cast(FileAlert.threshold, BigInteger) - ALERT_RESET_POINTS)
-                    * literal(room_for_files(quota_bytes), BigInteger)
+                    live_sum() * 100 < below * literal(room_for_files(quota_bytes), BigInteger),
+                    live_sum(StoredFile.purpose.in_(_PHOTO_PURPOSES)) * 100
+                    < below * literal(class_limit(quota_bytes, QuotaClass.PHOTOS), BigInteger),
                 )
                 .execution_options(synchronize_session=False)
             )

@@ -35,9 +35,9 @@ from src.core.files import (
     PhotoVariant,
     declared_length,
     get_file_store_factory,
-    key_reused,
     read_body,
     require_content_type,
+    upload_removed,
 )
 from src.modules.issues.events import IssueMerged, IssueReported, IssueStatusChanged
 from src.modules.issues.models import Issue, IssueFollower, IssueStatusChange
@@ -503,9 +503,9 @@ class IssuesService:
     ) -> tuple[IssuePhoto, bool]:
         """Store one photo; returns it and whether it is new (False: a repeat of the same key).
 
-        The rules first, then the storage's admission, then the size; the request's transaction
-        is committed before the body is read, so a slow upload holds no database connection. The
-        issue is locked and checked again before the photo is stored.
+        The rules, then the type and the size, then the storage's admission; the request's
+        transaction is committed before the body is read, so a slow upload holds no database
+        connection. The issue is locked and checked again before the photo is stored.
         """
         files = self._require_files()
         # A repeat answers like the first upload did, even if the issue ended meanwhile.
@@ -517,9 +517,18 @@ class IssuesService:
         issue = await self._photo_target(user, issue_id)
         if await files.count(PHOTO, issue.id) >= MAX_PHOTOS_PER_ISSUE:
             raise _photo_limit()
-        await files.admit(user.building_id, user.id, PHOTO, PHOTO_MAX_BYTES)
-        require_content_type(request, "image/jpeg")
+        # Some older phones and browsers call a JPEG image/jpg or image/pjpeg.
+        require_content_type(request, "image/jpeg", "image/jpg", "image/pjpeg")
         length = declared_length(request, PHOTO_MAX_BYTES)
+        # The size the client declared is held against the quota (not the route's cap), and the
+        # board, which documents issues for everyone, has no daily limit.
+        await files.admit(
+            user.building_id,
+            user.id,
+            PHOTO,
+            length,
+            daily_limit=not is_board(user.building_role),
+        )
         await self.session.commit()
         with files.reservations.hold(user.building_id, length):
             with files.gate.receiving(user.id):
@@ -577,14 +586,11 @@ class IssuesService:
     def _repeat_answer(
         self, user: CurrentUserDTO, issue: Issue, repeat: FileDTO
     ) -> tuple[IssuePhoto, bool]:
-        """A repeat of an upload: the photo again, or why it is gone. Its issue ended in a way that
-        deletes photos (declined, duplicate, withdrawn): 409 ISSUE_ENDED, like a new upload would
-        get; deleted by a person while the issue is open: the key cannot be used again."""
+        """A repeat of an upload: the photo again, or that it was removed meanwhile (deleted by a
+        person, or with its issue): 409 UPLOAD_REMOVED, so the client does not send it again."""
         if not repeat.deleted:
             return self._photo_view(user, issue, repeat), False
-        if not is_open(issue.status):
-            raise _ended(issue.status)
-        raise key_reused()
+        raise upload_removed()
 
     def _require_files(self) -> FileStore:
         if self.files is None:

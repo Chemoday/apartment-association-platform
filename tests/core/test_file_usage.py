@@ -186,3 +186,65 @@ async def test_a_purpose_of_a_newer_release_is_counted_but_never_breaks_the_usag
     body = usage.json()
     assert body["used_bytes"] == 5000  # like the quota check, every row counts
     assert all(category["used_bytes"] == 0 for category in body["categories"])
+
+
+async def test_one_upload_past_both_thresholds_tells_the_board_once(
+    db_session: AsyncSession, disk: LocalDisk
+) -> None:
+    building = await create_building(db_session)
+    user = await create_user(db_session, building, "Ivan Petrov")
+    bus = InMemoryEventBus()
+    files = store_with_bus(db_session, disk, bus)
+
+    await _photo(files, building, user, 15 * MB // 2)  # 93% of the room at once
+
+    [alert] = _alerts(db_session, bus)
+    assert alert.threshold == 90
+    assert sorted(await db_session.scalars(select(FileAlert.threshold))) == [70, 90]
+
+
+async def test_photos_near_their_own_limit_alert_before_they_are_refused(
+    db_session: AsyncSession, disk: LocalDisk
+) -> None:
+    from src.core.files import QuotaClass, class_limit, room_for_files, votes_reserve
+
+    # A large quota: the room for files is 95%, photos stop at 80%; 72% of the quota in photos is
+    # only 75% of the room but 90% of the room for photos.
+    quota_mb = 2048
+    building = await create_building(db_session)
+    user = await create_user(db_session, building, "Ivan Petrov")
+    bus = InMemoryEventBus()
+    settings = get_settings().model_copy(
+        update={"DEMO_MODE_ENABLED": False, "FILES_QUOTA_MB": quota_mb, "FILES_MIN_FREE_MB": 0}
+    )
+    files = FileStore(db_session, settings, disk, UploadGate(), Reservations(), bus)
+    photos_limit = class_limit(quota_mb * MB, QuotaClass.PHOTOS)
+    assert room_for_files(quota_mb * MB) == quota_mb * MB - votes_reserve(quota_mb * MB)
+    used = photos_limit * 90 // 100 + 1
+
+    await _photo(files, building, user, used)
+
+    # 75% of the room alone would only be the 70% alert; the room for photos makes it 90%.
+    assert used * 100 // room_for_files(quota_mb * MB) < 90
+    assert [a.threshold for a in _alerts(db_session, bus)] == [90]
+
+
+async def test_the_janitor_keeps_an_alert_that_the_photos_reached_while_they_stay_near_it(
+    db_session: AsyncSession, disk: LocalDisk
+) -> None:
+    from src.core.files import QuotaClass, class_limit
+
+    quota_mb = 2048
+    building = await create_building(db_session)
+    user = await create_user(db_session, building, "Ivan Petrov")
+    settings = get_settings().model_copy(
+        update={"DEMO_MODE_ENABLED": False, "FILES_QUOTA_MB": quota_mb, "FILES_MIN_FREE_MB": 0}
+    )
+    files = FileStore(db_session, settings, disk, UploadGate(), Reservations(), InMemoryEventBus())
+    # Photos at 85% of their room: the 70% alert stays (85 > 70 - 10), though the whole room is
+    # filled far less.
+    await _photo(files, building, user, class_limit(quota_mb * MB, QuotaClass.PHOTOS) * 85 // 100)
+
+    await janitor_tick(factory_of(db_session), disk, quota_bytes=quota_mb * MB)
+
+    assert 70 in list(await db_session.scalars(select(FileAlert.threshold)))

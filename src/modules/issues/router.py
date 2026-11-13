@@ -194,7 +194,12 @@ IdempotencyKey = Annotated[
                 400: ["UPLOAD_INTERRUPTED"],
                 403: ["FORBIDDEN", "UPLOADS_DISABLED"],
                 404: ["ISSUE_NOT_FOUND"],
-                409: ["ISSUE_ENDED", "PHOTO_LIMIT_REACHED", "IDEMPOTENCY_KEY_REUSED"],
+                409: [
+                    "ISSUE_ENDED",
+                    "PHOTO_LIMIT_REACHED",
+                    "IDEMPOTENCY_KEY_REUSED",
+                    "UPLOAD_REMOVED",
+                ],
                 408: ["UPLOAD_TIMEOUT"],
                 411: ["LENGTH_REQUIRED"],
                 413: ["FILE_TOO_LARGE"],

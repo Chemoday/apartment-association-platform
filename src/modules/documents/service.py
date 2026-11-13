@@ -28,6 +28,7 @@ from src.core.files import (
     key_reused,
     receive_to_disk,
     require_content_type,
+    upload_removed,
 )
 from src.core.validation import clean_required_text
 from src.modules.documents.models import Document
@@ -45,6 +46,7 @@ from src.modules.documents.schemas import (
     DocumentCategory,
     DocumentEdit,
     DocumentView,
+    UploadOptions,
     single_line,
 )
 from src.modules.property.schemas import CurrentUserDTO
@@ -76,6 +78,11 @@ def _invalid_title(message: str) -> DomainError:
         message="The request is invalid.",
         extra={"errors": [{"loc": ["query", "title"], "message": message, "type": "value_error"}]},
     )
+
+
+def _length_of(request: Request) -> int | None:
+    raw = request.headers.get("content-length")
+    return int(raw) if raw is not None and raw.isdigit() else None
 
 
 def _clean_title(title: str) -> str:
@@ -111,19 +118,24 @@ class DocumentsService:
     ) -> tuple[DocumentView, bool]:
         """Store one PDF; returns it and whether it is new (False: a repeat of the same key).
 
-        The rules and the storage's admission come first, then the size; the request's
+        The rules, then the type and the size, then the storage's admission; the request's
         transaction is committed before the body is streamed to disk."""
         self._require_access(user)
+        if not is_staff(user.building_role):
+            raise _forbidden(
+                "Documents are uploaded by the chairman, the board and the accountant."
+            )
         if not may_upload(user.building_role, audience):
             raise _forbidden("You cannot upload documents into this audience.")
         title = _clean_title(title)
         if idempotency_key is not None:
-            repeat = await self._repeat(user, idempotency_key)
+            repeat = await self._repeat(user, idempotency_key, _length_of(request))
             if repeat is not None:
                 return repeat, False
-        await self.files.admit(user.building_id, user.id, DOCUMENT, DOCUMENT_MAX_BYTES)
         require_content_type(request, PDF_CONTENT_TYPE)
         length = declared_length(request, DOCUMENT_MAX_BYTES)
+        # The size the client declared is held against the quota, not the route's cap.
+        await self.files.admit(user.building_id, user.id, DOCUMENT, length)
         await self.session.commit()
         with self.files.reservations.hold(user.building_id, length):
             with self.files.gate.receiving(user.id):
@@ -144,7 +156,7 @@ class DocumentsService:
             except DomainError as error:
                 received.path.unlink(missing_ok=True)
                 if error.error_code == "IDEMPOTENCY_KEY_REUSED" and idempotency_key is not None:
-                    repeat = await self._repeat(user, idempotency_key)  # a parallel request won
+                    repeat = await self._repeat(user, idempotency_key, length)  # a parallel win
                     if repeat is not None:
                         return repeat, False
                 raise
@@ -175,7 +187,13 @@ class DocumentsService:
             raise
         return await self._view(user, document), True
 
-    async def _repeat(self, user: CurrentUserDTO, key: str) -> DocumentView | None:
+    async def _repeat(
+        self, user: CurrentUserDTO, key: str, length: int | None
+    ) -> DocumentView | None:
+        """The document an earlier upload with this key made. Gone meanwhile (deleted, its file
+        expired, or moved into an audience the caller no longer sees: nothing more is told):
+        409 UPLOAD_REMOVED, so the client does not send it again. A body of another size is
+        another file under a used key: 409 IDEMPOTENCY_KEY_REUSED."""
         found: FileDTO | None = await self.files.find_by_key(user.id, key, DOCUMENT)
         if found is None:
             return None
@@ -185,11 +203,22 @@ class DocumentsService:
             or document is None
             or document.deleted_at is not None
             or document.building_id != user.building_id
-            # moved meanwhile into an audience the caller no longer sees: tell nothing about it
             or document.audience not in visible_audiences(user.building_role)
         ):
+            raise upload_removed()
+        if length is not None and length != document.size_bytes:
             raise key_reused()
         return await self._view(user, document)
+
+    def upload_options(self, user: CurrentUserDTO) -> UploadOptions:
+        self._require_access(user)
+        audiences = [a for a in DocumentAudience if may_upload(user.building_role, a)]
+        return UploadOptions(
+            can_upload=bool(audiences) and self.files.uploads_enabled,
+            audiences=audiences,
+            categories=list(DocumentCategory),
+            max_bytes=DOCUMENT_MAX_BYTES,
+        )
 
     # --- Reading --------------------------------------------------------------------------------
 

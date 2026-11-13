@@ -1,7 +1,6 @@
 """Thin HTTP layer of the association's documents (docs/API.md section 13)."""
 
 import uuid
-from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -14,8 +13,10 @@ from src.modules.documents.schemas import (
     TITLE_MAX,
     DocumentAudience,
     DocumentCategory,
+    DocumentDate,
     DocumentEdit,
     DocumentView,
+    UploadOptions,
 )
 from src.modules.documents.service import DocumentsService, get_documents_service
 from src.modules.property.schemas import CurrentUserDTO
@@ -44,6 +45,12 @@ _PDF_BODY = {
 }
 
 
+@router.get("/upload-options", response_model=UploadOptions)
+async def upload_options(user: Caller, service: Service) -> UploadOptions:
+    """Whether the caller may upload now, into which audiences, and the size limit."""
+    return service.upload_options(user)
+
+
 @router.post(
     "",
     response_model=DocumentView,
@@ -55,7 +62,7 @@ _PDF_BODY = {
             {
                 400: ["UPLOAD_INTERRUPTED"],
                 403: ["FORBIDDEN", "UPLOADS_DISABLED"],
-                409: ["IDEMPOTENCY_KEY_REUSED"],
+                409: ["IDEMPOTENCY_KEY_REUSED", "UPLOAD_REMOVED"],
                 408: ["UPLOAD_TIMEOUT"],
                 411: ["LENGTH_REQUIRED"],
                 413: ["FILE_TOO_LARGE"],
@@ -75,7 +82,7 @@ async def upload_document(
     title: Annotated[str, Query(min_length=1, max_length=TITLE_MAX + 50)],
     category: DocumentCategory,
     audience: DocumentAudience,
-    document_date: date | None = None,
+    document_date: Annotated[DocumentDate, Query()] = None,
     idempotency_key: IdempotencyKey = None,
 ) -> DocumentView:
     """Upload a PDF (the chairman, the board; the accountant only for the board and itself)."""

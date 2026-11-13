@@ -1,11 +1,12 @@
 """Requests and responses of the documents module (docs/API.md section 13)."""
 
+import unicodedata
 import uuid
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, model_validator
 
 from src.core.validation import clean_required_text
 from src.modules.property.schemas import AuthorBadgeDTO
@@ -33,10 +34,40 @@ class DocumentAudience(StrEnum):
 
 
 def single_line(value: str) -> str:
-    """A title is one line: it becomes a file name, so tabs and line breaks are refused too."""
+    """A title is one line of visible text: it becomes a file name, so tabs and line breaks are
+    refused too, and a title of only invisible characters would be an empty line in the list."""
     if any(ch in value for ch in "\t\r\n"):
         raise ValueError("title must be a single line")
+    if not any(unicodedata.category(ch)[0] not in "CZ" for ch in value):
+        raise ValueError("title must contain visible text")
     return value
+
+
+DATE_MIN = date(1900, 1, 1)
+DATE_MAX_YEARS_AHEAD = 5
+
+
+def _blank_to_none(value: object) -> object:
+    return None if value == "" else value  # a date field left empty in a form
+
+
+def check_document_date(value: date | None) -> date | None:
+    """The date of a document: from 1900 to five years from now (a contract may run ahead)."""
+    if value is None:
+        return None
+    today = date.today()
+    try:
+        latest = today.replace(year=today.year + DATE_MAX_YEARS_AHEAD)
+    except ValueError:  # 29 February: that year has none
+        latest = today.replace(year=today.year + DATE_MAX_YEARS_AHEAD, day=28)
+    if not DATE_MIN <= value <= latest:
+        raise ValueError(f"document_date must be between {DATE_MIN} and {latest}")
+    return value
+
+
+DocumentDate = Annotated[
+    date | None, BeforeValidator(_blank_to_none), AfterValidator(check_document_date)
+]
 
 
 Title = Annotated[
@@ -53,7 +84,7 @@ class DocumentEdit(BaseModel):
     title: Title | None = None  # type: ignore[valid-type]
     category: DocumentCategory | None = None
     audience: DocumentAudience | None = None
-    document_date: date | None = None
+    document_date: DocumentDate = None
 
     @model_validator(mode="after")
     def _no_null_for_required_fields(self) -> "DocumentEdit":
@@ -76,3 +107,12 @@ class DocumentView(BaseModel):
     can_edit: bool
     can_delete: bool
     uploaded_by: AuthorBadgeDTO | None  # staff only, a privacy badge without an apartment
+
+
+class UploadOptions(BaseModel):
+    """What the upload form may offer the caller (no form when `can_upload` is false)."""
+
+    can_upload: bool
+    audiences: list[DocumentAudience]
+    categories: list[DocumentCategory]
+    max_bytes: int

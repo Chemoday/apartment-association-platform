@@ -218,10 +218,7 @@ async def test_a_repeated_upload_with_the_same_key_returns_the_first_document(
 
     assert (first.status_code, again.status_code) == (201, 200)
     assert again.json()["id"] == first.json()["id"]
-    assert (after_delete.status_code, after_delete.json()["error_code"]) == (
-        409,
-        "IDEMPOTENCY_KEY_REUSED",
-    )
+    assert (after_delete.status_code, after_delete.json()["error_code"]) == (409, "UPLOAD_REMOVED")
 
 
 async def test_people_without_access_to_the_module(
@@ -263,7 +260,7 @@ async def test_a_repeat_after_the_document_moved_out_of_sight_is_refused(
 
     again = await upload(api_client, world.accountant, audience="BOARD_AND_ACCOUNTANT", headers=key)
 
-    assert (again.status_code, again.json()["error_code"]) == (409, "IDEMPOTENCY_KEY_REUSED")
+    assert (again.status_code, again.json()["error_code"]) == (409, "UPLOAD_REMOVED")
     assert "Secret" not in again.text
 
 
@@ -378,3 +375,120 @@ async def test_an_edited_title_must_be_one_line_too(
     )
 
     assert (response.status_code, response.json()["error_code"]) == (422, "VALIDATION_ERROR")
+
+
+async def test_a_document_title_never_reaches_a_span(
+    api_client: AsyncClient, world: IssueWorld, span_exporter
+) -> None:
+    secret = "Debt claim against Ivan Petrov apt 14"
+    await uploaded(api_client, world.chairman, title=secret, audience="BOARD")
+
+    exported = repr([dict(span.attributes or {}) for span in span_exporter.get_finished_spans()])
+
+    assert "Debt" not in exported and "Petrov" not in exported
+
+
+async def test_another_file_under_a_used_key_is_refused(
+    api_client: AsyncClient, world: IssueWorld
+) -> None:
+    key = {"Idempotency-Key": "form-1"}
+    await upload(api_client, world.chairman, headers=key)
+
+    other = await upload(api_client, world.chairman, PDF + b"more", headers=key, title="Other")
+
+    assert (other.status_code, other.json()["error_code"]) == (409, "IDEMPOTENCY_KEY_REUSED")
+
+
+@pytest.mark.parametrize(
+    ("value", "status", "stored"),
+    [("", 201, None), ("2026-05-20", 201, "2026-05-20"), ("0001-01-01", 422, None),
+     ("9999-12-31", 422, None), ("1899-12-31", 422, None)],
+)  # fmt: skip
+async def test_document_dates_are_sensible(
+    api_client: AsyncClient, world: IssueWorld, value: str, status: int, stored: str | None
+) -> None:
+    response = await upload(api_client, world.chairman, document_date=value)
+
+    assert response.status_code == status, response.text
+    if status == 201:
+        assert response.json()["document_date"] == stored
+
+
+async def test_a_title_of_only_invisible_characters_is_refused(
+    api_client: AsyncClient, world: IssueWorld
+) -> None:
+    response = await upload(api_client, world.chairman, title="\u200b\u200b\u2060")
+
+    assert response.status_code == 422
+
+
+async def test_a_title_prefilled_from_the_file_name_downloads_without_a_double_extension(
+    api_client: AsyncClient, world: IssueWorld
+) -> None:
+    document = await uploaded(api_client, world.chairman, title="Ühistu scan.PDF")
+
+    file = await api_client.get(f"{API}/{document['id']}/file", headers=as_user(world.chairman))
+
+    disposition = file.headers["content-disposition"]
+    assert 'filename="Uhistu scan.pdf"' in disposition  # accents folded for the fallback
+
+
+@pytest.mark.parametrize(
+    ("who", "can_upload", "audiences"),
+    [
+        ("chairman", True, ["EVERYONE", "BOARD_AND_ACCOUNTANT", "BOARD"]),
+        ("accountant", True, ["BOARD_AND_ACCOUNTANT"]),
+        ("tenant_2", False, []),
+    ],
+)
+async def test_the_upload_form_knows_what_the_caller_may_do(
+    api_client: AsyncClient, world: IssueWorld, who: str, can_upload: bool, audiences: list[str]
+) -> None:
+    response = await api_client.get(f"{API}/upload-options", headers=as_user(getattr(world, who)))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["can_upload"], body["audiences"], body["max_bytes"]) == (
+        can_upload,
+        audiences,
+        20_000_000,
+    )
+
+
+async def test_a_resident_is_told_who_uploads_documents(
+    api_client: AsyncClient, world: IssueWorld
+) -> None:
+    response = await upload(api_client, world.tenant_2)
+
+    assert response.status_code == 403
+    assert "chairman" in response.json()["message"]
+
+
+async def test_a_small_document_fits_even_when_less_than_the_route_cap_is_free(
+    api_client: AsyncClient, world: IssueWorld, db_app
+) -> None:
+    # 10 MB quota: documents may fill 8 MB, far less than the route's cap of 20 MB.
+    db_app.state.settings = db_app.state.settings.model_copy(
+        update={"FILES_QUOTA_MB": 10, "FILES_DEMO_QUOTA_MB": 10}
+    )
+
+    response = await upload(api_client, world.chairman)
+
+    assert response.status_code == 201, response.text
+
+
+def test_the_latest_document_date_exists_on_a_leap_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    import datetime as real_datetime
+
+    import src.modules.documents.schemas as schemas
+
+    class LeapDay(real_datetime.date):
+        @classmethod
+        def today(cls) -> "LeapDay":
+            return cls(2028, 2, 29)
+
+    monkeypatch.setattr(schemas, "date", LeapDay)
+
+    assert schemas.check_document_date(real_datetime.date(2033, 2, 28)) is not None
+    with pytest.raises(ValueError):
+        schemas.check_document_date(real_datetime.date(2033, 3, 1))
