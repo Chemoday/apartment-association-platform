@@ -164,6 +164,10 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `last_activity_at` | `TIMESTAMPTZ` | `NOT NULL` | `created_at` of the post, moved to the `created_at` of each new comment with `greatest()` (concurrent comments never move it back). Migration 012 fills existing rows from their newest comment. The thread inbox sorts by it |
 | `deleted_at` | `TIMESTAMPTZ` | `NULLABLE` | Set when a forum topic (by the chairman) or a board topic (by the chairman or a board member) was deleted (soft delete: hidden from every read) |
 | `deleted_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | Who deleted it |
+| `edited_at` | `TIMESTAMPTZ` | `NULLABLE` | When the author last changed the title or body (migration 025); only forum and board topics are edited |
+| `hidden_at` | `TIMESTAMPTZ` | `NULLABLE` | Set while the board hides a forum topic (migration 025); only `FORUM_TOPIC` rows can be hidden (check) |
+| `hidden_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | Who hid it (never returned) |
+| `hidden_reason` | `VARCHAR(500)` | `NULLABLE` | The board's reason; shown only to the author and the board. The three hidden columns are set and cleared together (check) |
 
 ### Table: `comm_comments`
 | Column | Type | Constraints | Description |
@@ -175,6 +179,10 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `author_apartment_id`| `UUID` | `NULLABLE` | Context apartment |
 | `body` | `TEXT` | `NOT NULL` | Comment text (the API caps it at 4000 characters) |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | Timestamp |
+| `edited_at` | `TIMESTAMPTZ` | `NULLABLE` | When the author last changed the body (migration 025) |
+| `hidden_at` | `TIMESTAMPTZ` | `NULLABLE` | Set while the board hides the comment (migration 025); the comment stays as a placeholder |
+| `hidden_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | Who hid it (never returned) |
+| `hidden_reason` | `VARCHAR(500)` | `NULLABLE` | The board's reason; the three hidden columns are set and cleared together (check) |
 
 ### Table: `comm_emergency_acks`
 *(Who pressed "Acknowledge" on an emergency banner; the banner stays hidden for that user)*

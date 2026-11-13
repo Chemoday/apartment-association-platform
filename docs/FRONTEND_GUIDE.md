@@ -240,6 +240,19 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
 - `comments_enabled: false` hides the comment form (`409 COMMENTS_DISABLED` otherwise).
 - **Delete** (`DELETE /communication/posts/{id}`, chairman, forum topics only) answers `204`;
   emergencies and notices answer `409 POST_NOT_DELETABLE`.
+- **Edit** (docs/API.md section 4, "Editing your own posts and comments"): show "Edit" on your
+  own (`is_mine`) forum and board topics without `origin`, and on your own comments outside
+  threads. `PATCH /communication/posts/{id}` (`title`, `body`) and
+  `PATCH /communication/posts/{id}/comments/{comment_id}` (`body`) return the updated object.
+  Show "edited" next to the time when `edited_at` is set. `409 POST_NOT_EDITABLE` /
+  `COMMENT_NOT_EDITABLE`: refresh, the item is no longer editable (for example, hidden).
+- **Hide** (chairman and board): "Hide" on forum topics and on comments of forum topics,
+  notices and emergencies asks for a reason (1..500 characters) and calls `POST .../hide`;
+  `POST .../unhide` shows it again. A hidden topic is visible only to its author and the board:
+  show a banner "Hidden by the board: <hidden_reason>" and no comment form (`409 POST_HIDDEN`).
+  A hidden comment arrives with `hidden_at` set; when `body` is `null`, render a grey
+  placeholder "Hidden by the board" in its place, otherwise (the author, the board) show the
+  text greyed with the reason. Never show who hid it.
 - **Free text limits:** title 1..255, post body 1..10000, comment 1..4000 characters after
   trimming. Control characters are rejected. Show a counter and trim before checking "empty".
 - **Messages with the board** (`APARTMENT_THREAD`, docs/API.md section 4):
