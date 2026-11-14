@@ -399,3 +399,31 @@ async def test_the_purge_skips_a_round_while_another_process_runs_it(
 def test_a_message_never_shows_its_text_in_a_repr() -> None:
     message = ChatMessage(id=7, building_id=uuid.uuid4(), body="secret text")
     assert "secret" not in repr(message)
+
+
+async def test_successful_polls_write_no_request_log(
+    api_client: AsyncClient, world: IssueWorld, log_capture
+) -> None:
+    """Polling every few seconds must not push the other logs out of the rotated log."""
+
+    def request_logs() -> list[tuple[str, str, int]]:
+        return [
+            (r["method"], r["path"], r["status_code"])
+            for r in log_capture.records
+            if r["event"] == "http_request"
+        ]
+
+    await api_client.get(MESSAGES, headers=as_user(world.owner_14))  # off: 409, logged
+    await turn(api_client, world, on=True)
+    await api_client.get(API, headers=as_user(world.owner_14))
+    await api_client.get(MESSAGES, headers=as_user(world.owner_14))
+    await post(api_client, world.owner_14)
+    await api_client.get(MESSAGES, headers=as_user(world.accountant))  # 403, logged
+
+    logged = request_logs()
+    assert ("GET", "/api/v1/chat/messages", 409) in logged
+    assert ("GET", "/api/v1/chat/messages", 403) in logged
+    assert ("POST", "/api/v1/chat/messages", 201) in logged
+    assert ("PUT", "/api/v1/settings", 200) in logged
+    assert ("GET", "/api/v1/chat/messages", 200) not in logged
+    assert ("GET", "/api/v1/chat", 200) not in logged

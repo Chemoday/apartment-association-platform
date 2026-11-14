@@ -482,5 +482,10 @@ Table: docs/SCHEMA.md section 14. API: docs/API.md section 14.
   messages at once, without the settings code knowing about the chat.
 - **No text outside the table:** no log line, span attribute or error message carries a
   message's body.
-- **No push channel:** clients poll (docs/FRONTEND_GUIDE.md section 20); a poll is one indexed
-  query on `(building_id, id)`.
+- **No push channel:** clients poll (docs/FRONTEND_GUIDE.md section 20); a poll is the usual
+  authentication, the setting and one indexed query on `(building_id, id)`; badges are resolved
+  only when there are new messages.
+- **Quiet logs:** a successful poll (`GET /api/v1/chat`, `GET /api/v1/chat/messages`, status 200)
+  writes no `http_request` line (`core.telemetry.quiet_when_ok`), so polling never pushes the
+  other logs out of the rotated container log; errors and every other route are logged as
+  before.

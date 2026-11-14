@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from src.core.exceptions import AUTH_ERRORS, error_responses
 from src.core.security import get_current_user
+from src.core.telemetry import quiet_when_ok
 from src.modules.chat.schemas import (
     CURSOR_MAX,
     PAGE_DEFAULT,
@@ -28,6 +29,10 @@ Service = Annotated[ChatService, Depends(get_chat_service)]
 Caller = Annotated[CurrentUserDTO, Depends(get_current_user)]
 
 _PARTICIPANTS = {403: ["FORBIDDEN"], 409: ["CHAT_DISABLED"]}
+
+# Both are polled (docs/FRONTEND_GUIDE.md section 20): no log line for a successful answer.
+quiet_when_ok("GET", "/api/v1/chat")
+quiet_when_ok("GET", "/api/v1/chat/messages")
 
 
 @router.get("", response_model=ChatState)

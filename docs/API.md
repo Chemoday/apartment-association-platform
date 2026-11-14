@@ -2595,7 +2595,7 @@ smoke, a power cut). Owner decisions of 2026-11-14/15 (issue
 - **No notifications** of any kind and no domain events. The text of a message never goes into
   logs, traces, notifications or backups.
 - **No push channel to the client:** the client asks for new messages while the chat is open
-  (docs/FRONTEND_GUIDE.md section 20).
+  (docs/FRONTEND_GUIDE.md section 20). A successful poll writes no request log line.
 
 ### Message object (`ChatMessageView`)
 ```json
