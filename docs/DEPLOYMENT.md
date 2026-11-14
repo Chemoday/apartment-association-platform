@@ -128,6 +128,7 @@ mounted at `/data/files` in the backend (`FILES_DIR`). Settings, all in the envi
 | `FILES_IN_DEMO` | `false` | Uploads in demo mode; only for `ENVIRONMENT` local, dev or test. `deploy.sh` sets it to `true` for dev and `false` for prod |
 | `FILES_DEMO_QUOTA_MB`, `FILES_DEMO_RETENTION_HOURS` | 100, 24 | The quota and the retention while in demo mode |
 | `FILES_JANITOR_ENABLED` | `true` | The hourly clean-up loop |
+| `CHAT_PURGE_ENABLED` | `true` | The building chat's loop that deletes messages older than 2 hours, every minute |
 
 The files are not in any backup yet (docs/BACKLOG.md B-3): that must change before a real
 association stores files.

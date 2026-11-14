@@ -48,6 +48,8 @@ Section 12 (uploaded files) adds `UPLOAD_INTERRUPTED` (400), `UPLOADS_DISABLED` 
 
 Section 7 adds `INVALID_CREDENTIALS`, `SESSION_EXPIRED` (401), `CSRF_CHECK_FAILED`, `REAUTHENTICATION_REQUIRED` (403), `SESSION_NOT_FOUND`, `INVITATION_NOT_FOUND`, `USER_NOT_FOUND` (404), `EMAIL_ALREADY_REGISTERED`, `TENANT_LIMIT_REACHED`, `INVITATION_ALREADY_PENDING`, `INVITATION_ACCEPTED`, `INVITATION_NO_LONGER_VALID`, `LAST_CHAIRMAN` (409) and `PASSWORD_TOO_WEAK` (422); it reuses `RATE_LIMITED` (429) of section 6. `INVALID_CREDENTIALS`, `REAUTHENTICATION_REQUIRED` and `PASSWORD_TOO_WEAK` exist since A5.
 
+Section 14 (the building chat) adds `CHAT_DISABLED` (409) and reuses `FORBIDDEN` (403), `INVALID_AUTHOR_APARTMENT` (422) and `RATE_LIMITED` (429).
+
 ### Author badge rules (`property.policies.format_author_badge`)
 | `privacy_display_mode` | With apartment | Without apartment context |
 | :--- | :--- | :--- |
@@ -1889,6 +1891,7 @@ Every endpoint needs a signed-in user of the building.
 | `issues.urgent_enabled` | `BOOLEAN` | `false` | | Residents may mark an issue report urgent |
 | `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
 | `maintenance.overdue_reminder_days` | `INTEGER` | 7 | 1..30 | Days between the reminders of an overdue maintenance task (epic E10) |
+| `chat.enabled` | `BOOLEAN` | `false` | | The building chat of section 14 is on; turning it off hides its messages at once (deleted within a minute) |
 
 ### `GET /api/v1/settings` (chairman and board)
 `{"settings": [SettingView, ...]}`, every declared setting, ordered by `key`. Anyone else:
@@ -2575,3 +2578,99 @@ Returns the `DocumentView`.
 | 429 | `RATE_LIMITED` |
 | 507 | `STORAGE_QUOTA_EXCEEDED`, `STORAGE_LOW_DISK` |
 
+## 14. Building chat (`chat`)
+
+One short-lived chat per building, for residents to coordinate when something happens (a leak,
+smoke, a power cut). Owner decisions of 2026-11-14/15 (issue
+[#142](https://github.com/Chemoday/apartment-association-platform/issues/142)):
+- **Who takes part:** every active member of an apartment of the building (tenants included) and
+  the chairman and the board. Anyone else (an accountant without an apartment) does not: `403
+  FORBIDDEN` on the message endpoints; `GET /api/v1/chat` still answers, with
+  `can_take_part: false`.
+- **Messages live 2 hours** and are then deleted for good. They are never edited or deleted by
+  hand; nobody moderates them.
+- **The chairman's switch is the only control:** the building setting `chat.enabled` (section 9),
+  `false` by default. Turning it off makes every message unreadable at once and deletes them
+  within a minute; after turning it on again the chat starts empty.
+- **No notifications** of any kind and no domain events. The text of a message never goes into
+  logs, traces, notifications or backups.
+- **No push channel to the client:** the client asks for new messages while the chat is open
+  (docs/FRONTEND_GUIDE.md section 20).
+
+### Message object (`ChatMessageView`)
+```json
+{
+  "id": 1043,
+  "body": "Water in the basement, entrance 2. Who has the key?",
+  "author_badge": {"display_label": "Apt. 14", "role_badge": "OWNER"},
+  "created_at": "2026-11-15T09:12:03Z",
+  "expires_at": "2026-11-15T11:12:03Z",
+  "is_own": false
+}
+```
+- `id`: an integer cursor; it only grows within a building, in the order the messages were
+  accepted. Not a counter of messages.
+- `author_badge`: the author's privacy badge for `author_apartment_id` (section 1, "Author badge
+  rules"); a chairman or board member writing without an apartment is shown as `Chairman` /
+  `Board`.
+- `expires_at`: `created_at` + 2 hours; the client drops the message from the screen then.
+- `is_own`: the caller wrote it.
+
+### `GET /api/v1/chat`
+The state of the chat and its recent activity, for the indicator on the home screen. Any user of
+the building.
+```json
+{
+  "enabled": true,
+  "turned_on_at": "2026-11-15T08:00:00Z",
+  "can_take_part": true,
+  "recent_count": 6,
+  "recent_minutes": 10,
+  "last_message_at": "2026-11-15T09:12:03Z",
+  "history_hours": 2,
+  "max_length": 500
+}
+```
+- `recent_count`: messages of the last `recent_minutes` (10) minutes; `last_message_at`: the
+  newest message, `null` when there is none.
+- `turned_on_at`: when the chairman last turned the chat on (`null` while it is off). Saving
+  the setting again with the same value does not change it.
+- When the chat is off, or the caller does not take part, `recent_count` is `0` and
+  `last_message_at` is `null`.
+
+### `GET /api/v1/chat/messages?after=1043&limit=100`
+Messages of the chat, oldest first. Participants only; `409 CHAT_DISABLED` while the chat is off.
+- Without `after`: the newest `limit` messages of the last 2 hours. With `after`: the messages
+  whose `id` is greater, up to `limit`. `limit`: 1..200, default 100.
+- Response: `{"messages": [ChatMessageView, ...], "cursor": 1043, "has_more": false,
+  "turned_on_at": "2026-11-15T08:00:00Z"}`. `cursor`
+  is the `id` of the last returned message, or `after` (or `null`) when there is none; pass it
+  as `after` next time. `has_more`: more messages follow the last one returned (ask again at
+  once).
+- A message older than 2 hours, or written before the chat was last turned on, is never
+  returned. `turned_on_at` as in `GET /api/v1/chat`: when it differs from the value of the
+  previous answer, the chat was off meanwhile and the client clears the messages it shows (a
+  client that polled past an off/on cycle never saw a `409`).
+- `after` larger than the largest possible id (2^63 - 1): `422 VALIDATION_ERROR`.
+
+### `POST /api/v1/chat/messages`
+```json
+{"body": "Water in the basement, entrance 2. Who has the key?", "author_apartment_id": null}
+```
+Returns `201` with the `ChatMessageView`. Participants only; `409 CHAT_DISABLED` while the chat
+is off (both checked before the body and the apartment).
+- `body`: 1..500 characters after trimming, free text rules of section 4.
+- `author_apartment_id`: one of the caller's apartments (else `422 INVALID_AUTHOR_APARTMENT`);
+  omitted or `null`: the caller's first apartment, or none for a chairman or board member without
+  one.
+- At most **10 messages a minute and 60 an hour** per person: `429 RATE_LIMITED` with
+  `retry_after_seconds`, `reason` (`MINUTE_LIMIT` / `HOUR_LIMIT`) and a `Retry-After` header;
+  when both limits are reached, the one with the longer wait.
+
+### Error codes of this section
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 409 | `CHAT_DISABLED` |
+| 422 | `VALIDATION_ERROR`, `INVALID_AUTHOR_APARTMENT` |
+| 429 | `RATE_LIMITED` |

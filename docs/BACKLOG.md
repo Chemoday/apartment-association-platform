@@ -148,6 +148,8 @@ what follows.
   the backup: without `AUTH_HASH_SECRET` a restored database has lost every session, link,
   invitation and password. The password of the backup repository and the secrets are also kept
   in the operator's password manager; a backup nobody can decrypt is no backup.
+- **Left out of the dump:** the data of `chat_messages` (`--exclude-table-data=chat_messages`):
+  chat messages live 2 hours by promise (docs/SCHEMA.md section 14, issue #142).
 - **Tool:** `restic` (one binary; it encrypts on the client, so the storage provider sees only
   ciphertext; it removes duplicates and compresses). The dump is written uncompressed
   (`pg_dump -Fc -Z0`) into restic's standard input, so the difference between two runs is a few
@@ -446,3 +448,23 @@ Measured on 2026-11-12 (6 vCPU, 12 GB): an idle instance uses 80-100 MB for the 
 - A hard wall on disk per instance (a filesystem of its own or project quotas) instead of the
   quota inside the app alone, when associations of third parties share a host.
 - Fewer background loops per idle instance (a worker role, longer idle intervals).
+
+---
+
+## B-13. Reports in the building chat
+
+- **Status:** open, to revisit before the first real association turns the chat on. Raised
+  2026-11-15 with the building chat (issue #142).
+
+### Problem
+The building chat (docs/API.md section 14) has no moderation by the owner's decision: the
+chairman's switch for the whole chat is the only control. One abusive account (threats,
+harassment, personal data of a neighbour) then forces the chairman to turn the chat off for
+everyone, and the association, which hosts what its residents write, has no way to act on a
+report. EU rules for hosting services expect at least a notice-and-action mechanism.
+
+### Possible direction
+- "Report" on a message: the chairman sees the reported message (until it expires) and its
+  author's badge.
+- The chairman mutes one account in the chat.
+- Both without keeping message texts longer than 2 hours.
