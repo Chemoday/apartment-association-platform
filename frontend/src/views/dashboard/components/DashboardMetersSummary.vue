@@ -2,7 +2,8 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { sumMeterValues } from '@/utils/meterValue.js'
-import { formatPeriodLabel } from '@/utils/dates.js'
+import { formatMonthName, formatPeriodLabel } from '@/utils/dates.js'
+import { summarizeNextSubmissions } from '@/utils/nextSubmission.js'
 import { useSessionStore } from '@/stores/session.js'
 
 const props = defineProps({
@@ -35,25 +36,36 @@ const activeApartment = computed(() => {
   )
 })
 
+const activeAptSummary = computed(() =>
+  summarizeNextSubmissions(activeApartment.value ? [activeApartment.value] : []),
+)
+
 const waterConsumptionM3 = computed(() => {
   if (!activeApartment.value) return '0.000'
   const deltas = activeApartment.value.meters
-    .filter((m) => m.unit === 'm3' && m.reading?.consumption_delta)
-    .map((m) => m.reading.consumption_delta)
+    .filter((m) => m.unit === 'm3')
+    .map((m) =>
+      m.next_submission && typeof m.next_submission === 'object'
+        ? m.next_submission.reading?.consumption_delta
+        : m.reading?.consumption_delta,
+    )
+    .filter(Boolean)
   return deltas.length ? sumMeterValues(deltas) : '0.000'
 })
 
 const allMetersSubmitted = computed(() => {
-  if (!activeApartment.value || !activeApartment.value.meters.length) return false
-  return activeApartment.value.meters.every((m) => m.reading !== null)
+  if (!activeApartment.value || !activeAptSummary.value.total) return false
+  return activeAptSummary.value.allSubmitted
 })
 
-const submittedCount = computed(() => {
-  if (!activeApartment.value) return 0
-  return activeApartment.value.meters.filter((m) => m.reading !== null).length
-})
+const submittedCount = computed(() => activeAptSummary.value.reported)
 
-const totalMeterCount = computed(() => activeApartment.value?.meters?.length || 0)
+const totalMeterCount = computed(() => activeAptSummary.value.total)
+
+const activeMonthLabel = computed(() => {
+  const code = activeAptSummary.value.activePeriodCode || props.period?.period_code
+  return code ? formatMonthName(code, session.lang, { capitalize: true }) : ''
+})
 
 const periodName = computed(() =>
   props.period ? formatPeriodLabel(props.period.period_code, session.lang) : 'October 2026',
@@ -71,6 +83,7 @@ const periodName = computed(() =>
         <div class="flex flex-col">
           <span class="font-label-md text-label-md uppercase tracking-wider text-on-surface-variant font-semibold">
             {{ session.t('dashboard.summary.monthlyUtilities') }}
+            <template v-if="activeMonthLabel">· {{ activeMonthLabel }}</template>
           </span>
           <span class="font-headline-lg text-headline-lg font-bold text-on-surface mt-1 font-numeric-display tabular-nums">
             {{ waterConsumptionM3 }}

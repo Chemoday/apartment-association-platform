@@ -36,7 +36,7 @@ test('changedPreferences returns empty array when nothing changed', () => {
   assert.deepEqual(changedPreferences(original, edited), [])
 })
 
-test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTMENT_MESSAGE_TO_BOARD, POLL_OPENED, ISSUE_*, MAINTENANCE_DUE, and NOTICE_PUBLISHED by role and apartment membership', () => {
+test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTMENT_MESSAGE_TO_BOARD, POLL_OPENED, ISSUE_*, MAINTENANCE_DUE, NOTICE_PUBLISHED, and STORAGE_ALMOST_FULL by role and apartment membership', () => {
   // Resident with an apartment
   assert.deepEqual(visibleNotificationEvents('USER', true), [
     'EMERGENCY_PUBLISHED',
@@ -60,6 +60,7 @@ test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTM
     'ISSUE_STATUS_CHANGED',
     'MAINTENANCE_DUE',
     'NOTICE_PUBLISHED',
+    'STORAGE_ALMOST_FULL',
   ])
   // Chairman without an apartment
   assert.deepEqual(visibleNotificationEvents('CHAIRMAN', false), [
@@ -72,6 +73,7 @@ test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTM
     'ISSUE_STATUS_CHANGED',
     'MAINTENANCE_DUE',
     'NOTICE_PUBLISHED',
+    'STORAGE_ALMOST_FULL',
   ])
   // Accountant without an apartment
   assert.deepEqual(visibleNotificationEvents('ACCOUNTANT', false), [
@@ -94,6 +96,7 @@ test('visibleNotificationEvents filters PERIOD_REVIEW, APARTMENT_MESSAGE, APARTM
     'ISSUE_STATUS_CHANGED',
     'MAINTENANCE_DUE',
     'NOTICE_PUBLISHED',
+    'STORAGE_ALMOST_FULL',
   ])
 })
 

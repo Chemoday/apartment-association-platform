@@ -250,6 +250,38 @@ test('buildNotificationDescriptor maps all 4 known event types and unknown safel
   assert.equal(noticePubDesc.icon, 'campaign')
   assert.equal(noticePubDesc.variant, 'neutral')
 
+  const storageAlertDesc = buildNotificationDescriptor(
+    {
+      id: 'n18',
+      event_type: 'STORAGE_ALMOST_FULL',
+      params: { threshold: 90, used_percent: 92 },
+      subject_type: 'storage',
+      subject_id: 'association-storage',
+      created_at: '2026-11-13T09:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(storageAlertDesc.key, 'notifications.events.STORAGE_ALMOST_FULL')
+  assert.equal(storageAlertDesc.route, '/settings/association#storage')
+  assert.equal(storageAlertDesc.icon, 'hard_drive')
+  assert.equal(storageAlertDesc.variant, 'emergency')
+  assert.equal(storageAlertDesc.values.used_percent, 92)
+
+  const storageAlertWarnDesc = buildNotificationDescriptor(
+    {
+      id: 'n19',
+      event_type: 'STORAGE_ALMOST_FULL',
+      params: { threshold: 70, used_percent: 71 },
+      subject_type: 'storage',
+      subject_id: 'association-storage',
+      created_at: '2026-11-13T09:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(storageAlertWarnDesc.variant, 'deadline')
+
   const unknown = buildNotificationDescriptor(
     {
       id: 'n5',
@@ -621,6 +653,63 @@ test('formatNotificationText formats human-readable text in English and Estonian
     'ru',
   )
   assert.equal(noticePubRu, 'Новое объявление от правления')
+
+  setI18nLocale('en')
+  const storageAlertEn = formatNotificationText(
+    {
+      id: 'n18',
+      event_type: 'STORAGE_ALMOST_FULL',
+      params: { threshold: 90, used_percent: 92 },
+      subject_type: 'storage',
+      subject_id: 'association-storage',
+      created_at: '2026-11-13T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.equal(
+    storageAlertEn,
+    "The association's files use 92% of its storage. Delete old documents or ask the operator of the server for more room.",
+  )
+
+  setI18nLocale('et')
+  const storageAlertEt = formatNotificationText(
+    {
+      id: 'n18',
+      event_type: 'STORAGE_ALMOST_FULL',
+      params: { threshold: 90, used_percent: 92 },
+      subject_type: 'storage',
+      subject_id: 'association-storage',
+      created_at: '2026-11-13T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'et',
+  )
+  assert.equal(
+    storageAlertEt,
+    'Ühistu failid kasutavad 92% salvestusruumist. Kustutage vanu dokumente või paluge serverihaldurilt ruumi juurde.',
+  )
+
+  setI18nLocale('ru')
+  const storageAlertRu = formatNotificationText(
+    {
+      id: 'n18',
+      event_type: 'STORAGE_ALMOST_FULL',
+      params: { threshold: 90, used_percent: 92 },
+      subject_type: 'storage',
+      subject_id: 'association-storage',
+      created_at: '2026-11-13T09:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'ru',
+  )
+  assert.equal(
+    storageAlertRu,
+    'Файлы товарищества занимают 92% хранилища. Удалите старые документы или попросите оператора сервера увеличить объём.',
+  )
 
   setI18nLocale('en')
 })

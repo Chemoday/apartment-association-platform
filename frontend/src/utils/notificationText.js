@@ -210,6 +210,24 @@ export function buildNotificationDescriptor(item, lang = 'en') {
     }
   }
 
+  if (eventType === 'STORAGE_ALMOST_FULL') {
+    const rawPercent = Number(params.used_percent)
+    const usedPercent = Number.isFinite(rawPercent)
+      ? Math.max(0, Math.min(100, Math.floor(rawPercent)))
+      : 0
+    const threshold = Number(params.threshold) || 70
+    return {
+      key: 'notifications.events.STORAGE_ALMOST_FULL',
+      values: {
+        used_percent: usedPercent,
+        threshold,
+      },
+      icon: 'hard_drive',
+      variant: threshold >= 90 ? 'emergency' : 'deadline',
+      route: '/settings/association#storage',
+    }
+  }
+
   return {
     key: 'notifications.events.UNKNOWN',
     values: {},

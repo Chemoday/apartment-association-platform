@@ -33,9 +33,10 @@ export function resolveEmergency(postId) {
 /**
  * List posts with optional filters and paging.
  * @param {{ post_type?: string | null, apartment_id?: string | null, category?: string | null, limit?: number, offset?: number }} [params]
+ * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<import('../schema').PostView[]>}
  */
-export function listPosts(params = {}) {
+export function listPosts(params = {}, { signal } = {}) {
   const search = new URLSearchParams()
   if (params.post_type) search.set('post_type', params.post_type)
   if (params.apartment_id) search.set('apartment_id', params.apartment_id)
@@ -43,7 +44,7 @@ export function listPosts(params = {}) {
   if (params.limit !== undefined) search.set('limit', String(params.limit))
   if (params.offset !== undefined) search.set('offset', String(params.offset))
   const qs = search.toString()
-  return apiRequest(`/communication/posts${qs ? `?${qs}` : ''}`)
+  return apiRequest(`/communication/posts${qs ? `?${qs}` : ''}`, signal ? { signal } : {})
 }
 
 /**
@@ -137,7 +138,7 @@ export function getPost(postId, params = {}) {
 }
 
 /**
- * Delete a forum topic (Chairman only).
+ * Delete a forum or board topic (Chairman or Board).
  * @param {string} postId
  * @returns {Promise<null>}
  */
@@ -159,3 +160,91 @@ export function addComment(postId, payload) {
     body: payload,
   })
 }
+
+/**
+ * Hide a forum topic with a reason (Chairman or Board, #028).
+ * @param {string} postId
+ * @param {import('../schema').HideRequest} payload
+ * @returns {Promise<import('../schema').PostView>}
+ */
+export function hidePost(postId, payload) {
+  return apiRequest(`/communication/posts/${encodeURIComponent(postId)}/hide`, {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+/**
+ * Show a hidden forum topic again (Chairman or Board, #028).
+ * @param {string} postId
+ * @returns {Promise<import('../schema').PostView>}
+ */
+export function unhidePost(postId) {
+  return apiRequest(`/communication/posts/${encodeURIComponent(postId)}/unhide`, {
+    method: 'POST',
+  })
+}
+
+/**
+ * Hide a single comment with a reason (Chairman or Board, #028).
+ * @param {string} postId
+ * @param {string} commentId
+ * @param {import('../schema').HideRequest} payload
+ * @returns {Promise<import('../schema').CommentView>}
+ */
+export function hideComment(postId, commentId, payload) {
+  return apiRequest(
+    `/communication/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/hide`,
+    {
+      method: 'POST',
+      body: payload,
+    },
+  )
+}
+
+/**
+ * Show a hidden comment again (Chairman or Board, #028).
+ * @param {string} postId
+ * @param {string} commentId
+ * @returns {Promise<import('../schema').CommentView>}
+ */
+export function unhideComment(postId, commentId) {
+  return apiRequest(
+    `/communication/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/unhide`,
+    {
+      method: 'POST',
+    },
+  )
+}
+
+/**
+ * Edit own forum or board topic (#027).
+ * @param {string} postId
+ * @param {import('../schema').PostEditRequest} payload
+ * @returns {Promise<import('../schema').PostView>}
+ */
+export function editPost(postId, payload) {
+  return apiRequest(`/communication/posts/${encodeURIComponent(postId)}`, {
+    method: 'PATCH',
+    body: payload,
+  })
+}
+
+/**
+ * Edit own comment (#027).
+ * @param {string} postId
+ * @param {string} commentId
+ * @param {import('../schema').CommentEditRequest} payload
+ * @returns {Promise<import('../schema').CommentView>}
+ */
+export function editComment(postId, commentId, payload) {
+  return apiRequest(
+    `/communication/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+    {
+      method: 'PATCH',
+      body: payload,
+    },
+  )
+}
+
+

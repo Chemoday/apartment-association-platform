@@ -74,6 +74,42 @@ export function formatPeriodLabel(periodCode, lang = 'en') {
 }
 
 /**
+ * Compute the next YYYY-MM period code after the given periodCode.
+ * @param {string | null | undefined} periodCode
+ * @returns {string}
+ */
+export function getNextPeriodCode(periodCode) {
+  if (!periodCode || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(periodCode)) {
+    return ''
+  }
+  const [year, month] = periodCode.split('-').map(Number)
+  if (month === 12) {
+    return `${year + 1}-01`
+  }
+  return `${year}-${String(month + 1).padStart(2, '0')}`
+}
+
+/**
+ * Format period code ("2026-10") into a standalone localized month name ("October" / "oktoober" / "октябрь").
+ * @param {string | null | undefined} periodCode
+ * @param {string} lang
+ * @param {{ capitalize?: boolean }} [options]
+ * @returns {string}
+ */
+export function formatMonthName(periodCode, lang = 'en', { capitalize = lang === 'en' } = {}) {
+  if (!periodCode || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(periodCode)) {
+    return periodCode || '—'
+  }
+  const [year, month] = periodCode.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, 15, 12, 0, 0))
+  const raw = new Intl.DateTimeFormat(resolveIntlLocale(lang, 'en-US'), {
+    timeZone: TALLINN_TZ,
+    month: 'long',
+  }).format(date)
+  return capitalize ? raw.charAt(0).toUpperCase() + raw.slice(1) : raw.toLowerCase()
+}
+
+/**
  * Format an ISO timestamp as a short date without year (e.g. "25 Oct").
  * @param {string | null | undefined} isoString
  * @param {string} lang

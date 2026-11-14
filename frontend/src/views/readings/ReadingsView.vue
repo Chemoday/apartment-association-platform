@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
+import { useApartmentConsumption } from '@/composables/useApartmentConsumption.js'
 import { getMyDashboard, listPeriods } from '@/api/endpoints/meters.js'
 import {
   compareMeterValues,
@@ -10,9 +11,10 @@ import {
   subtractMeterValues,
   sumMeterValues,
 } from '@/utils/meterValue.js'
-import { formatDate, formatPeriodLabel } from '@/utils/dates.js'
+import { formatDate, formatMonthName, formatPeriodLabel } from '@/utils/dates.js'
 import MeterCard from './components/MeterCard.vue'
 import ReadingHistoryModal from './components/ReadingHistoryModal.vue'
+import ConsumptionChart from '@/components/domain/ConsumptionChart.vue'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
@@ -28,7 +30,7 @@ const periodsList = ref([])
 const periods = computed(() =>
   periodsList.value.length > 0
     ? periodsList.value.map((p) => p.period_code)
-    : ['2026-10', '2026-09', '2026-08', '2026-07'],
+    : ['2026-11', '2026-10', '2026-09', '2026-08', '2026-07'],
 )
 
 const dashboard = ref(null)
@@ -37,8 +39,10 @@ const error = ref(null)
 
 // Track live draft deltas per meter_id for the right-side Total Consumption calculator
 const draftDeltas = ref({})
+const wrongPeriodDrafts = ref({})
 const meterCardRefs = ref([])
 const submitBannerMessage = ref('')
+const wrongPeriodBanner = ref('')
 
 // History modal state
 const historyReadingId = ref('')
@@ -46,14 +50,17 @@ const historyTitle = ref('')
 
 let loadDashboardSeq = 0
 
-async function loadDashboard() {
+async function loadDashboard({ quiet = false } = {}) {
   if (!session.actingUserId) return
   const seq = ++loadDashboardSeq
-  loading.value = true
+  if (!quiet) {
+    loading.value = true
+    submitBannerMessage.value = ''
+    wrongPeriodBanner.value = ''
+  }
   error.value = null
-  submitBannerMessage.value = ''
   try {
-    if (!periodsList.value.length) {
+    if (!periodsList.value.length || quiet) {
       const pList = await listPeriods().catch(() => [])
       if (seq !== loadDashboardSeq) return
       if (Array.isArray(pList) && pList.length > 0) {
@@ -74,7 +81,9 @@ async function loadDashboard() {
     if (!periodCode.value && res.period?.period_code) {
       periodCode.value = res.period.period_code
     }
-    draftDeltas.value = {}
+    if (!quiet) {
+      draftDeltas.value = {}
+    }
     if (res.apartments?.length) {
       const exists = res.apartments.some((a) => a.apartment_id === session.selectedApartmentId)
       if (!exists) {
@@ -91,12 +100,25 @@ async function loadDashboard() {
   }
 }
 
-onMounted(loadDashboard)
+onMounted(() => loadDashboard())
 
 watch(
-  () => [session.actingUserId, session.sessionRevision, periodCode.value],
+  () => [session.actingUserId, session.sessionRevision],
   () => {
+    wrongPeriodDrafts.value = {}
+    wrongPeriodBanner.value = ''
     dashboard.value = null
+    resetConsumption()
+    loadDashboard()
+  },
+)
+
+watch(
+  () => periodCode.value,
+  (newCode, oldCode) => {
+    if (newCode === oldCode) return
+    // Selecting an initial period code during initial load already fetched with the server default
+    if (!oldCode && dashboard.value?.period?.period_code === newCode) return
     loadDashboard()
   },
 )
@@ -111,7 +133,42 @@ const activeApartment = computed(() => {
   )
 })
 
+const {
+  data: consumptionData,
+  loading: consumptionLoading,
+  error: consumptionError,
+  load: loadConsumption,
+  reset: resetConsumption,
+} = useApartmentConsumption()
+
+watch(
+  () => activeApartment.value?.apartment_id,
+  (aptId) => {
+    if (!aptId) {
+      resetConsumption()
+      return
+    }
+    loadConsumption(aptId, 12)
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  loadDashboardSeq += 1
+})
+
 const period = computed(() => dashboard.value?.period || null)
+
+const hasOpenSubmissions = computed(() => {
+  if (!activeApartment.value?.can_submit_readings) return false
+  const meters = activeApartment.value.meters || []
+  if (!meters.length) return false
+  return meters.some((m) =>
+    m.next_submission !== undefined
+      ? m.next_submission !== null
+      : period.value?.status !== 'LOCKED',
+  )
+})
 
 function isKitchenLabel(label = '') {
   const l = label.toLowerCase()
@@ -151,6 +208,9 @@ function getEffectiveDelta(meter) {
   if (draftDeltas.value[meter.meter_id] !== undefined) {
     return draftDeltas.value[meter.meter_id]
   }
+  if (meter.next_submission && typeof meter.next_submission === 'object') {
+    return meter.next_submission.reading?.consumption_delta || null
+  }
   return meter.reading?.consumption_delta || null
 }
 
@@ -180,13 +240,13 @@ const totalCombinedWaterM3 = computed(() =>
 // Apartment's own 3-month average water consumption (sum of water meters' average_delta)
 const apartmentWaterAverageM3 = computed(() => {
   const avgs = (activeApartment.value?.meters || [])
-    .filter(
-      (m) =>
-        (m.resource_type === 'COLD_WATER' || m.resource_type === 'HOT_WATER') &&
+    .filter((m) => {
+      const avg = m.next_submission?.average_delta ?? m.average_delta
+      return (m.resource_type === 'COLD_WATER' || m.resource_type === 'HOT_WATER') &&
         m.unit === 'm3' &&
-        m.average_delta,
-    )
-    .map((m) => m.average_delta)
+        avg
+    })
+    .map((m) => m.next_submission?.average_delta ?? m.average_delta)
   return avgs.length > 0 ? sumMeterValues(avgs) : null
 })
 
@@ -223,31 +283,45 @@ function handleDraftChange({ meterId, delta }) {
     ...draftDeltas.value,
     [meterId]: delta,
   }
+  if (wrongPeriodDrafts.value[meterId] !== undefined) {
+    const nextDrafts = { ...wrongPeriodDrafts.value }
+    delete nextDrafts[meterId]
+    wrongPeriodDrafts.value = nextDrafts
+  }
 }
 
-function handleMeterSaved(savedReading) {
-  if (!dashboard.value) return
-  dashboard.value = {
-    ...dashboard.value,
-    apartments: dashboard.value.apartments.map((apt) => ({
-      ...apt,
-      meters: apt.meters.map((m) =>
-        m.meter_id === savedReading.meter_id
-          ? {
-              ...m,
-              reading: {
-                reading_id: savedReading.reading_id,
-                value: savedReading.value,
-                consumption_delta: savedReading.consumption_delta,
-                source: savedReading.source,
-                is_anomaly_confirmed: savedReading.is_anomaly_confirmed,
-              },
-            }
-          : m,
-      ),
-    })),
+async function handleWrongPeriod({ meterId, targetPeriodCode, draftValue }) {
+  wrongPeriodDrafts.value = {
+    ...wrongPeriodDrafts.value,
+    [meterId]: draftValue,
   }
+  submitBannerMessage.value = ''
+  const monthLabel = targetPeriodCode
+    ? formatMonthName(targetPeriodCode, session.lang, { capitalize: true })
+    : ''
+  wrongPeriodBanner.value = session.t('readings.wrongPeriodBanner', { month: monthLabel })
+  await loadDashboard({ quiet: true })
+}
+
+async function handleMeterSaved(savedReading) {
+  if (!dashboard.value) return
+  if (wrongPeriodDrafts.value[savedReading.meter_id] !== undefined) {
+    const nextDrafts = { ...wrongPeriodDrafts.value }
+    delete nextDrafts[savedReading.meter_id]
+    wrongPeriodDrafts.value = nextDrafts
+  }
+  if (draftDeltas.value[savedReading.meter_id] !== undefined) {
+    const nextDeltas = { ...draftDeltas.value }
+    delete nextDeltas[savedReading.meter_id]
+    draftDeltas.value = nextDeltas
+  }
+  wrongPeriodBanner.value = ''
   submitBannerMessage.value = session.t('readings.savedBanner', { value: savedReading.value })
+  // Refresh dashboard in-place so late-final submissions advance next_submission cleanly to the new month
+  await loadDashboard({ quiet: true })
+  if (activeApartment.value?.apartment_id) {
+    await loadConsumption(activeApartment.value.apartment_id, 12, { preserveDataOnReload: true })
+  }
 }
 
 async function submitAllMeters() {
@@ -283,15 +357,25 @@ function openHistory(readingId, label) {
           :title="session.t('readings.noPersonalApartmentTitle')"
           :description="session.t('readings.noPersonalApartmentDesc')"
         >
-          <button
-            v-if="canViewMatrix"
-            type="button"
-            class="mt-2 px-5 py-2.5 rounded-lg bg-primary text-on-primary font-label-lg text-sm font-semibold hover:bg-primary-container transition-colors inline-flex items-center gap-2"
-            @click="router.push('/accounting')"
-          >
-            <span class="material-symbols-outlined text-[18px]">table_view</span>
-            <span>{{ session.t('readings.openBuildingMatrixBtn') }}</span>
-          </button>
+          <div v-if="canViewMatrix" class="mt-2 flex flex-wrap items-center justify-center gap-2.5">
+            <button
+              type="button"
+              class="px-5 py-2.5 rounded-lg bg-primary text-on-primary font-label-lg text-sm font-semibold hover:bg-primary-container transition-colors inline-flex items-center gap-2"
+              @click="router.push('/accounting')"
+            >
+              <span class="material-symbols-outlined text-[18px]">table_view</span>
+              <span>{{ session.t('readings.openBuildingMatrixBtn') }}</span>
+            </button>
+            <button
+              type="button"
+              data-testid="readings-staff-consumption-link"
+              class="px-5 py-2.5 rounded-lg bg-surface-container-low border border-surface-container-high text-on-surface font-label-lg text-sm font-semibold hover:bg-surface-container transition-colors inline-flex items-center gap-2"
+              @click="router.push({ name: 'accounting', query: { tab: 'consumption' } })"
+            >
+              <span class="material-symbols-outlined text-[18px]">monitoring</span>
+              <span>{{ session.t('buildingConsumption.openConsumptionLink') }}</span>
+            </button>
+          </div>
         </BaseEmptyState>
       </div>
 
@@ -308,6 +392,10 @@ function openHistory(readingId, label) {
               <template v-if="period?.due_date">
                 • {{ session.t('readings.dueByLabel') }} {{ formatDate(period.due_date, session.lang) }}
               </template>
+            </p>
+            <p v-if="hasOpenSubmissions" class="text-xs text-primary font-medium mt-1 inline-flex items-center gap-1">
+              <span class="material-symbols-outlined text-[15px]">keyboard</span>
+              <span>{{ session.t('readings.fastEntryHint') }}</span>
             </p>
           </div>
 
@@ -344,6 +432,16 @@ function openHistory(readingId, label) {
             </div>
 
             <StatusChip v-if="period" :status="period.status" />
+            <button
+              v-if="canViewMatrix"
+              type="button"
+              data-testid="readings-header-consumption-link"
+              class="px-3 py-1.5 rounded-full bg-surface-container-low border border-surface-container-high text-on-surface font-label-md text-xs font-semibold hover:bg-surface-container transition-colors inline-flex items-center gap-1.5"
+              @click="router.push({ name: 'accounting', query: { tab: 'consumption' } })"
+            >
+              <span class="material-symbols-outlined text-[15px]">monitoring</span>
+              <span>{{ session.t('buildingConsumption.openConsumptionLink') }}</span>
+            </button>
             <span
               v-if="!activeApartment.can_submit_readings"
               class="px-3 py-1 rounded-full bg-error-container text-on-error-container font-label-md text-xs font-semibold"
@@ -351,6 +449,25 @@ function openHistory(readingId, label) {
               {{ session.t('readings.viewOnlyBadge') }}
             </span>
           </div>
+        </div>
+
+        <!-- Wrong Period Info Banner (409 WRONG_PERIOD) -->
+        <div
+          v-if="wrongPeriodBanner"
+          role="status"
+          class="mt-space-md p-3 rounded-xl bg-amber-100/80 dark:bg-amber-950/50 text-amber-950 dark:text-amber-200 border border-amber-300/70 font-label-md text-xs font-semibold flex items-center justify-between gap-2"
+        >
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-[18px]">update</span>
+            <span>{{ wrongPeriodBanner }}</span>
+          </div>
+          <button
+            type="button"
+            class="text-xs underline shrink-0"
+            @click="wrongPeriodBanner = ''"
+          >
+            {{ session.t('common.dismiss') }}
+          </button>
         </div>
 
         <!-- Feedback Toast Banner -->
@@ -407,7 +524,10 @@ function openHistory(readingId, label) {
                     :period-code="period?.period_code || periodCode"
                     :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
                     :can-submit="activeApartment.can_submit_readings"
+                    :use-next-submission="true"
+                    :preserved-draft="wrongPeriodDrafts[meter.meter_id] ?? null"
                     @saved="handleMeterSaved"
+                    @wrong-period="handleWrongPeriod"
                     @draft-change="handleDraftChange"
                     @open-history="openHistory"
                   />
@@ -444,7 +564,10 @@ function openHistory(readingId, label) {
                     :period-code="period?.period_code || periodCode"
                     :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
                     :can-submit="activeApartment.can_submit_readings"
+                    :use-next-submission="true"
+                    :preserved-draft="wrongPeriodDrafts[meter.meter_id] ?? null"
                     @saved="handleMeterSaved"
+                    @wrong-period="handleWrongPeriod"
                     @draft-change="handleDraftChange"
                     @open-history="openHistory"
                   />
@@ -481,7 +604,10 @@ function openHistory(readingId, label) {
                     :period-code="period?.period_code || periodCode"
                     :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
                     :can-submit="activeApartment.can_submit_readings"
+                    :use-next-submission="true"
+                    :preserved-draft="wrongPeriodDrafts[meter.meter_id] ?? null"
                     @saved="handleMeterSaved"
+                    @wrong-period="handleWrongPeriod"
                     @draft-change="handleDraftChange"
                     @open-history="openHistory"
                   />
@@ -619,7 +745,7 @@ function openHistory(readingId, label) {
               <div class="pt-2 flex flex-col gap-2">
                 <button
                   type="button"
-                  :disabled="!activeApartment.can_submit_readings || period?.status === 'LOCKED'"
+                  :disabled="!hasOpenSubmissions"
                   class="w-full py-3.5 px-space-md bg-primary text-on-primary font-label-lg text-label-lg rounded-lg shadow-xs hover:bg-primary-container transition-all flex items-center justify-center gap-2 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                   @click="submitAllMeters"
                 >
@@ -635,9 +761,23 @@ function openHistory(readingId, label) {
             </div>
           </div>
         </div>
+
+        <!-- Last 12 Months Apartment Consumption Chart (#030 - strictly apartment-only, no building averages) -->
+        <div class="mt-space-lg">
+          <ConsumptionChart
+            :periods="consumptionData?.periods || []"
+            :series="consumptionData?.resources || []"
+            :loading="consumptionLoading"
+            :error="consumptionError"
+            :title="session.t('consumptionChart.sectionTitle')"
+            :subtitle="session.t('consumptionChart.sectionSubtitle')"
+            @retry="loadConsumption(activeApartment?.apartment_id || '')"
+          />
+        </div>
+
         <!-- Mobile Sticky Consumption Summary & Quick Submit Bar (< lg) -->
         <div
-          v-if="activeApartment.can_submit_readings && period?.status !== 'LOCKED'"
+          v-if="hasOpenSubmissions"
           data-testid="readings-mobile-sticky-bar"
           class="lg:hidden sticky bottom-16 z-20 mt-space-md rounded-2xl bg-surface-container-lowest/95 backdrop-blur-md border border-surface-container-high p-3 shadow-lg flex items-center justify-between gap-3"
         >

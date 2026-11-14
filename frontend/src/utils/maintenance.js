@@ -1488,4 +1488,339 @@ export function publishMaintenanceTasksInStore({
   return { publishedBoardTopics, publishedNotices, remindersPosted }
 }
 
+// ============================================================================
+// #029 [E10/#132] Yearly Maintenance Report & CSV Export Helpers
+// ============================================================================
+
+export const MIN_REPORT_YEAR = 2000
+export const MAX_REPORT_YEAR = 2100
+
+/**
+ * Validates and parses a yearly report `year` parameter (integer 2000..2100).
+ * @param {number | string | null | undefined} rawYear
+ * @returns {{ ok: boolean, year?: number, status?: number, errorCode?: string, message?: string }}
+ */
+export function parseReportYear(rawYear) {
+  const str = rawYear === null || rawYear === undefined ? '' : String(rawYear).trim()
+  if (!/^[0-9]{4}$/.test(str)) {
+    return {
+      ok: false,
+      status: 422,
+      errorCode: 'VALIDATION_ERROR',
+      message: 'year must be a 4-digit integer between 2000 and 2100.',
+    }
+  }
+  const year = Number(str)
+  if (!Number.isInteger(year) || year < MIN_REPORT_YEAR || year > MAX_REPORT_YEAR) {
+    return {
+      ok: false,
+      status: 422,
+      errorCode: 'VALIDATION_ERROR',
+      message: 'year must be between 2000 and 2100.',
+    }
+  }
+  return { ok: true, year }
+}
+
+/**
+ * Extracts entries belonging to `year` based on `closed_on` year (`YYYY-...`),
+ * matching backend contract ("by closed_on, not planned_date").
+ * @param {Array<import('../api/schema').LogEntryView>} logStore
+ * @param {number} year
+ * @returns {Array<import('../api/schema').LogEntryView>}
+ */
+function getEntriesForClosedYear(logStore, year) {
+  const yearPrefix = `${year}-`
+  if (!Array.isArray(logStore)) return []
+  return logStore.filter(
+    (entry) => typeof entry?.closed_on === 'string' && entry.closed_on.startsWith(yearPrefix),
+  )
+}
+
+/**
+ * Aggregates `GET /api/v1/maintenance/report?year=YYYY` from the maintenance log store.
+ * Uses exact BigInt cents via `sumCosts` (zero float math).
+ * @param {Array<import('../api/schema').LogEntryView>} logStore
+ * @param {number | string | null | undefined} rawYear
+ * @returns {{ ok: boolean, status?: number, errorCode?: string, message?: string, report?: import('../api/schema').YearReport }}
+ */
+export function buildMaintenanceYearReport(logStore, rawYear) {
+  const parsed = parseReportYear(rawYear)
+  if (!parsed.ok) return parsed
+  const year = parsed.year
+
+  const yearEntries = getEntriesForClosedYear(logStore, year)
+
+  let doneCount = 0
+  let skippedCount = 0
+  const allCosts = []
+  /** @type {Map<string, { task_id: string, task_title: string, latest_closed_on: string, latest_recorded_at: string, done_count: number, skipped_count: number, costs: Array<string | null> }>} */
+  const byTask = new Map()
+
+  for (const entry of yearEntries) {
+    if (entry.kind === 'DONE') {
+      doneCount += 1
+    } else if (entry.kind === 'SKIPPED') {
+      skippedCount += 1
+    }
+    allCosts.push(entry.cost)
+
+    const taskId = String(entry.task_id || '')
+    let bucket = byTask.get(taskId)
+    const closedOn = String(entry.closed_on || '')
+    const recordedAt = String(entry.recorded_at || '')
+
+    if (!bucket) {
+      bucket = {
+        task_id: taskId,
+        task_title: String(entry.task_title || ''),
+        latest_closed_on: closedOn,
+        latest_recorded_at: recordedAt,
+        done_count: 0,
+        skipped_count: 0,
+        costs: [],
+      }
+      byTask.set(taskId, bucket)
+    } else if (
+      entry.task_title &&
+      (closedOn > bucket.latest_closed_on ||
+        (closedOn === bucket.latest_closed_on && recordedAt >= bucket.latest_recorded_at))
+    ) {
+      bucket.task_title = String(entry.task_title)
+      bucket.latest_closed_on = closedOn
+      bucket.latest_recorded_at = recordedAt
+    }
+
+    if (entry.kind === 'DONE') {
+      bucket.done_count += 1
+    } else if (entry.kind === 'SKIPPED') {
+      bucket.skipped_count += 1
+    }
+    bucket.costs.push(entry.cost)
+  }
+
+  const tasks = Array.from(byTask.values())
+    .map((bucket) => ({
+      task_id: bucket.task_id,
+      task_title: bucket.task_title,
+      done_count: bucket.done_count,
+      skipped_count: bucket.skipped_count,
+      total_cost: sumCosts(bucket.costs),
+    }))
+    .sort((a, b) => {
+      const titleCmp = a.task_title.localeCompare(b.task_title, 'en')
+      if (titleCmp !== 0) return titleCmp
+      return a.task_id.localeCompare(b.task_id, 'en')
+    })
+
+  return {
+    ok: true,
+    report: {
+      year,
+      done_count: doneCount,
+      skipped_count: skippedCount,
+      total_cost: sumCosts(allCosts),
+      tasks,
+    },
+  }
+}
+
+/**
+ * Prefixes text cells that a spreadsheet could interpret as a formula with `'`:
+ * covers `=`, `+`, `-`, `@` including after leading whitespace/line breaks or NFKC full-width
+ * equivalents, and any leading tab, CR, or LF (API contract section 3 & section 11).
+ * @param {string | number | null | undefined} value
+ * @returns {string}
+ */
+export function sanitizeCsvFormulaCell(value) {
+  const str = value === null || value === undefined ? '' : String(value)
+  if (!str) return ''
+  if (/^[\t\r\n]/.test(str)) {
+    return `'${str}`
+  }
+  const normalizedLeading = str.normalize('NFKC').replace(/^[\s\u00A0]+/, '')
+  if (/^[=+\-@]/.test(normalizedLeading)) {
+    return `'${str}`
+  }
+  return str
+}
+
+/**
+ * Formats and quotes a CSV cell (RFC 4180), optionally applying the formula-injection guard.
+ * @param {string | number | null | undefined} value
+ * @param {{ guardFormula?: boolean }} [options]
+ * @returns {string}
+ */
+export function escapeCsvCell(value, options = {}) {
+  const { guardFormula = true } = options
+  const raw = value === null || value === undefined ? '' : String(value)
+  const safe = guardFormula ? sanitizeCsvFormulaCell(raw) : raw
+  if (/[",\r\n]/.test(safe)) {
+    return `"${safe.replace(/"/g, '""')}"`
+  }
+  return safe
+}
+
+/**
+ * Builds the UTF-8 BOM, CRLF, comma-delimited CSV attachment for `GET /api/v1/maintenance/report/export-csv`.
+ * Ordered oldest `closed_on` first.
+ * Columns: closed_on,task_title,kind,planned_date,cost,note,recorded_by
+ * @param {Array<import('../api/schema').LogEntryView>} logStore
+ * @param {number | string | null | undefined} rawYear
+ * @returns {{ ok: boolean, status?: number, errorCode?: string, message?: string, year?: number, filename?: string, csv?: string }}
+ */
+export function buildMaintenanceYearCsv(logStore, rawYear) {
+  const parsed = parseReportYear(rawYear)
+  if (!parsed.ok) return parsed
+  const year = parsed.year
+
+  const yearEntries = getEntriesForClosedYear(logStore, year).slice().sort((a, b) => {
+    const closedCmp = String(a.closed_on || '').localeCompare(String(b.closed_on || ''))
+    if (closedCmp !== 0) return closedCmp
+    const recCmp = String(a.recorded_at || '').localeCompare(String(b.recorded_at || ''))
+    if (recCmp !== 0) return recCmp
+    return String(a.id || '').localeCompare(String(b.id || ''))
+  })
+
+  const lines = ['closed_on,task_title,kind,planned_date,cost,note,recorded_by']
+  for (const entry of yearEntries) {
+    let costStr = ''
+    let guardCost = false
+    if (entry.cost !== null && entry.cost !== undefined && entry.cost !== '') {
+      const canonical = toTwoDecimals(entry.cost)
+      if (canonical !== null) {
+        costStr = canonical
+      } else {
+        costStr = String(entry.cost)
+        guardCost = true
+      }
+    }
+    const recordedByName = entry.recorded_by?.display_label || ''
+    lines.push(
+      [
+        escapeCsvCell(entry.closed_on || '', { guardFormula: false }),
+        escapeCsvCell(entry.task_title || '', { guardFormula: true }),
+        escapeCsvCell(entry.kind || '', { guardFormula: false }),
+        escapeCsvCell(entry.planned_date || '', { guardFormula: false }),
+        escapeCsvCell(costStr, { guardFormula: guardCost }),
+        escapeCsvCell(entry.note || '', { guardFormula: true }),
+        escapeCsvCell(recordedByName, { guardFormula: true }),
+      ].join(','),
+    )
+  }
+
+  return {
+    ok: true,
+    year,
+    filename: `maintenance-log-${year}.csv`,
+    csv: `\uFEFF${lines.join('\r\n')}\r\n`,
+  }
+}
+
+/**
+ * Extracts a safe download filename from a Content-Disposition header,
+ * falling back to `maintenance-log-<year>.csv`.
+ * @param {string | null | undefined} contentDisposition
+ * @param {number} year
+ * @returns {string}
+ */
+export function extractMaintenanceCsvFilename(contentDisposition, year) {
+  const fallback = `maintenance-log-${year}.csv`
+  if (typeof contentDisposition !== 'string' || !contentDisposition.trim()) {
+    return fallback
+  }
+
+  const extMatch = contentDisposition.match(/filename\*\s*=\s*utf-8'[^']*'([^;\s]+)/i)
+  let rawName = ''
+  if (extMatch && extMatch[1]) {
+    try {
+      rawName = decodeURIComponent(extMatch[1])
+    } catch {
+      rawName = extMatch[1]
+    }
+  } else {
+    const quotedMatch = contentDisposition.match(/filename\s*=\s*"([^"]*)"/i)
+    if (quotedMatch) {
+      rawName = quotedMatch[1]
+    } else {
+      const bareMatch = contentDisposition.match(/filename\s*=\s*([^;\s]+)/i)
+      rawName = bareMatch?.[1] || ''
+    }
+  }
+
+  const sanitized = rawName.replace(/^.*[/\\]/, '').trim()
+  return sanitized || fallback
+}
+
+/**
+ * Computes descending selectable years covering at least `currentYear` down to the
+ * earliest valid year found in log entries (clamped to MIN_REPORT_YEAR..MAX_REPORT_YEAR).
+ * @param {Array<{ closed_on?: string | null }>} entries
+ * @param {number} currentYear
+ * @returns {number[]}
+ */
+export function getAvailableReportYears(entries, currentYear) {
+  const safeCurrent = Math.min(
+    MAX_REPORT_YEAR,
+    Math.max(MIN_REPORT_YEAR, Number.isInteger(currentYear) ? currentYear : Number(getTodayDateInTallinn().slice(0, 4))),
+  )
+  let minYear = safeCurrent
+  let maxYear = safeCurrent
+
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      if (typeof entry?.closed_on === 'string' && /^[0-9]{4}-/.test(entry.closed_on)) {
+        const y = Number(entry.closed_on.slice(0, 4))
+        if (Number.isInteger(y) && y >= MIN_REPORT_YEAR && y <= MAX_REPORT_YEAR) {
+          if (y < minYear) minYear = y
+          if (y > maxYear) maxYear = y
+        }
+      }
+    }
+  }
+
+  // Ensure at least one previous year is easily reachable even if log only has current-year entries
+  if (minYear === maxYear && minYear > MIN_REPORT_YEAR) {
+    minYear -= 1
+  }
+
+  const years = []
+  for (let y = maxYear; y >= minYear; y -= 1) {
+    years.push(y)
+  }
+  return years
+}
+
+/**
+ * Paginates through `GET /maintenance/log` to discover all historical years without truncating at 100 rows.
+ * Stops early if stale, when a page has fewer than `pageSize` items, or after `maxPages` safety cap.
+ * @param {(params: { limit: number, offset: number }) => Promise<Array<any>>} fetchPage
+ * @param {{ pageSize?: number, maxPages?: number, isStale?: () => boolean }} [options]
+ * @returns {Promise<{ entries: Array<any>, stale: boolean }>}
+ */
+export async function fetchAllMaintenanceLogForYears(fetchPage, options = {}) {
+  const pageSize = Math.min(100, Math.max(1, Number(options.pageSize) || 100))
+  const maxPages = Math.max(1, Number(options.maxPages) || 50)
+  const isStale = options.isStale || (() => false)
+
+  const collected = []
+  for (let page = 0; page < maxPages; page += 1) {
+    if (isStale()) {
+      return { entries: collected, stale: true }
+    }
+    const items = await fetchPage({ limit: pageSize, offset: page * pageSize })
+    if (isStale()) {
+      return { entries: collected, stale: true }
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      break
+    }
+    collected.push(...items)
+    if (items.length < pageSize) {
+      break
+    }
+  }
+  return { entries: collected, stale: false }
+}
+
 

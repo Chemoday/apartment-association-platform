@@ -11,13 +11,17 @@ import {
   validateAndApplySettingsUpdate,
 } from '../utils/associationSettings.js'
 import {
+  addIssuePhotoInStore,
   buildIssueReportedNotification,
   canUserAccessIssues,
   changeIssueStatusInStore,
+  checkIssuePhotoUploadPreflight,
   clearIssueUrgentInStore,
   createDefaultIssuesSeed,
   createIssueInStore,
+  deleteIssuePhotoInStore,
   editIssueInStore,
+  getIssuePhotoFromStore,
   isIssueVisibleToUser,
   queryIssuesStore,
   readSettingFromStore,
@@ -26,9 +30,26 @@ import {
   withdrawIssueInStore,
 } from '../utils/issues.js'
 import {
+  addDocumentInStore,
+  checkDocumentUploadPreflight,
+  createDefaultDocumentsSeed,
+  deleteDocumentInStore,
+  editDocumentInStore,
+  getDocumentFileFromStore,
+  getDocumentFromStore,
+  getUploadOptionsForUser,
+  queryDocumentsStore,
+} from '../utils/documents.js'
+import {
+  computeStorageUsage,
+  evaluateStorageThresholdNotification,
+} from '../utils/storage.js'
+import {
   applyLogEditInStore,
   applyTaskDoneInStore,
   applyTaskSkipInStore,
+  buildMaintenanceYearCsv,
+  buildMaintenanceYearReport,
   computeOccurrenceState,
   createDefaultMaintenanceLogSeed,
   createDefaultMaintenanceSeed,
@@ -40,6 +61,25 @@ import {
   toTaskView,
   validateTaskDraft,
 } from '../utils/maintenance.js'
+import {
+  COMMENT_BODY_MAX_LENGTH,
+  POST_BODY_MAX_LENGTH,
+  POST_TITLE_MAX_LENGTH,
+  canViewerSeePost,
+  getEditWindowDeadlineMs,
+  hasDisallowedControlChars,
+  isCommentHideableOnPost,
+  isPostHideable,
+  isWithinEditWindow,
+  projectCommentForViewer,
+  validateCommentEdit,
+  validateHideReason,
+} from '../utils/communication.js'
+import {
+  buildApartmentConsumptionResponse,
+  buildBuildingConsumptionResponse,
+  parseConsumptionMonths,
+} from '../utils/consumption.js'
 
 export const isOfflineDemoMode = ref(false)
 
@@ -47,8 +87,17 @@ let offlineNotificationsByUser = {}
 let offlinePreferencesByUser = {}
 let offlineSettings = cloneDefaultAssociationSettings()
 let offlineIssues = createDefaultIssuesSeed()
+let offlineIssuePhotoIdempotency = new Map()
+let offlineIssuePhotoDailyUploads = []
+const activeOfflinePhotoUploads = new Map()
+let offlineDocuments = createDefaultDocumentsSeed()
+let offlineDocumentIdempotency = new Map()
+const activeOfflineDocumentUploads = new Map()
 let offlineMaintenance = createDefaultMaintenanceSeed()
 let offlineMaintenanceLog = createDefaultMaintenanceLogSeed()
+let offlineApartmentsByPeriod = {}
+let offlineExtraPendingDeletionBytes = 0
+let offlineStorageAlertState = { armed70: true, armed90: true }
 
 export function enableOfflineDemo() {
   isOfflineDemoMode.value = true
@@ -56,8 +105,18 @@ export function enableOfflineDemo() {
   offlinePreferencesByUser = {}
   offlineSettings = cloneDefaultAssociationSettings()
   offlineIssues = createDefaultIssuesSeed()
+  offlineIssuePhotoIdempotency = new Map()
+  offlineIssuePhotoDailyUploads = []
+  activeOfflinePhotoUploads.clear()
+  offlineDocuments = createDefaultDocumentsSeed()
+  offlineDocumentIdempotency = new Map()
+  activeOfflineDocumentUploads.clear()
   offlineMaintenance = createDefaultMaintenanceSeed()
   offlineMaintenanceLog = createDefaultMaintenanceLogSeed()
+  offlineApartmentsByPeriod = {}
+  offlineExtraPendingDeletionBytes = 0
+  offlineStorageAlertState = { armed70: true, armed90: true }
+  OFFLINE_POSTS.splice(0, OFFLINE_POSTS.length, ...createDefaultOfflinePosts())
 }
 
 export function disableOfflineDemo() {
@@ -132,6 +191,7 @@ const OFFLINE_MEMBERSHIPS_BY_USER = {
       can_view_bills: true,
       can_vote: true,
       privacy_display_mode: 'FULL_NAME',
+      since: '2026-01-12T10:00:00Z',
       preview_badge: {
         display_label: 'Kati Kask (Apt 14)',
         role_badge: 'OWNER',
@@ -150,6 +210,7 @@ const OFFLINE_MEMBERSHIPS_BY_USER = {
       can_view_bills: true,
       can_vote: false,
       privacy_display_mode: 'INITIALS',
+      since: '2026-06-15T10:00:00Z',
       preview_badge: {
         display_label: 'M. S. (Apt 02)',
         role_badge: 'RESIDENT',
@@ -168,6 +229,7 @@ const OFFLINE_MEMBERSHIPS_BY_USER = {
       can_view_bills: true,
       can_vote: true,
       privacy_display_mode: 'FULL_NAME',
+      since: '2023-04-01T09:00:00Z',
       preview_badge: {
         display_label: 'Liina Vaher (Apt 09)',
         role_badge: 'BOARD',
@@ -186,6 +248,7 @@ const OFFLINE_MEMBERSHIPS_BY_USER = {
       can_view_bills: true,
       can_vote: true,
       privacy_display_mode: 'FULL_NAME',
+      since: '2026-01-01T09:00:00Z',
       preview_badge: {
         display_label: 'Peeter Tamm (Apt 01)',
         role_badge: 'BOARD',
@@ -201,8 +264,10 @@ const OFFLINE_BUILDING = {
   registry_code: '80123456',
   address: 'Sõpruse pst 12, Kristiine, Tallinn',
   district: 'Kristiine',
-  apartments_count: 5,
-  total_apartments: 5,
+  apartment_count: 6,
+  apartments_count: 6,
+  total_apartments: 6,
+  entrance_count: 2,
   entrances_count: 2,
   total_entrances: 2,
   heated_area_m2: '329.20',
@@ -210,24 +275,29 @@ const OFFLINE_BUILDING = {
 
 const OFFLINE_PERIODS = [
   {
+    period_code: '2026-11',
+    status: 'OPEN_FOR_RESIDENTS',
+    due_date: '2026-12-04T21:59:59Z',
+  },
+  {
     period_code: '2026-10',
     status: 'OPEN_FOR_RESIDENTS',
-    due_date: '2026-11-04',
+    due_date: '2026-11-04T21:59:59Z',
   },
   {
     period_code: '2026-09',
     status: 'LOCKED',
-    due_date: '2026-10-04',
+    due_date: '2026-10-04T20:59:59Z',
   },
   {
     period_code: '2026-08',
     status: 'LOCKED',
-    due_date: '2026-09-04',
+    due_date: '2026-09-04T20:59:59Z',
   },
   {
     period_code: '2026-07',
     status: 'LOCKED',
-    due_date: '2026-08-04',
+    due_date: '2026-08-04T20:59:59Z',
   },
 ]
 
@@ -514,28 +584,153 @@ const MASTER_METERS_2026_10 = [
   },
 ]
 
-function getPeriodApartments(periodCode) {
-  if (!periodCode || periodCode === '2026-10') {
-    return BASE_APARTMENTS_2026_10
-  }
-  return BASE_APARTMENTS_2026_10.map((apt) => ({
+function createOfflineApartmentsByPeriod() {
+  const oct = JSON.parse(JSON.stringify(BASE_APARTMENTS_2026_10))
+  const nov = JSON.parse(JSON.stringify(BASE_APARTMENTS_2026_10)).map((apt) => ({
     ...apt,
-    can_submit_readings: false,
+    can_submit_readings: true,
     meters: apt.meters.map((m) => ({
       ...m,
-      previous_value: subDecimal(m.previous_value, m.historical_avg),
-      reading: {
-        reading_id: `${m.meter_id}-${periodCode}`,
-        value: m.previous_value,
-        consumption_delta: m.historical_avg,
-        source: 'RESIDENT',
-        is_anomaly_confirmed: false,
-      },
+      previous_value: m.reading ? m.reading.value : m.previous_value,
+      reading: null,
     })),
   }))
+
+  const periodsMap = {
+    '2026-10': oct,
+    '2026-11': nov,
+  }
+
+  for (const histCode of ['2026-09', '2026-08', '2026-07']) {
+    periodsMap[histCode] = JSON.parse(JSON.stringify(BASE_APARTMENTS_2026_10)).map((apt) => ({
+      ...apt,
+      can_submit_readings: false,
+      meters: apt.meters.map((m) => ({
+        ...m,
+        previous_value: subDecimal(m.previous_value, m.historical_avg),
+        reading: {
+          reading_id: `${m.meter_id}-${histCode}`,
+          value: m.previous_value,
+          consumption_delta: m.historical_avg,
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+        },
+      })),
+    }))
+  }
+
+  return periodsMap
 }
 
-const OFFLINE_POSTS = [
+function getPeriodApartments(periodCode) {
+  if (!offlineApartmentsByPeriod['2026-10']) {
+    offlineApartmentsByPeriod = createOfflineApartmentsByPeriod()
+  }
+  const code = periodCode || '2026-10'
+  return offlineApartmentsByPeriod[code] || offlineApartmentsByPeriod['2026-10']
+}
+
+function findOfflineMeterInPeriod(periodCode, meterId) {
+  const apts = getPeriodApartments(periodCode)
+  for (const apt of apts) {
+    const meter = apt.meters.find((item) => item.meter_id === meterId)
+    if (meter) return { apt, meter }
+  }
+  return null
+}
+
+function computeOfflineNextSubmission(meterId, aptCanSubmit, membershipCanSubmit) {
+  if (!aptCanSubmit || !membershipCanSubmit) return null
+  const pPrev = OFFLINE_PERIODS.find((p) => p.period_code === '2026-10')
+  const pCurr = OFFLINE_PERIODS.find((p) => p.period_code === '2026-11')
+  const mPrev = findOfflineMeterInPeriod('2026-10', meterId)?.meter || null
+  const mCurr = findOfflineMeterInPeriod('2026-11', meterId)?.meter || null
+
+  const hasSubmittedPrev = Boolean(mPrev?.reading && mPrev.reading.source !== 'AUTO_ESTIMATED')
+  const hasAnyCurr = Boolean(mCurr?.reading)
+
+  if (pPrev && pPrev.status === 'OPEN_FOR_RESIDENTS' && mPrev && !hasSubmittedPrev && !hasAnyCurr) {
+    return {
+      period_code: pPrev.period_code,
+      due_date: pPrev.due_date,
+      final: true,
+      previous_value: mPrev.previous_value,
+      average_delta: mPrev.historical_avg,
+      reading: null,
+    }
+  }
+
+  if (pCurr && pCurr.status === 'OPEN_FOR_RESIDENTS' && mCurr) {
+    return {
+      period_code: pCurr.period_code,
+      due_date: pCurr.due_date,
+      final: false,
+      previous_value: mCurr.previous_value,
+      average_delta: mCurr.historical_avg,
+      reading: mCurr.reading ? { ...mCurr.reading } : null,
+    }
+  }
+
+  return null
+}
+
+function createDefaultOfflinePosts() {
+  const nowMs = Date.now()
+  const twoHoursAgoIso = new Date(nowMs - 2 * 60 * 60 * 1000).toISOString()
+  const ninetyMinAgoIso = new Date(nowMs - 90 * 60 * 1000).toISOString()
+  const fortyFiveMinAgoIso = new Date(nowMs - 45 * 60 * 1000).toISOString()
+  return [
+  {
+    id: '018f0000-0000-7000-8000-000000000606',
+    post_type: 'FORUM_TOPIC',
+    category: 'GENERAL',
+    title: 'Weekend courtyard bench repainting helpers',
+    body: 'We have two cans of weatherproof timber oil left in the shed. Anyone free on Sunday at 11:00 to help coat the courtyard benches before the rain?',
+    author_user_id: '018f0000-0000-7000-8000-000000000102',
+    author_badge: {
+      display_label: 'Kati Kask (Apt 14)',
+      role_badge: 'OWNER',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: twoHoursAgoIso,
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
+    comments: [
+      {
+        id: '018f0000-0000-7000-8000-000000000655',
+        post_id: '018f0000-0000-7000-8000-000000000606',
+        body: 'I can bring sandpaper and extra brushes from the utility room.',
+        author_user_id: '018f0000-0000-7000-8000-000000000101',
+        author_badge: {
+          display_label: 'Peeter Tamm (Apt 01)',
+          role_badge: 'BOARD',
+        },
+        created_at: ninetyMinAgoIso,
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
+      },
+      {
+        id: '018f0000-0000-7000-8000-000000000656',
+        post_id: '018f0000-0000-7000-8000-000000000606',
+        body: 'Thank you Peeter! I will also pick up masking tape tomorrow morning.',
+        author_user_id: '018f0000-0000-7000-8000-000000000102',
+        author_badge: {
+          display_label: 'Kati Kask (Apt 14)',
+          role_badge: 'OWNER',
+        },
+        created_at: fortyFiveMinAgoIso,
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
+      },
+    ],
+  },
   {
     id: '018f0000-0000-7000-8000-000000000701',
     post_type: 'EMERGENCY',
@@ -553,6 +748,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: true,
     created_at: '2026-10-25T08:15:00Z',
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
     acknowledged_at: null,
     comments: [],
   },
@@ -573,6 +771,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: true,
     created_at: '2026-10-23T11:00:00Z',
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
     comments: [
       {
         id: '018f0000-0000-7000-8000-000000000651',
@@ -584,6 +785,9 @@ const OFFLINE_POSTS = [
           role_badge: 'OWNER',
         },
         created_at: '2026-10-23T13:20:00Z',
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       },
       {
         id: '018f0000-0000-7000-8000-000000000652',
@@ -595,8 +799,33 @@ const OFFLINE_POSTS = [
           role_badge: 'BOARD',
         },
         created_at: '2026-10-23T14:05:00Z',
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       },
     ],
+  },
+  {
+    id: '018f0000-0000-7000-8000-000000000605',
+    post_type: 'FORUM_TOPIC',
+    category: 'MARKETPLACE',
+    title: 'Commercial courier discount code spam',
+    body: 'Use my referral link every day for commercial deliveries and promotional flyers in every mailbox.',
+    author_user_id: '018f0000-0000-7000-8000-000000000104',
+    author_badge: {
+      display_label: 'M. S. (Apt 02)',
+      role_badge: 'RESIDENT',
+    },
+    target_scope: 'ALL_BUILDING',
+    target_entrance: null,
+    target_apartment_ids: null,
+    is_active: true,
+    comments_enabled: true,
+    created_at: '2026-10-22T15:00:00Z',
+    edited_at: null,
+    hidden_at: '2026-10-22T16:15:00Z',
+    hidden_reason: 'Commercial advertising is not allowed in the building forum.',
+    comments: [],
   },
   {
     id: '018f0000-0000-7000-8000-000000000602',
@@ -615,6 +844,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: true,
     created_at: '2026-10-20T17:30:00Z',
+    edited_at: '2026-10-20T18:05:00Z',
+    hidden_at: null,
+    hidden_reason: null,
     comments: [
       {
         id: '018f0000-0000-7000-8000-000000000653',
@@ -626,6 +858,23 @@ const OFFLINE_POSTS = [
           role_badge: 'ACCOUNTANT',
         },
         created_at: '2026-10-21T09:15:00Z',
+        edited_at: '2026-10-21T09:22:00Z',
+        hidden_at: null,
+        hidden_reason: null,
+      },
+      {
+        id: '018f0000-0000-7000-8000-000000000654',
+        post_id: '018f0000-0000-7000-8000-000000000602',
+        body: 'Why are ground floor residents paying for upper floor bikes?! Keep them in your own flats!',
+        author_user_id: '018f0000-0000-7000-8000-000000000104',
+        author_badge: {
+          display_label: 'M. S. (Apt 02)',
+          role_badge: 'RESIDENT',
+        },
+        created_at: '2026-10-21T11:40:00Z',
+        edited_at: null,
+        hidden_at: '2026-10-21T12:10:00Z',
+        hidden_reason: 'Personal attacks against neighbors violate house rules.',
       },
     ],
   },
@@ -646,6 +895,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: true,
     created_at: '2026-10-15T10:00:00Z',
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
     comments: [],
   },
   {
@@ -665,6 +917,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: true,
     created_at: '2026-10-24T10:15:00Z',
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
     comments: [
       {
         id: '018f0000-0000-7000-8000-000000000752',
@@ -676,6 +931,9 @@ const OFFLINE_POSTS = [
           role_badge: 'OWNER',
         },
         created_at: '2026-10-24T12:40:00Z',
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       },
     ],
   },
@@ -696,6 +954,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: true,
     created_at: '2026-10-25T11:30:00Z',
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
     comments: [
       {
         id: '018f0000-0000-7000-8000-000000000762',
@@ -707,6 +968,9 @@ const OFFLINE_POSTS = [
           role_badge: 'BOARD',
         },
         created_at: '2026-10-25T14:20:00Z',
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       },
     ],
   },
@@ -728,6 +992,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: false,
     created_at: '2026-10-25T09:00:00Z',
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
     comments: [],
   },
   {
@@ -748,6 +1015,9 @@ const OFFLINE_POSTS = [
     is_active: true,
     comments_enabled: true,
     created_at: '2026-10-25T09:00:00Z',
+    edited_at: null,
+    hidden_at: null,
+    hidden_reason: null,
     comments: [
       {
         id: '018f0000-0000-7000-8000-000000000764',
@@ -759,10 +1029,16 @@ const OFFLINE_POSTS = [
           role_badge: 'BOARD',
         },
         created_at: '2026-11-06T09:00:00Z',
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       },
     ],
   },
-]
+  ]
+}
+
+const OFFLINE_POSTS = createDefaultOfflinePosts()
 
 function getActingUser(actingUserId) {
   const effectiveId = actingUserId || offlineSignedInUserId
@@ -783,11 +1059,11 @@ function makeOfflineError(status, errorCode, message, extra = {}) {
 /**
  * Resolves API requests locally from seeded read-only demo fixtures when offlineDemoMode is enabled.
  * @param {string} path
- * @param {{ method?: string, body?: any, raw?: boolean, actingUserId?: string }} [options]
+ * @param {{ method?: string, body?: any, raw?: boolean, actingUserId?: string, contentType?: string, headers?: Record<string, string>, signal?: AbortSignal }} [options]
  */
 export async function resolveOfflineDemoRequest(
   path,
-  { method = 'GET', body = null, raw = false, actingUserId = '' } = {},
+  { method = 'GET', body = null, raw = false, actingUserId = '', contentType = '', headers = {}, signal } = {},
 ) {
   const urlObj = new URL(path, 'http://localhost')
   const pathname = urlObj.pathname
@@ -949,23 +1225,11 @@ export async function resolveOfflineDemoRequest(
     return { periods: JSON.parse(JSON.stringify(OFFLINE_PERIODS)) }
   }
 
-  // 4b. GET /meters/apartments/:id/readings (E8/P1)
-  const offlineAptReadingsMatch = pathname.match(/^\/meters\/apartments\/([^/]+)\/readings$/)
-  if (offlineAptReadingsMatch && method === 'GET') {
-    const aptId = offlineAptReadingsMatch[1]
-    const cardMeta = OFFLINE_APARTMENT_CARDS.find((a) => a.apartment_id === aptId)
-    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
-    const isStaff = ['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)
-    const isOwn = userMems.some((m) => m.apartment_id === aptId)
-    if (!cardMeta || (!isStaff && !isOwn)) {
-      const err = new Error('Apartment not found')
-      err.status = 404
-      err.errorCode = 'APARTMENT_NOT_FOUND'
-      err.payload = { error_code: 'APARTMENT_NOT_FOUND' }
-      throw err
-    }
+  // Helper shared by /readings and /consumption so histories stay 100% consistent
+  function buildOfflineApartmentMeters(cardMeta) {
     const baseApt =
-      BASE_APARTMENTS_2026_10.find((a) => a.apartment_id === aptId) || BASE_APARTMENTS_2026_10[0]
+      BASE_APARTMENTS_2026_10.find((a) => a.apartment_id === cardMeta.apartment_id) ||
+      BASE_APARTMENTS_2026_10[0]
     const meters = baseApt.meters.map((baseMeter, mIdx) => {
       const readings = []
       for (const p of OFFLINE_PERIODS) {
@@ -994,45 +1258,383 @@ export async function resolveOfflineDemoRequest(
         readings,
       }
     })
+    if (cardMeta.apartment_number === '14') {
+      meters.push({
+        meter_id: '018f0000-0000-7000-8000-000000000599',
+        resource_type: 'COLD_WATER',
+        serial_number: 'CW-1429-OLD',
+        location_label: 'Kitchen Cold Water (Old)',
+        unit: 'm3',
+        is_active: false,
+        readings: [
+          {
+            period_code: '2026-07',
+            reading_id: '018f0000-0000-7000-8000-000000000999',
+            value: '79.900',
+            consumption_delta: '2.000',
+            source: 'RESIDENT',
+            is_anomaly_confirmed: false,
+          },
+        ],
+      })
+    }
+    return meters
+  }
+
+  function safeDecodePathSegment(raw) {
+    try {
+      return decodeURIComponent(raw)
+    } catch {
+      return ''
+    }
+  }
+
+  // 4b. GET /meters/apartments/:id/readings (E8/P1)
+  const offlineAptReadingsMatch = pathname.match(/^\/meters\/apartments\/([^/]+)\/readings$/)
+  if (offlineAptReadingsMatch && method === 'GET') {
+    const aptId = safeDecodePathSegment(offlineAptReadingsMatch[1])
+    const cardMeta = aptId ? OFFLINE_APARTMENT_CARDS.find((a) => a.apartment_id === aptId) : null
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const isStaff = ['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)
+    const isOwn = Boolean(aptId) && userMems.some((m) => m.apartment_id === aptId)
+    if (!cardMeta || (!isStaff && !isOwn)) {
+      const err = new Error('Apartment not found')
+      err.status = 404
+      err.errorCode = 'APARTMENT_NOT_FOUND'
+      err.payload = { error_code: 'APARTMENT_NOT_FOUND' }
+      throw err
+    }
     return {
       apartment_id: cardMeta.apartment_id,
       apartment_number: cardMeta.apartment_number,
       periods: JSON.parse(JSON.stringify(OFFLINE_PERIODS)),
-      meters,
+      meters: buildOfflineApartmentMeters(cardMeta),
     }
+  }
+
+  // 4c. GET /meters/apartments/:id/consumption (#030)
+  const offlineAptConsumptionMatch = pathname.match(/^\/meters\/apartments\/([^/]+)\/consumption$/)
+  if (offlineAptConsumptionMatch && method === 'GET') {
+    const aptId = safeDecodePathSegment(offlineAptConsumptionMatch[1])
+    const cardMeta = aptId ? OFFLINE_APARTMENT_CARDS.find((a) => a.apartment_id === aptId) : null
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const isStaff = ['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)
+    const isOwn = Boolean(aptId) && userMems.some((m) => m.apartment_id === aptId)
+    if (!cardMeta || (!isStaff && !isOwn)) {
+      const err = new Error('Apartment not found')
+      err.status = 404
+      err.errorCode = 'APARTMENT_NOT_FOUND'
+      err.payload = { error_code: 'APARTMENT_NOT_FOUND' }
+      throw err
+    }
+    const parsedMonths = parseConsumptionMonths(urlObj.searchParams.get('months'))
+    if (!parsedMonths.ok) {
+      const err = new Error(parsedMonths.message || 'Invalid months parameter')
+      err.status = 422
+      err.errorCode = 'VALIDATION_ERROR'
+      err.payload = { error_code: 'VALIDATION_ERROR', message: parsedMonths.message }
+      throw err
+    }
+    return buildApartmentConsumptionResponse({
+      apartmentId: cardMeta.apartment_id,
+      apartmentNumber: cardMeta.apartment_number,
+      periods: OFFLINE_PERIODS,
+      meters: buildOfflineApartmentMeters(cardMeta),
+      months: parsedMonths.months,
+    })
+  }
+
+  // 4d. GET /meters/consumption (#031) - staff only (CHAIRMAN, BOARD, ACCOUNTANT)
+  if (pathname === '/meters/consumption' && method === 'GET') {
+    const isStaff = ['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)
+    if (!isStaff) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Chairman, Board, or Accountant role required.')
+    }
+    const parsedMonths = parseConsumptionMonths(urlObj.searchParams.get('months'))
+    if (!parsedMonths.ok) {
+      const msg = parsedMonths.message || 'Invalid months parameter'
+      throw makeOfflineError(422, 'VALIDATION_ERROR', msg, {
+        errors: [{ field: 'months', message: msg }],
+      })
+    }
+    const apartmentsPayload = BASE_APARTMENTS_2026_10.map((baseApt) => {
+      const cardMeta = OFFLINE_APARTMENT_CARDS.find((a) => a.apartment_id === baseApt.apartment_id)
+      return {
+        apartment_id: baseApt.apartment_id,
+        area_m2: cardMeta?.area_m2 || '0',
+        meters: buildOfflineApartmentMeters(cardMeta || baseApt),
+      }
+    })
+    return buildBuildingConsumptionResponse({
+      periods: OFFLINE_PERIODS,
+      apartments: apartmentsPayload,
+      months: parsedMonths.months,
+    })
   }
 
   // 5. GET /meters/my-dashboard
   if (pathname === '/meters/my-dashboard' && method === 'GET') {
-    const periodCode = urlObj.searchParams.get('period_code') || '2026-10'
+    const requestedPeriodCode = urlObj.searchParams.get('period_code')
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const userAptIds = new Set(userMems.map((m) => m.apartment_id))
+    const memByAptId = new Map(userMems.map((m) => [m.apartment_id, m]))
+
+    let periodCode = requestedPeriodCode
+    if (!periodCode) {
+      const refApts = getPeriodApartments('2026-10')
+      let hasPendingPrev = false
+      for (const a of refApts) {
+        if (!userAptIds.has(a.apartment_id)) continue
+        const memCanSubmit = Boolean(memByAptId.get(a.apartment_id)?.can_submit_readings)
+        for (const m of a.meters) {
+          const sub = computeOfflineNextSubmission(m.meter_id, a.can_submit_readings, memCanSubmit)
+          if (sub?.period_code === '2026-10') {
+            hasPendingPrev = true
+            break
+          }
+        }
+        if (hasPendingPrev) break
+      }
+      periodCode = hasPendingPrev ? '2026-10' : '2026-11'
+    }
+
     const period =
       OFFLINE_PERIODS.find((p) => p.period_code === periodCode) || OFFLINE_PERIODS[0]
     const periodApts = getPeriodApartments(period.period_code)
-    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
-    const userAptIds = new Set(userMems.map((m) => m.apartment_id))
+
+    const baseCanSubmitByAptId = new Map(
+      BASE_APARTMENTS_2026_10.map((a) => [a.apartment_id, Boolean(a.can_submit_readings)]),
+    )
 
     const apartments = periodApts
       .filter((a) => userAptIds.has(a.apartment_id))
-      .map((a) => ({
-        apartment_id: a.apartment_id,
-        apartment_number: a.apartment_number,
-        can_submit_readings: false, // Read-only in offline demo mode
-        meters: a.meters.map((m) => ({
-          meter_id: m.meter_id,
-          resource_type: m.resource_type,
-          serial_number: m.serial_number,
-          location_label: m.location_label,
-          unit: m.unit,
-          previous_value: m.previous_value,
-          previous_delta: m.historical_avg,
-          average_delta: m.historical_avg,
-          reading: m.reading ? { ...m.reading } : null,
-        })),
-      }))
+      .map((a) => {
+        const memCanSubmit = Boolean(memByAptId.get(a.apartment_id)?.can_submit_readings)
+        const baseAptCanSubmit = baseCanSubmitByAptId.get(a.apartment_id) ?? false
+        return {
+          apartment_id: a.apartment_id,
+          apartment_number: a.apartment_number,
+          can_submit_readings: baseAptCanSubmit && memCanSubmit,
+          meters: a.meters.map((m) => ({
+            meter_id: m.meter_id,
+            resource_type: m.resource_type,
+            serial_number: m.serial_number,
+            location_label: m.location_label,
+            unit: m.unit,
+            previous_value: m.previous_value,
+            previous_delta: m.historical_avg,
+            average_delta: m.historical_avg,
+            reading: m.reading ? { ...m.reading } : null,
+            next_submission: computeOfflineNextSubmission(
+              m.meter_id,
+              baseAptCanSubmit,
+              memCanSubmit,
+            ),
+          })),
+        }
+      })
 
     return {
       period: { ...period },
       apartments,
+    }
+  }
+
+  // 5b. POST /meters/readings
+  if (pathname === '/meters/readings' && method === 'POST') {
+    const payload = body || {}
+    const {
+      meter_id,
+      period_code = '2026-10',
+      value,
+      confirmation_level = 0,
+      reason = null,
+    } = payload
+
+    const period = OFFLINE_PERIODS.find((p) => p.period_code === period_code)
+    if (!period) {
+      throw makeOfflineError(404, 'PERIOD_NOT_FOUND', 'The requested billing period was not found.')
+    }
+    if (period.status === 'LOCKED') {
+      throw makeOfflineError(409, 'PERIOD_LOCKED', 'This billing period is locked.')
+    }
+
+    const match = findOfflineMeterInPeriod(period_code, meter_id)
+    if (!match) {
+      throw makeOfflineError(404, 'METER_NOT_FOUND', 'Meter not found.')
+    }
+    const { apt: foundApt, meter: foundMeter } = match
+
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const matchingMem = userMems.find((m) => m.apartment_id === foundApt.apartment_id) || null
+    const isOwnUnit = Boolean(matchingMem)
+    const isPrivilegedRole = user.building_role === 'CHAIRMAN' || user.building_role === 'ACCOUNTANT'
+
+    if (!isOwnUnit && !isPrivilegedRole) {
+      throw makeOfflineError(404, 'METER_NOT_FOUND', 'Meter not found.')
+    }
+
+    if (typeof value !== 'string' || !/^[0-9]{1,9}(\.[0-9]{1,3})?$/.test(value)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid decimal meter reading.')
+    }
+
+    const normalizedVal = fromBigInt3(toBigInt3(value))
+    const existingReading = foundMeter.reading
+    const nextSub = computeOfflineNextSubmission(
+      meter_id,
+      foundApt.can_submit_readings,
+      Boolean(matchingMem?.can_submit_readings),
+    )
+
+    const actingAsResident =
+      !isPrivilegedRole || (isOwnUnit && nextSub?.period_code === period_code)
+
+    if (actingAsResident) {
+      if (!matchingMem?.can_submit_readings || !foundApt.can_submit_readings) {
+        throw makeOfflineError(403, 'FORBIDDEN', 'You cannot submit readings for this apartment.')
+      }
+
+      if (
+        existingReading &&
+        existingReading.source === 'RESIDENT' &&
+        existingReading.value === normalizedVal &&
+        period.status === 'OPEN_FOR_RESIDENTS'
+      ) {
+        return {
+          reading_id: existingReading.reading_id,
+          meter_id,
+          period_code,
+          value: existingReading.value,
+          consumption_delta: existingReading.consumption_delta,
+          source: existingReading.source,
+          is_anomaly_confirmed: existingReading.is_anomaly_confirmed,
+        }
+      }
+
+      if (period.status !== 'OPEN_FOR_RESIDENTS' || !nextSub) {
+        throw makeOfflineError(409, 'PERIOD_CLOSED', 'Period is closed for residents.')
+      }
+
+      if (period_code !== nextSub.period_code) {
+        throw makeOfflineError(
+          409,
+          'WRONG_PERIOD',
+          `Reading belongs to period ${nextSub.period_code}.`,
+          { target_period_code: nextSub.period_code },
+        )
+      }
+
+      if (existingReading?.source === 'ADMIN_OVERRIDE') {
+        throw makeOfflineError(
+          409,
+          'READING_SET_BY_BOARD',
+          'This reading was set by the board and cannot be overwritten by a resident.',
+        )
+      }
+    } else if (period.status !== 'OPEN_FOR_RESIDENTS' && !isPrivilegedRole) {
+      throw makeOfflineError(409, 'PERIOD_CLOSED', 'Period is closed for residents.')
+    }
+
+    const sortedCodes = OFFLINE_PERIODS.map((p) => p.period_code).sort()
+    const targetIdx = sortedCodes.indexOf(period_code)
+    if (targetIdx >= 0) {
+      for (let i = targetIdx + 1; i < sortedCodes.length; i++) {
+        const newerMatch = findOfflineMeterInPeriod(sortedCodes[i], meter_id)
+        if (newerMatch?.meter?.reading) {
+          throw makeOfflineError(
+            409,
+            'LATER_READING_EXISTS',
+            'A newer period already has a reading for this meter.',
+          )
+        }
+      }
+    }
+
+    const prevScaled = toBigInt3(foundMeter.previous_value)
+    const currScaled = toBigInt3(normalizedVal)
+    if (currScaled < prevScaled) {
+      throw makeOfflineError(
+        422,
+        'READING_BELOW_PREVIOUS',
+        `Value (${normalizedVal}) cannot be lower than previous reading (${foundMeter.previous_value}).`,
+        { previous_value: foundMeter.previous_value },
+      )
+    }
+
+    if (existingReading && !actingAsResident && isPrivilegedRole && (!reason || !String(reason).trim())) {
+      throw makeOfflineError(
+        422,
+        'REASON_REQUIRED',
+        'A reason is required when overriding an existing meter reading.',
+      )
+    }
+
+    const deltaScaled = currScaled - prevScaled
+    const deltaStr = fromBigInt3(deltaScaled)
+    const avgStr = foundMeter.historical_avg
+    const avgScaled = toBigInt3(avgStr)
+    const thresholdScaled = avgScaled * 3n > 10000n ? avgScaled * 3n : 10000n
+    const isAnomaly = deltaScaled > thresholdScaled
+
+    if (isAnomaly && confirmation_level === 0) {
+      throw makeOfflineError(
+        409,
+        'ANOMALY_CONFIRMATION_STEP_1',
+        `Unusually high consumption (${deltaStr} ${foundMeter.unit}).`,
+        {
+          submitted_value: normalizedVal,
+          previous_value: foundMeter.previous_value,
+          consumption_delta: deltaStr,
+          average_delta: avgStr,
+          max_reasonable_delta: fromBigInt3(thresholdScaled),
+          required_confirmation_level: 1,
+        },
+      )
+    }
+
+    if (isAnomaly && confirmation_level === 1) {
+      throw makeOfflineError(
+        409,
+        'ANOMALY_CONFIRMATION_STEP_2',
+        `Final confirmation required: ${deltaStr} ${foundMeter.unit}.`,
+        {
+          submitted_value: normalizedVal,
+          previous_value: foundMeter.previous_value,
+          consumption_delta: deltaStr,
+          historical_average: avgStr,
+          required_confirmation_level: 2,
+        },
+      )
+    }
+
+    const readingId =
+      existingReading?.reading_id ||
+      `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`
+    const source = actingAsResident ? 'RESIDENT' : 'ADMIN_OVERRIDE'
+
+    foundMeter.reading = {
+      reading_id: readingId,
+      value: normalizedVal,
+      consumption_delta: deltaStr,
+      source,
+      is_anomaly_confirmed: isAnomaly,
+    }
+
+    if (targetIdx >= 0 && targetIdx + 1 < sortedCodes.length) {
+      const nextMatch = findOfflineMeterInPeriod(sortedCodes[targetIdx + 1], meter_id)
+      if (nextMatch?.meter && !nextMatch.meter.reading) {
+        nextMatch.meter.previous_value = normalizedVal
+      }
+    }
+
+    return {
+      reading_id: readingId,
+      meter_id,
+      period_code,
+      value: normalizedVal,
+      consumption_delta: deltaStr,
+      source,
+      is_anomaly_confirmed: isAnomaly,
     }
   }
 
@@ -1174,7 +1776,17 @@ export async function resolveOfflineDemoRequest(
 
   // 9. GET /communication/emergencies/active
   if (pathname === '/communication/emergencies/active' && method === 'GET') {
-    return OFFLINE_POSTS.filter((p) => p.post_type === 'EMERGENCY' && p.is_active).map((p) => ({
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    return OFFLINE_POSTS.filter(
+      (p) =>
+        p.post_type === 'EMERGENCY' &&
+        p.is_active &&
+        canViewerSeePost(p, {
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          memberships: userMems,
+        }),
+    ).map((p) => ({
       id: p.id,
       post_type: p.post_type,
       category: p.category,
@@ -1193,6 +1805,9 @@ export async function resolveOfflineDemoRequest(
         p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
       acknowledged_at: p.acknowledged_at,
       origin: p.origin || null,
+      edited_at: p.edited_at || null,
+      hidden_at: p.hidden_at || null,
+      hidden_reason: p.hidden_at ? p.hidden_reason || null : null,
     }))
   }
 
@@ -1204,6 +1819,12 @@ export async function resolveOfflineDemoRequest(
     const limit = Number(urlObj.searchParams.get('limit') || '20')
     const offset = Number(urlObj.searchParams.get('offset') || '0')
     const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const visibilityCtx = {
+      viewerUserId: user.user_id,
+      viewerRole: user.building_role,
+      memberships: userMems,
+    }
 
     if (apartmentId && postType !== 'APARTMENT_THREAD') {
       throw makeOfflineError(
@@ -1217,42 +1838,52 @@ export async function resolveOfflineDemoRequest(
       (p) =>
         p.post_type !== 'EMERGENCY' &&
         p.post_type !== 'APARTMENT_THREAD' &&
-        p.post_type !== 'BOARD_TOPIC',
+        p.post_type !== 'BOARD_TOPIC' &&
+        canViewerSeePost(p, visibilityCtx),
     )
 
     if (postType === 'APARTMENT_THREAD') {
-      const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
       filtered = OFFLINE_POSTS.filter((p) => {
         if (p.post_type !== 'APARTMENT_THREAD') return false
         if (apartmentId && !p.target_apartment_ids?.includes(apartmentId)) return false
-        if (isBoardUser) return true
-        return userMems.some(
-          (m) =>
-            p.target_apartment_ids?.includes(m.apartment_id) &&
-            new Date(m.since).getTime() <= new Date(p.created_at).getTime(),
-        )
+        return canViewerSeePost(p, visibilityCtx)
       })
       filtered.sort((a, b) => {
         const aLast =
           a.comments.length > 0 ? a.comments[a.comments.length - 1].created_at : a.created_at
         const bLast =
           b.comments.length > 0 ? b.comments[b.comments.length - 1].created_at : b.created_at
-        return new Date(bLast).getTime() - new Date(aLast).getTime()
+        return new Date(bLast).getTime() - new Date(aLast).getTime() || b.id.localeCompare(a.id)
       })
     } else if (postType === 'BOARD_TOPIC') {
       if (!isBoardUser) {
         throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
       }
-      filtered = OFFLINE_POSTS.filter((p) => p.post_type === 'BOARD_TOPIC')
+      filtered = OFFLINE_POSTS.filter(
+        (p) => p.post_type === 'BOARD_TOPIC' && canViewerSeePost(p, visibilityCtx),
+      )
       filtered.sort((a, b) => {
         const aLast =
           a.comments.length > 0 ? a.comments[a.comments.length - 1].created_at : a.created_at
         const bLast =
           b.comments.length > 0 ? b.comments[b.comments.length - 1].created_at : b.created_at
-        return new Date(bLast).getTime() - new Date(aLast).getTime()
+        return new Date(bLast).getTime() - new Date(aLast).getTime() || b.id.localeCompare(a.id)
       })
     } else if (postType) {
-      filtered = OFFLINE_POSTS.filter((p) => p.post_type === postType)
+      filtered = OFFLINE_POSTS.filter(
+        (p) => p.post_type === postType && canViewerSeePost(p, visibilityCtx),
+      )
+      filtered.sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+          b.id.localeCompare(a.id),
+      )
+    } else {
+      filtered.sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+          b.id.localeCompare(a.id),
+      )
     }
     if (category) {
       filtered = filtered.filter((p) => p.category === category)
@@ -1276,6 +1907,9 @@ export async function resolveOfflineDemoRequest(
       last_activity_at:
         p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
       origin: p.origin || null,
+      edited_at: p.edited_at || null,
+      hidden_at: p.hidden_at || null,
+      hidden_reason: p.hidden_at ? p.hidden_reason || null : null,
     }))
   }
 
@@ -1283,6 +1917,20 @@ export async function resolveOfflineDemoRequest(
     const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
     const postType = reqBody.post_type || 'FORUM_TOPIC'
     const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    const hasControlChars = (str) => {
+      for (let i = 0; i < str.length; i += 1) {
+        const code = str.charCodeAt(i)
+        if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) {
+          return true
+        }
+      }
+      return false
+    }
+    const cleanTitle = typeof reqBody.title === 'string' ? reqBody.title.trim() : ''
+    const cleanBody = typeof reqBody.body === 'string' ? reqBody.body.trim() : ''
+    if (!cleanTitle || !cleanBody || hasControlChars(cleanTitle) || hasControlChars(cleanBody)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Title and body must be non-empty plain text.')
+    }
     if (postType === 'APARTMENT_THREAD') {
       if (reqBody.author_apartment_id !== undefined && reqBody.author_apartment_id !== null) {
         throw makeOfflineError(
@@ -1337,9 +1985,17 @@ export async function resolveOfflineDemoRequest(
       id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
       post_type: postType,
       category: reqBody.category || 'GENERAL',
-      title: reqBody.title || 'Untitled',
-      body: reqBody.body || '',
+      title: cleanTitle,
+      body: cleanBody,
       author_user_id: user.user_id,
+      author_apartment_id:
+        postType === 'BOARD_TOPIC'
+          ? null
+          : postType === 'APARTMENT_THREAD'
+            ? isBoardUser
+              ? null
+              : reqBody.target_apartment_ids?.[0] || null
+            : reqBody.author_apartment_id || null,
       author_badge: authorBadge,
       target_scope: reqBody.target_scope || 'ALL_BUILDING',
       target_entrance: reqBody.target_entrance || null,
@@ -1347,6 +2003,10 @@ export async function resolveOfflineDemoRequest(
       is_active: true,
       comments_enabled: reqBody.comments_enabled !== false,
       created_at: nowIso,
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      origin: null,
       comments: [],
     }
     OFFLINE_POSTS.unshift(created)
@@ -1363,10 +2023,25 @@ export async function resolveOfflineDemoRequest(
       })
     }
     return {
-      ...created,
+      id: created.id,
+      post_type: created.post_type,
+      category: created.category,
+      title: created.title,
+      body: created.body,
+      author_badge: { ...created.author_badge },
       is_mine: true,
+      target_scope: created.target_scope,
+      target_entrance: created.target_entrance,
+      target_apartment_ids: created.target_apartment_ids,
+      is_active: created.is_active,
+      comments_enabled: created.comments_enabled,
       comments_count: 0,
+      created_at: nowIso,
       last_activity_at: nowIso,
+      origin: null,
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
     }
   }
 
@@ -1374,24 +2049,22 @@ export async function resolveOfflineDemoRequest(
   const postDetailMatch = pathname.match(/^\/communication\/posts\/([^/]+)$/)
   if (postDetailMatch && method === 'GET') {
     const post = OFFLINE_POSTS.find((p) => p.id === postDetailMatch[1])
-    if (!post) {
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    if (
+      !post ||
+      !canViewerSeePost(post, {
+        viewerUserId: user.user_id,
+        viewerRole: user.building_role,
+        memberships: userMems,
+      })
+    ) {
       throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
     }
-    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
-    if (post.post_type === 'APARTMENT_THREAD' && !isBoardUser) {
-      const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
-      const hasAccess = userMems.some(
-        (m) =>
-          post.target_apartment_ids?.includes(m.apartment_id) &&
-          new Date(m.since).getTime() <= new Date(post.created_at).getTime(),
-      )
-      if (!hasAccess) {
-        throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
-      }
-    }
-    if (post.post_type === 'BOARD_TOPIC' && !isBoardUser) {
-      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
-    }
+    const rawLimit = Number(urlObj.searchParams.get('comments_limit') || '200')
+    const commentsLimit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 500) : 200
+    const rawOffset = Number(urlObj.searchParams.get('comments_offset') || '0')
+    const commentsOffset = Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0
+    const pagedComments = post.comments.slice(commentsOffset, commentsOffset + commentsLimit)
     return {
       id: post.id,
       post_type: post.post_type,
@@ -1412,14 +2085,17 @@ export async function resolveOfflineDemoRequest(
           ? post.comments[post.comments.length - 1].created_at
           : post.created_at,
       origin: post.origin || null,
-      comments: post.comments.map((c) => ({
-        id: c.id,
-        post_id: post.id,
-        body: c.body,
-        author_badge: { ...c.author_badge },
-        is_mine: c.author_user_id === user.user_id,
-        created_at: c.created_at,
-      })),
+      edited_at: post.edited_at || null,
+      hidden_at: post.hidden_at || null,
+      hidden_reason: post.hidden_at ? post.hidden_reason || null : null,
+      comments: pagedComments.map((c) =>
+        projectCommentForViewer(c, {
+          postId: post.id,
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          authorBadge: { ...c.author_badge },
+        }),
+      ),
     }
   }
 
@@ -1430,18 +2106,13 @@ export async function resolveOfflineDemoRequest(
     }
     const targetPost = OFFLINE_POSTS[idx]
     const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
-    if (targetPost.post_type === 'BOARD_TOPIC') {
-      if (!isBoardUser) {
-        throw makeOfflineError(403, 'FORBIDDEN', 'Only Board members can delete board topics.')
-      }
-      OFFLINE_POSTS.splice(idx, 1)
-      return null
+    if (!isBoardUser) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only Board members can delete topics.')
     }
-    if (user.building_role !== 'CHAIRMAN') {
-      throw makeOfflineError(403, 'FORBIDDEN', 'Only Chairman can delete forum topics.')
-    }
-    if (targetPost.post_type !== 'FORUM_TOPIC') {
-      throw makeOfflineError(409, 'POST_NOT_DELETABLE', 'This post cannot be deleted.')
+    if (targetPost.post_type !== 'FORUM_TOPIC' && targetPost.post_type !== 'BOARD_TOPIC') {
+      throw makeOfflineError(409, 'POST_NOT_DELETABLE', 'This post cannot be deleted.', {
+        post_type: targetPost.post_type,
+      })
     }
     OFFLINE_POSTS.splice(idx, 1)
     return null
@@ -1450,14 +2121,38 @@ export async function resolveOfflineDemoRequest(
   const commentPostMatch = pathname.match(/^\/communication\/posts\/([^/]+)\/comments$/)
   if (commentPostMatch && method === 'POST') {
     const post = OFFLINE_POSTS.find((p) => p.id === commentPostMatch[1])
-    if (!post) {
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    if (
+      !post ||
+      !canViewerSeePost(post, {
+        viewerUserId: user.user_id,
+        viewerRole: user.building_role,
+        memberships: userMems,
+      })
+    ) {
       throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    if (post.hidden_at) {
+      throw makeOfflineError(409, 'POST_HIDDEN', 'Cannot comment on a hidden post.')
+    }
+    if (!post.comments_enabled) {
+      throw makeOfflineError(409, 'COMMENTS_DISABLED', 'Comments are disabled on this post.')
     }
     const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
-    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
-    if (post.post_type === 'BOARD_TOPIC' && !isBoardUser) {
-      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    const hasControlChars = (str) => {
+      for (let i = 0; i < str.length; i += 1) {
+        const code = str.charCodeAt(i)
+        if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) {
+          return true
+        }
+      }
+      return false
     }
+    const cleanCommentBody = typeof reqBody.body === 'string' ? reqBody.body.trim() : ''
+    if (!cleanCommentBody || hasControlChars(cleanCommentBody)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Comment body must be non-empty plain text.')
+    }
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
     if (post.post_type === 'APARTMENT_THREAD' || post.post_type === 'BOARD_TOPIC') {
       if (reqBody.author_apartment_id !== undefined && reqBody.author_apartment_id !== null) {
         throw makeOfflineError(
@@ -1467,7 +2162,6 @@ export async function resolveOfflineDemoRequest(
         )
       }
     }
-    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
     const boardFullNames = {
       '018f0000-0000-7000-8000-000000000101': 'Oleg Sidorov',
       '018f0000-0000-7000-8000-000000000105': 'Peeter Saar',
@@ -1490,16 +2184,380 @@ export async function resolveOfflineDemoRequest(
     const newComment = {
       id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
       post_id: post.id,
-      body: reqBody.body || '',
+      body: cleanCommentBody,
       author_user_id: user.user_id,
+      author_apartment_id:
+        post.post_type === 'BOARD_TOPIC'
+          ? null
+          : post.post_type === 'APARTMENT_THREAD'
+            ? isBoardUser
+              ? null
+              : post.target_apartment_ids?.[0] || null
+            : reqBody.author_apartment_id || null,
       author_badge: authorBadge,
       created_at: new Date().toISOString(),
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
     }
     post.comments.push(newComment)
-    return {
-      ...newComment,
-      is_mine: true,
+    return projectCommentForViewer(newComment, {
+      postId: post.id,
+      viewerUserId: user.user_id,
+      viewerRole: user.building_role,
+      authorBadge: { ...authorBadge },
+    })
+  }
+
+  // 11b. POST /communication/posts/:id/hide & /unhide (#028)
+  const safeDecodePathParam = (raw) => {
+    try {
+      return decodeURIComponent(raw)
+    } catch {
+      return null
     }
+  }
+  const postHideMatch = pathname.match(/^\/communication\/posts\/([^/]+)\/(hide|unhide)$/)
+  if (postHideMatch && method === 'POST') {
+    const postId = safeDecodePathParam(postHideMatch[1])
+    const action = postHideMatch[2]
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    if (!isBoardUser) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only Board members can moderate forum topics.')
+    }
+    const post = postId ? OFFLINE_POSTS.find((p) => p.id === postId) : null
+    if (!post) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    if (!isPostHideable(post)) {
+      throw makeOfflineError(409, 'POST_NOT_HIDEABLE', 'This post cannot be hidden.', {
+        post_type: post.post_type,
+      })
+    }
+    if (action === 'hide') {
+      let reqBody = {}
+      if (typeof body === 'string') {
+        try {
+          reqBody = JSON.parse(body || '{}')
+        } catch {
+          throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid request payload.')
+        }
+      } else if (body && typeof body === 'object') {
+        reqBody = body
+      }
+      const check = validateHideReason(reqBody?.reason)
+      if (!check.valid) {
+        throw makeOfflineError(
+          422,
+          'VALIDATION_ERROR',
+          'Hide reason must be 1 to 500 plain-text characters.',
+        )
+      }
+      if (!post.hidden_at) {
+        post.hidden_at = new Date().toISOString()
+        post.hidden_reason = check.reason
+        post.hidden_by_user_id = user.user_id
+      }
+    } else {
+      post.hidden_at = null
+      post.hidden_reason = null
+      post.hidden_by_user_id = null
+    }
+    return {
+      id: post.id,
+      post_type: post.post_type,
+      category: post.category,
+      title: post.title,
+      body: post.body,
+      author_badge: { ...post.author_badge },
+      is_mine: post.author_user_id === user.user_id,
+      target_scope: post.target_scope,
+      target_entrance: post.target_entrance,
+      target_apartment_ids: post.target_apartment_ids,
+      is_active: post.is_active,
+      comments_enabled: post.comments_enabled,
+      comments_count: post.comments.length,
+      created_at: post.created_at,
+      last_activity_at:
+        post.comments.length > 0
+          ? post.comments[post.comments.length - 1].created_at
+          : post.created_at,
+      origin: post.origin || null,
+      edited_at: post.edited_at || null,
+      hidden_at: post.hidden_at || null,
+      hidden_reason: post.hidden_at ? post.hidden_reason || null : null,
+    }
+  }
+
+  // 11c. POST /communication/posts/:id/comments/:commentId/hide & /unhide (#028)
+  const commentHideMatch = pathname.match(
+    /^\/communication\/posts\/([^/]+)\/comments\/([^/]+)\/(hide|unhide)$/,
+  )
+  if (commentHideMatch && method === 'POST') {
+    const postId = safeDecodePathParam(commentHideMatch[1])
+    const commentId = safeDecodePathParam(commentHideMatch[2])
+    const action = commentHideMatch[3]
+    const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    if (!isBoardUser) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only Board members can moderate comments.')
+    }
+    const post = postId ? OFFLINE_POSTS.find((p) => p.id === postId) : null
+    if (!post) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    if (!isCommentHideableOnPost(post)) {
+      throw makeOfflineError(
+        409,
+        'COMMENT_NOT_HIDEABLE',
+        'Comments on this post cannot be hidden.',
+        { post_type: post.post_type },
+      )
+    }
+    const comment = commentId ? post.comments.find((c) => c.id === commentId) : null
+    if (!comment) {
+      throw makeOfflineError(404, 'COMMENT_NOT_FOUND', 'Comment not found.')
+    }
+    if (action === 'hide') {
+      let reqBody = {}
+      if (typeof body === 'string') {
+        try {
+          reqBody = JSON.parse(body || '{}')
+        } catch {
+          throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid request payload.')
+        }
+      } else if (body && typeof body === 'object') {
+        reqBody = body
+      }
+      const check = validateHideReason(reqBody?.reason)
+      if (!check.valid) {
+        throw makeOfflineError(
+          422,
+          'VALIDATION_ERROR',
+          'Hide reason must be 1 to 500 plain-text characters.',
+        )
+      }
+      if (!comment.hidden_at) {
+        comment.hidden_at = new Date().toISOString()
+        comment.hidden_reason = check.reason
+        comment.hidden_by_user_id = user.user_id
+      }
+    } else {
+      comment.hidden_at = null
+      comment.hidden_reason = null
+      comment.hidden_by_user_id = null
+    }
+    return projectCommentForViewer(comment, {
+      postId: post.id,
+      viewerUserId: user.user_id,
+      viewerRole: user.building_role,
+      authorBadge: { ...comment.author_badge },
+    })
+  }
+
+  // 11d. PATCH /communication/posts/:id & /communication/posts/:id/comments/:commentId (#027)
+  const postEditMatch = pathname.match(/^\/communication\/posts\/([^/]+)$/)
+  if (postEditMatch && method === 'PATCH') {
+    const postId = safeDecodePathParam(postEditMatch[1])
+    const post = postId ? OFFLINE_POSTS.find((p) => p.id === postId) : null
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    if (
+      !post ||
+      !canViewerSeePost(post, {
+        viewerUserId: user.user_id,
+        viewerRole: user.building_role,
+        memberships: userMems,
+      })
+    ) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    if (post.author_user_id !== user.user_id) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only the author can edit this post.')
+    }
+    if (
+      (post.post_type !== 'FORUM_TOPIC' && post.post_type !== 'BOARD_TOPIC') ||
+      post.origin != null ||
+      post.hidden_at
+    ) {
+      throw makeOfflineError(409, 'POST_NOT_EDITABLE', 'This post cannot be edited.', {
+        post_type: post.post_type,
+      })
+    }
+    if (post.post_type === 'FORUM_TOPIC') {
+      const now = Date.now()
+      if (!isWithinEditWindow(post.created_at, now)) {
+        const deadlineMs = getEditWindowDeadlineMs(post.created_at)
+        throw makeOfflineError(409, 'EDIT_WINDOW_CLOSED', 'The 24-hour edit window has closed.', {
+          editable_until:
+            deadlineMs !== null ? new Date(deadlineMs).toISOString() : post.created_at,
+        })
+      }
+    }
+    let reqBody = null
+    if (typeof body === 'string') {
+      try {
+        reqBody = JSON.parse(body || 'null')
+      } catch {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid request payload.')
+      }
+    } else if (body && typeof body === 'object' && !Array.isArray(body)) {
+      reqBody = body
+    }
+    if (!reqBody || typeof reqBody !== 'object' || Array.isArray(reqBody)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Request body must be a JSON object.')
+    }
+    const keys = Object.keys(reqBody)
+    if (keys.length === 0 || keys.some((k) => k !== 'title' && k !== 'body')) {
+      throw makeOfflineError(
+        422,
+        'VALIDATION_ERROR',
+        'Provide title and/or body without unknown fields.',
+      )
+    }
+    let nextTitle = post.title
+    let nextBody = post.body
+    if ('title' in reqBody) {
+      if (typeof reqBody.title !== 'string') {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Title must be a string.')
+      }
+      const trimmedTitle = reqBody.title.trim()
+      if (
+        !trimmedTitle ||
+        trimmedTitle.length > POST_TITLE_MAX_LENGTH ||
+        hasDisallowedControlChars(trimmedTitle)
+      ) {
+        throw makeOfflineError(
+          422,
+          'VALIDATION_ERROR',
+          `Title must be 1 to ${POST_TITLE_MAX_LENGTH} plain-text characters.`,
+        )
+      }
+      nextTitle = trimmedTitle
+    }
+    if ('body' in reqBody) {
+      if (typeof reqBody.body !== 'string') {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Body must be a string.')
+      }
+      const trimmedBody = reqBody.body.trim()
+      if (
+        !trimmedBody ||
+        trimmedBody.length > POST_BODY_MAX_LENGTH ||
+        hasDisallowedControlChars(trimmedBody)
+      ) {
+        throw makeOfflineError(
+          422,
+          'VALIDATION_ERROR',
+          `Body must be 1 to ${POST_BODY_MAX_LENGTH} plain-text characters.`,
+        )
+      }
+      nextBody = trimmedBody
+    }
+    if (nextTitle !== post.title || nextBody !== post.body) {
+      post.title = nextTitle
+      post.body = nextBody
+      post.edited_at = new Date().toISOString()
+    }
+    return {
+      id: post.id,
+      post_type: post.post_type,
+      category: post.category,
+      title: post.title,
+      body: post.body,
+      author_badge: { ...post.author_badge },
+      is_mine: post.author_user_id === user.user_id,
+      target_scope: post.target_scope,
+      target_entrance: post.target_entrance,
+      target_apartment_ids: post.target_apartment_ids,
+      is_active: post.is_active,
+      comments_enabled: post.comments_enabled,
+      comments_count: post.comments.length,
+      created_at: post.created_at,
+      last_activity_at:
+        post.comments.length > 0
+          ? post.comments[post.comments.length - 1].created_at
+          : post.created_at,
+      origin: post.origin || null,
+      edited_at: post.edited_at || null,
+      hidden_at: post.hidden_at || null,
+      hidden_reason: post.hidden_at ? post.hidden_reason || null : null,
+    }
+  }
+
+  const commentEditMatch = pathname.match(
+    /^\/communication\/posts\/([^/]+)\/comments\/([^/]+)$/,
+  )
+  if (commentEditMatch && method === 'PATCH') {
+    const postId = safeDecodePathParam(commentEditMatch[1])
+    const commentId = safeDecodePathParam(commentEditMatch[2])
+    const post = postId ? OFFLINE_POSTS.find((p) => p.id === postId) : null
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    if (
+      !post ||
+      !canViewerSeePost(post, {
+        viewerUserId: user.user_id,
+        viewerRole: user.building_role,
+        memberships: userMems,
+      })
+    ) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Post not found.')
+    }
+    const comment = commentId ? post.comments.find((c) => c.id === commentId) : null
+    if (!comment) {
+      throw makeOfflineError(404, 'COMMENT_NOT_FOUND', 'Comment not found.')
+    }
+    if (comment.author_user_id !== user.user_id) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only the author can edit this comment.')
+    }
+    const editablePostType =
+      post.post_type === 'FORUM_TOPIC' ||
+      post.post_type === 'BOARD_TOPIC' ||
+      post.post_type === 'OFFICIAL_NOTICE' ||
+      post.post_type === 'EMERGENCY'
+    if (!editablePostType || post.origin != null || post.hidden_at || comment.hidden_at) {
+      throw makeOfflineError(409, 'COMMENT_NOT_EDITABLE', 'This comment cannot be edited.')
+    }
+    const now = Date.now()
+    if (!isWithinEditWindow(comment.created_at, now)) {
+      const deadlineMs = getEditWindowDeadlineMs(comment.created_at)
+      throw makeOfflineError(409, 'EDIT_WINDOW_CLOSED', 'The 24-hour edit window has closed.', {
+        editable_until:
+          deadlineMs !== null ? new Date(deadlineMs).toISOString() : comment.created_at,
+      })
+    }
+    let reqBody = null
+    if (typeof body === 'string') {
+      try {
+        reqBody = JSON.parse(body || 'null')
+      } catch {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid request payload.')
+      }
+    } else if (body && typeof body === 'object' && !Array.isArray(body)) {
+      reqBody = body
+    }
+    if (!reqBody || typeof reqBody !== 'object' || Array.isArray(reqBody)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Request body must be a JSON object.')
+    }
+    const keys = Object.keys(reqBody)
+    if (keys.length !== 1 || keys[0] !== 'body' || typeof reqBody.body !== 'string') {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Comment body is required without unknown fields.')
+    }
+    const check = validateCommentEdit(reqBody.body)
+    if (!check.valid) {
+      throw makeOfflineError(
+        422,
+        'VALIDATION_ERROR',
+        `Comment body must be 1 to ${COMMENT_BODY_MAX_LENGTH} plain-text characters.`,
+      )
+    }
+    if (check.body !== comment.body) {
+      comment.body = check.body
+      comment.edited_at = new Date().toISOString()
+    }
+    return projectCommentForViewer(comment, {
+      postId: post.id,
+      viewerUserId: user.user_id,
+      viewerRole: user.building_role,
+      authorBadge: { ...comment.author_badge },
+    })
   }
 
   // Read-only fallback for non-GET actions in offline demo mode
@@ -1572,11 +2630,11 @@ export async function resolveOfflineDemoRequest(
     if (method === 'PUT') {
       const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
       const changes = Array.isArray(reqBody.preferences) ? reqBody.preferences : []
-      if (changes.length < 1 || changes.length > 48) {
+      if (changes.length < 1 || changes.length > 52) {
         throw makeOfflineError(
           422,
           'VALIDATION_ERROR',
-          'Provide between 1 and 48 preference changes.',
+          'Provide between 1 and 52 preference changes.',
         )
       }
       for (const chg of changes) {
@@ -1632,11 +2690,13 @@ export async function resolveOfflineDemoRequest(
               ? 'ISSUE_REPORTED'
               : lower.includes('issue')
                 ? 'ISSUE_STATUS_CHANGED'
-                : lower.includes('board')
-                  ? 'APARTMENT_MESSAGE_TO_BOARD'
-                  : lower.includes('message')
-                    ? 'APARTMENT_MESSAGE'
-                    : 'READING_DEADLINE'
+                : lower.includes('storage')
+                  ? 'STORAGE_ALMOST_FULL'
+                  : lower.includes('board')
+                    ? 'APARTMENT_MESSAGE_TO_BOARD'
+                    : lower.includes('message')
+                      ? 'APARTMENT_MESSAGE'
+                      : 'READING_DEADLINE'
       const prefs = getOfflineUserPreferences(user.user_id)
       const match = prefs.find((p) => p.event_type === eventType && p.channel === 'email')
       if (match && !match.mandatory) {
@@ -2330,6 +3390,20 @@ export async function resolveOfflineDemoRequest(
       )
     }
 
+    let simulatedUploadsDisabled = false
+    try {
+      simulatedUploadsDisabled =
+        urlObj.searchParams.get('simulate_uploads_disabled') === '1' ||
+        headers?.['X-Simulate-Uploads-Disabled'] === '1' ||
+        headers?.['x-simulate-uploads-disabled'] === '1' ||
+        (typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('simulate_uploads_disabled') === '1') ||
+        (typeof localStorage !== 'undefined' &&
+          localStorage.getItem('simulate_uploads_disabled') === '1')
+    } catch {
+      /* ignore */
+    }
+
     if (pathname === '/issues/form' && method === 'GET') {
       const urgentEnabled = Boolean(
         readSettingFromStore(offlineSettings, 'issues.urgent_enabled', false),
@@ -2340,20 +3414,27 @@ export async function resolveOfflineDemoRequest(
         .map((m) => m.apartment_id)
       return {
         urgent_enabled: urgentEnabled,
+        uploads_enabled: !simulatedUploadsDisabled,
         apartment_ids: apartmentIds,
         entrances: [1, 2],
       }
     }
 
     if (pathname === '/issues' && method === 'GET') {
-      const result = queryIssuesStore(offlineIssues, user, {
-        status: urlObj.searchParams.get('status'),
-        category: urlObj.searchParams.get('category'),
-        entrance: urlObj.searchParams.get('entrance'),
-        include_old: urlObj.searchParams.get('include_old'),
-        limit: urlObj.searchParams.get('limit'),
-        offset: urlObj.searchParams.get('offset'),
-      })
+      const result = queryIssuesStore(
+        offlineIssues,
+        user,
+        {
+          status: urlObj.searchParams.get('status'),
+          category: urlObj.searchParams.get('category'),
+          entrance: urlObj.searchParams.get('entrance'),
+          include_old: urlObj.searchParams.get('include_old'),
+          limit: urlObj.searchParams.get('limit'),
+          offset: urlObj.searchParams.get('offset'),
+        },
+        Date.now(),
+        { uploadsDisabled: simulatedUploadsDisabled },
+      )
       if (!result.ok) {
         throw makeOfflineError(result.status, result.errorCode, result.message)
       }
@@ -2401,7 +3482,7 @@ export async function resolveOfflineDemoRequest(
         )
         emitOfflineIssueNotificationBatch(notifBatch)
       }
-      return outcome.issue
+      return toIssueView(outcome.rawIssue, user, { uploadsDisabled: simulatedUploadsDisabled })
     }
 
     const offlineIssueStatusMatch = pathname.match(/^\/issues\/([^/]+)\/status$/)
@@ -2429,7 +3510,7 @@ export async function resolveOfflineDemoRequest(
       for (const notifBatch of outcome.notifications || []) {
         emitOfflineIssueNotificationBatch(notifBatch)
       }
-      return outcome.issue
+      return toIssueView(found, user, { uploadsDisabled: simulatedUploadsDisabled })
     }
 
     const offlineIssueUrgentClearMatch = pathname.match(/^\/issues\/([^/]+)\/urgent\/clear$/)
@@ -2446,7 +3527,7 @@ export async function resolveOfflineDemoRequest(
       if (!outcome.ok) {
         throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
       }
-      return outcome.issue
+      return toIssueView(found, user, { uploadsDisabled: simulatedUploadsDisabled })
     }
 
     const offlineIssueWithdrawMatch = pathname.match(/^\/issues\/([^/]+)\/withdraw$/)
@@ -2460,7 +3541,7 @@ export async function resolveOfflineDemoRequest(
       if (!outcome.ok) {
         throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
       }
-      return outcome.issue
+      return toIssueView(found, user, { uploadsDisabled: simulatedUploadsDisabled })
     }
 
     const offlineIssueFollowMatch = pathname.match(/^\/issues\/([^/]+)\/follow$/)
@@ -2478,7 +3559,181 @@ export async function resolveOfflineDemoRequest(
       if (!outcome.ok) {
         throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
       }
-      return outcome.issue
+      return toIssueView(found, user, { uploadsDisabled: simulatedUploadsDisabled })
+    }
+
+    // POST /issues/:issueId/photos
+    const offlineIssuePhotosMatch = pathname.match(/^\/issues\/([^/]+)\/photos$/)
+    if (offlineIssuePhotosMatch && method === 'POST') {
+      const issueId = offlineIssuePhotosMatch[1]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+
+      const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user?.building_role)
+      const simAnswer = String(
+        urlObj.searchParams.get('simulate_upload_answer') ||
+          headers?.['X-Simulate-Upload-Answer'] ||
+          headers?.['x-simulate-upload-answer'] ||
+          '',
+      ).toUpperCase()
+      const effectiveContentType =
+        contentType ||
+        (body && typeof body.type === 'string' && body.type) ||
+        headers?.['Content-Type'] ||
+        headers?.['content-type'] ||
+        ''
+      const idempotencyKey =
+        headers?.['Idempotency-Key'] || headers?.['idempotency-key'] || ''
+      const rawLengthHeader = headers?.['Content-Length'] ?? headers?.['content-length']
+      let declaredLength = null
+      if (rawLengthHeader !== undefined && rawLengthHeader !== '') {
+        declaredLength = Number(rawLengthHeader)
+      } else if (body != null && typeof body.size === 'number') {
+        declaredLength = body.size
+      } else if (body != null && typeof body.byteLength === 'number') {
+        declaredLength = body.byteLength
+      }
+
+      const preflight = checkIssuePhotoUploadPreflight({
+        issue: found,
+        user,
+        contentType: effectiveContentType,
+        contentLength: declaredLength,
+        idempotencyKey,
+        idempotencyStore: offlineIssuePhotoIdempotency,
+        dailyUploadsStore: offlineIssuePhotoDailyUploads,
+        uploadsDisabled: simulatedUploadsDisabled,
+        quotaExceededReason:
+          simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+        lowDisk: simAnswer === 'LOW_DISK',
+      })
+      if (!preflight.ok) {
+        throw makeOfflineError(
+          preflight.status,
+          preflight.errorCode,
+          preflight.message,
+          preflight.extra || {},
+        )
+      }
+      if (preflight.replay) {
+        return preflight.photo
+      }
+
+      if (simAnswer === 'DAILY_LIMIT' && !isBoardUser) {
+        throw makeOfflineError(
+          429,
+          'RATE_LIMITED',
+          'You have stored the photos allowed for today.',
+          { reason: 'DAILY_LIMIT', retry_after_seconds: 3600 },
+        )
+      }
+
+      const uid = user?.user_id || 'anon'
+      const activeCount = activeOfflinePhotoUploads.get(uid) || 0
+      if (activeCount >= 2 || simAnswer === 'BUSY') {
+        throw makeOfflineError(429, 'RATE_LIMITED', 'Server is busy.', {
+          reason: 'BUSY',
+          retry_after_seconds: simAnswer === 'BUSY' ? 15 : 5,
+        })
+      }
+
+      activeOfflinePhotoUploads.set(uid, activeCount + 1)
+      try {
+        if (simAnswer === 'UPLOAD_TIMEOUT') {
+          throw makeOfflineError(408, 'UPLOAD_TIMEOUT', 'Upload body timed out.')
+        }
+        let bytes
+        if (body && typeof body.arrayBuffer === 'function') {
+          bytes = new Uint8Array(await body.arrayBuffer())
+        } else if (body instanceof Uint8Array) {
+          bytes = body
+        } else if (body instanceof ArrayBuffer) {
+          bytes = new Uint8Array(body)
+        } else {
+          bytes = new Uint8Array(0)
+        }
+        if (signal?.aborted) {
+          throw makeOfflineError(0, 'UPLOAD_ABORTED', 'Upload aborted')
+        }
+        const outcome = addIssuePhotoInStore({
+          issue: found,
+          user,
+          bytes,
+          contentType: effectiveContentType,
+          contentLength: declaredLength,
+          idempotencyKey,
+          idempotencyStore: offlineIssuePhotoIdempotency,
+          dailyUploadsStore: offlineIssuePhotoDailyUploads,
+          uploadsDisabled: simulatedUploadsDisabled,
+          quotaExceededReason:
+            simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+          lowDisk: simAnswer === 'LOW_DISK',
+        })
+        if (!outcome.ok) {
+          throw makeOfflineError(
+            outcome.status,
+            outcome.errorCode,
+            outcome.message,
+            outcome.extra || {},
+          )
+        }
+        checkAndEmitOfflineStorageAlert()
+        return outcome.photo
+      } finally {
+        const remaining = (activeOfflinePhotoUploads.get(uid) || 1) - 1
+        if (remaining <= 0) {
+          activeOfflinePhotoUploads.delete(uid)
+        } else {
+          activeOfflinePhotoUploads.set(uid, remaining)
+        }
+      }
+    }
+
+    // GET / DELETE /issues/:issueId/photos/:photoId
+    const offlineIssuePhotoItemMatch = pathname.match(/^\/issues\/([^/]+)\/photos\/([^/]+)$/)
+    if (offlineIssuePhotoItemMatch && method === 'GET') {
+      const issueId = offlineIssuePhotoItemMatch[1]
+      const photoId = offlineIssuePhotoItemMatch[2]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      const variant = urlObj.searchParams.get('variant') || 'display'
+      const outcome = getIssuePhotoFromStore({ issue: found, photoId, variant })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      const resBlob = new Blob([outcome.bytes], { type: outcome.mime || 'image/webp' })
+      if (raw) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': outcome.mime || 'image/webp' }),
+          blob: async () => resBlob,
+        }
+      }
+      return resBlob
+    }
+
+    if (offlineIssuePhotoItemMatch && method === 'DELETE') {
+      const issueId = offlineIssuePhotoItemMatch[1]
+      const photoId = offlineIssuePhotoItemMatch[2]
+      const found = offlineIssues.find((item) => item.id === issueId)
+      if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+        throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
+      }
+      const outcome = deleteIssuePhotoInStore({
+        issue: found,
+        user,
+        photoId,
+        idempotencyStore: offlineIssuePhotoIdempotency,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      return null
     }
 
     const offlineIssueDetailMatch = pathname.match(/^\/issues\/([^/]+)$/)
@@ -2488,7 +3743,7 @@ export async function resolveOfflineDemoRequest(
       if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
         throw makeOfflineError(404, 'ISSUE_NOT_FOUND', 'This issue is not available.')
       }
-      return toIssueView(found, user)
+      return toIssueView(found, user, { uploadsDisabled: simulatedUploadsDisabled })
     }
 
     if (offlineIssueDetailMatch && method === 'PATCH') {
@@ -2507,8 +3762,275 @@ export async function resolveOfflineDemoRequest(
       if (!outcome.ok) {
         throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
       }
-      return outcome.issue
+      return toIssueView(found, user, { uploadsDisabled: simulatedUploadsDisabled })
     }
+  }
+
+  // =========================================================================
+  // Association Documents (/documents) - #022 & #023 (E11/F3)
+  // =========================================================================
+  if (pathname === '/documents' || pathname.startsWith('/documents/')) {
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const resolveOfflineDocBadge = (uid) => {
+      const u = OFFLINE_DEMO_USERS.find((item) => item.user_id === uid)
+      if (u?.building_role === 'CHAIRMAN') {
+        return { display_label: 'Board Chairman', role_badge: 'BOARD' }
+      }
+      if (u?.building_role === 'ACCOUNTANT') {
+        return { display_label: 'Accountant', role_badge: 'ACCOUNTANT' }
+      }
+      return { display_label: 'Board Member', role_badge: 'BOARD' }
+    }
+    const simulatedDocUploadsDisabled =
+      urlObj.searchParams.get('simulate_uploads_disabled') === '1' ||
+      headers?.['X-Simulate-Uploads-Disabled'] === '1' ||
+      headers?.['x-simulate-uploads-disabled'] === '1'
+
+    if (pathname === '/documents/upload-options' && method === 'GET') {
+      if (
+        !['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role) &&
+        userMems.length === 0
+      ) {
+        throw makeOfflineError(403, 'FORBIDDEN', 'Only active members and staff can access documents.')
+      }
+      return getUploadOptionsForUser(user, { uploadsDisabled: simulatedDocUploadsDisabled })
+    }
+
+    if (pathname === '/documents' && method === 'GET') {
+      const result = queryDocumentsStore(
+        offlineDocuments,
+        user,
+        userMems,
+        {
+          category: urlObj.searchParams.get('category') || '',
+          limit: urlObj.searchParams.get('limit') ?? undefined,
+          offset: urlObj.searchParams.get('offset') ?? undefined,
+        },
+        { resolveBadgeFn: resolveOfflineDocBadge },
+      )
+      if (!result.ok) {
+        throw makeOfflineError(result.status, result.errorCode, result.message)
+      }
+      return result.items
+    }
+
+    if (pathname === '/documents' && method === 'POST') {
+      const simAnswer = String(
+        urlObj.searchParams.get('simulate_upload_answer') ||
+          headers?.['X-Simulate-Upload-Answer'] ||
+          headers?.['x-simulate-upload-answer'] ||
+          '',
+      ).toUpperCase()
+      const effectiveContentType =
+        contentType ||
+        (body && typeof body.type === 'string' && body.type) ||
+        headers?.['Content-Type'] ||
+        headers?.['content-type'] ||
+        ''
+      const idempotencyKey =
+        headers?.['Idempotency-Key'] || headers?.['idempotency-key'] || ''
+      const rawLengthHeader = headers?.['Content-Length'] ?? headers?.['content-length']
+      let declaredLength = null
+      if (rawLengthHeader !== undefined && rawLengthHeader !== '') {
+        declaredLength = Number(rawLengthHeader)
+      } else if (body != null && typeof body.size === 'number') {
+        declaredLength = body.size
+      } else if (body != null && typeof body.byteLength === 'number') {
+        declaredLength = body.byteLength
+      }
+
+      const preflight = checkDocumentUploadPreflight({
+        store: offlineDocuments,
+        user,
+        userMemberships: userMems,
+        query: {
+          title: urlObj.searchParams.get('title'),
+          category: urlObj.searchParams.get('category'),
+          audience: urlObj.searchParams.get('audience'),
+          document_date: urlObj.searchParams.get('document_date'),
+        },
+        contentType: effectiveContentType,
+        contentLength: declaredLength,
+        idempotencyKey,
+        idempotencyStore: offlineDocumentIdempotency,
+        uploadsDisabled: simulatedDocUploadsDisabled,
+        quotaExceededReason:
+          simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+        lowDisk: simAnswer === 'LOW_DISK',
+        resolveBadgeFn: resolveOfflineDocBadge,
+      })
+      if (!preflight.ok) {
+        throw makeOfflineError(
+          preflight.status,
+          preflight.errorCode,
+          preflight.message,
+          preflight.extra || {},
+        )
+      }
+      if (preflight.replay) {
+        if (simAnswer === 'UPLOAD_REMOVED') {
+          throw makeOfflineError(409, 'UPLOAD_REMOVED', 'This document was removed meanwhile.')
+        }
+        return preflight.document
+      }
+      if (simAnswer === 'UPLOAD_REMOVED') {
+        throw makeOfflineError(409, 'UPLOAD_REMOVED', 'This document was removed meanwhile.')
+      }
+
+      const uid = user?.user_id || 'anon'
+      const activeCount = activeOfflineDocumentUploads.get(uid) || 0
+      if (activeCount >= 2 || simAnswer === 'BUSY') {
+        throw makeOfflineError(429, 'RATE_LIMITED', 'Server is busy.', {
+          reason: 'BUSY',
+          retry_after_seconds: simAnswer === 'BUSY' ? 15 : 5,
+        })
+      }
+
+      activeOfflineDocumentUploads.set(uid, activeCount + 1)
+      try {
+        if (simAnswer === 'UPLOAD_TIMEOUT') {
+          throw makeOfflineError(408, 'UPLOAD_TIMEOUT', 'Upload body timed out.')
+        }
+        let bytes
+        if (body && typeof body.arrayBuffer === 'function') {
+          bytes = new Uint8Array(await body.arrayBuffer())
+        } else if (body instanceof Uint8Array) {
+          bytes = body
+        } else if (body instanceof ArrayBuffer) {
+          bytes = new Uint8Array(body)
+        } else {
+          bytes = new Uint8Array(0)
+        }
+        if (signal?.aborted) {
+          throw makeOfflineError(0, 'UPLOAD_ABORTED', 'Upload aborted')
+        }
+        const outcome = addDocumentInStore({
+          store: offlineDocuments,
+          user,
+          userMemberships: userMems,
+          bytes,
+          query: {
+            title: urlObj.searchParams.get('title'),
+            category: urlObj.searchParams.get('category'),
+            audience: urlObj.searchParams.get('audience'),
+            document_date: urlObj.searchParams.get('document_date'),
+          },
+          contentType: effectiveContentType,
+          contentLength: declaredLength,
+          idempotencyKey,
+          idempotencyStore: offlineDocumentIdempotency,
+          uploadsDisabled: simulatedDocUploadsDisabled,
+          quotaExceededReason:
+            simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+          lowDisk: simAnswer === 'LOW_DISK',
+          resolveBadgeFn: resolveOfflineDocBadge,
+        })
+        if (!outcome.ok) {
+          throw makeOfflineError(
+            outcome.status,
+            outcome.errorCode,
+            outcome.message,
+            outcome.extra || {},
+          )
+        }
+        checkAndEmitOfflineStorageAlert()
+        return outcome.document
+      } finally {
+        const remaining = (activeOfflineDocumentUploads.get(uid) || 1) - 1
+        if (remaining <= 0) {
+          activeOfflineDocumentUploads.delete(uid)
+        } else {
+          activeOfflineDocumentUploads.set(uid, remaining)
+        }
+      }
+    }
+
+    const offlineDocFileMatch = pathname.match(/^\/documents\/([^/]+)\/file$/)
+    if (offlineDocFileMatch && method === 'GET') {
+      const docId = decodeURIComponent(offlineDocFileMatch[1])
+      const outcome = getDocumentFileFromStore(offlineDocuments, docId, user, userMems)
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      const pdfBlob = new Blob([outcome.bytes], { type: 'application/pdf' })
+      if (raw) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({
+            'Content-Type': outcome.contentType,
+            'Content-Disposition': outcome.contentDisposition,
+            'X-Content-Type-Options': 'nosniff',
+            'Cache-Control': 'private, no-store',
+          }),
+          blob: async () => pdfBlob,
+        }
+      }
+      return pdfBlob
+    }
+
+    const offlineDocItemMatch = pathname.match(/^\/documents\/([^/]+)$/)
+    if (offlineDocItemMatch && method === 'GET') {
+      const docId = decodeURIComponent(offlineDocItemMatch[1])
+      const outcome = getDocumentFromStore(offlineDocuments, docId, user, userMems, {
+        resolveBadgeFn: resolveOfflineDocBadge,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      return outcome.document
+    }
+
+    if (offlineDocItemMatch && method === 'PATCH') {
+      const docId = decodeURIComponent(offlineDocItemMatch[1])
+      const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+      const outcome = editDocumentInStore({
+        store: offlineDocuments,
+        documentId: docId,
+        user,
+        userMemberships: userMems,
+        body: reqBody,
+        resolveBadgeFn: resolveOfflineDocBadge,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(
+          outcome.status,
+          outcome.errorCode,
+          outcome.message,
+          outcome.extra || {},
+        )
+      }
+      return outcome.document
+    }
+
+    if (offlineDocItemMatch && method === 'DELETE') {
+      const docId = decodeURIComponent(offlineDocItemMatch[1])
+      const outcome = deleteDocumentInStore({
+        store: offlineDocuments,
+        documentId: docId,
+        user,
+        userMemberships: userMems,
+      })
+      if (!outcome.ok) {
+        throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+      }
+      return null
+    }
+  }
+
+  // =========================================================================
+  // Storage Usage (/files/usage) - #024 (E11/F4)
+  // =========================================================================
+  if (pathname === '/files/usage' && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only the chairman and board members can view storage usage.')
+    }
+    const currentUsage = computeStorageUsage({
+      issuesStore: offlineIssues,
+      documentsStore: offlineDocuments,
+      extraPendingDeletionBytes: offlineExtraPendingDeletionBytes,
+    })
+    return currentUsage
   }
 
   // =========================================================================
@@ -2847,6 +4369,51 @@ export async function resolveOfflineDemoRequest(
       throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
     }
     return outcome.entry
+  }
+
+  // =========================================================================
+  // Maintenance Yearly Report (/maintenance/report) - #029 (E10/#132)
+  // =========================================================================
+  if (pathname === '/maintenance/report' && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only the chairman, board members, and accountant can view the maintenance yearly report.',
+      )
+    }
+    const outcome = buildMaintenanceYearReport(
+      offlineMaintenanceLog,
+      urlObj.searchParams.get('year'),
+    )
+    if (!outcome.ok) {
+      throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+    }
+    return outcome.report
+  }
+
+  if (pathname === '/maintenance/report/export-csv' && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only the chairman, board members, and accountant can export the maintenance yearly report.',
+      )
+    }
+    const outcome = buildMaintenanceYearCsv(
+      offlineMaintenanceLog,
+      urlObj.searchParams.get('year'),
+    )
+    if (!outcome.ok) {
+      throw makeOfflineError(outcome.status, outcome.errorCode, outcome.message)
+    }
+    return new Response(outcome.csv, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${outcome.filename}"`,
+      },
+    })
   }
 
   return null
@@ -3596,6 +5163,7 @@ const OFFLINE_NOTIFICATION_EVENTS = [
   'ISSUE_STATUS_CHANGED',
   'MAINTENANCE_DUE',
   'NOTICE_PUBLISHED',
+  'STORAGE_ALMOST_FULL',
 ]
 const OFFLINE_NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
 
@@ -3610,7 +5178,9 @@ function getOfflineUserPreferences(userId) {
           event_type === 'ISSUE_REPORTED' ||
           event_type === 'MAINTENANCE_DUE'
             ? channel === 'in_app'
-            : true
+            : event_type === 'STORAGE_ALMOST_FULL'
+              ? channel === 'in_app' || channel === 'email'
+              : true
         list.push({
           event_type,
           channel,
@@ -3821,6 +5391,29 @@ function dispatchMaintenanceAndNoticeNotifications(notif) {
       subject_id: notif.subject_id,
       params: {},
       created_at: notif.created_at || new Date().toISOString(),
+    })
+  }
+}
+
+function checkAndEmitOfflineStorageAlert() {
+  const currentUsage = computeStorageUsage({
+    issuesStore: offlineIssues,
+    documentsStore: offlineDocuments,
+    extraPendingDeletionBytes: offlineExtraPendingDeletionBytes,
+  })
+  const triggered = evaluateStorageThresholdNotification(currentUsage, offlineStorageAlertState)
+  if (triggered) {
+    const boardUserIds = ['018f0000-0000-7000-8000-000000000101', '018f0000-0000-7000-8000-000000000105']
+    emitOfflineIssueNotificationBatch({
+      recipientUserIds: boardUserIds,
+      event_type: 'STORAGE_ALMOST_FULL',
+      subject_type: 'storage',
+      subject_id: 'storage',
+      params: {
+        threshold: triggered.threshold,
+        used_percent: triggered.used_percent,
+      },
+      created_at: new Date().toISOString(),
     })
   }
 }

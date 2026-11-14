@@ -18,6 +18,11 @@ import {
   canBoardReopenIssue,
   rankDuplicateCandidates,
   toIssueView,
+  checkIssuePhotoUploadPreflight,
+  addIssuePhotoInStore,
+  getIssuePhotoFromStore,
+  deleteIssuePhotoInStore,
+  MAX_ISSUE_PHOTOS,
   THIRTY_DAYS_MS,
 } from './issues.js'
 import { cloneDefaultAssociationSettings } from './associationSettings.js'
@@ -319,6 +324,92 @@ describe('issues utilities (#012)', () => {
     assert.ok(good.payload)
     assert.equal(good.payload.apartment_id, 'apt-14')
     assert.equal(good.payload.entrance, 2)
+
+    const atLimit = validateIssueReportDraft(
+      {
+        category: 'LIGHTING',
+        entrance: 2,
+        place: 'p'.repeat(200),
+        title: 't'.repeat(120),
+        description: '',
+        urgent: false,
+      },
+      formMeta,
+      false,
+    )
+    assert.equal(atLimit.valid, true)
+    assert.equal(atLimit.payload?.place.length, 200)
+    assert.equal(atLimit.payload?.title.length, 120)
+
+    const overLimit = validateIssueReportDraft(
+      {
+        category: 'LIGHTING',
+        entrance: 2,
+        place: 'p'.repeat(201),
+        title: 't'.repeat(121),
+        description: '',
+        urgent: false,
+      },
+      formMeta,
+      false,
+    )
+    assert.equal(overLimit.valid, false)
+    assert.equal(overLimit.errors.place, 'PLACE_TOO_LONG')
+    assert.equal(overLimit.errors.title, 'TITLE_TOO_LONG')
+
+    const store = createDefaultIssuesSeed()
+    const settings = cloneDefaultAssociationSettings()
+    const createOk = createIssueInStore({
+      issuesStore: store,
+      settingsStore: settings,
+      user: RESIDENT_APT14,
+      buildingEntrances: [1, 2],
+      userMemberships: [{ apartment_id: '018f0000-0000-7000-8000-000000000314', apartment_number: '14' }],
+      body: { category: 'LIGHTING', entrance: 2, place: 'p'.repeat(200), title: 't'.repeat(120) },
+    })
+    assert.equal(createOk.ok, true)
+
+    const createTitleTooLong = createIssueInStore({
+      issuesStore: store,
+      settingsStore: settings,
+      user: RESIDENT_APT14,
+      buildingEntrances: [1, 2],
+      userMemberships: [{ apartment_id: '018f0000-0000-7000-8000-000000000314', apartment_number: '14' }],
+      body: { category: 'LIGHTING', entrance: 2, place: 'p'.repeat(200), title: 't'.repeat(121) },
+    })
+    assert.equal(createTitleTooLong.ok, false)
+    assert.equal(createTitleTooLong.status, 422)
+
+    const createPlaceTooLong = createIssueInStore({
+      issuesStore: store,
+      settingsStore: settings,
+      user: RESIDENT_APT14,
+      buildingEntrances: [1, 2],
+      userMemberships: [{ apartment_id: '018f0000-0000-7000-8000-000000000314', apartment_number: '14' }],
+      body: { category: 'LIGHTING', entrance: 2, place: 'p'.repeat(201), title: 'Valid title' },
+    })
+    assert.equal(createPlaceTooLong.ok, false)
+    assert.equal(createPlaceTooLong.status, 422)
+
+    const createdRecord = store.find((item) => item.id === createOk.issue?.id)
+    assert.ok(createdRecord)
+    const editTitleTooLong = editIssueInStore({
+      issue: createdRecord,
+      user: RESIDENT_APT14,
+      buildingEntrances: [1, 2],
+      body: { title: 't'.repeat(121) },
+    })
+    assert.equal(editTitleTooLong.ok, false)
+    assert.equal(editTitleTooLong.status, 422)
+
+    const editPlaceTooLong = editIssueInStore({
+      issue: createdRecord,
+      user: RESIDENT_APT14,
+      buildingEntrances: [1, 2],
+      body: { place: 'p'.repeat(201) },
+    })
+    assert.equal(editPlaceTooLong.ok, false)
+    assert.equal(editPlaceTooLong.status, 422)
   })
 })
 
@@ -586,4 +677,779 @@ describe('board issue workflow (#013)', () => {
     assert.equal(residentView.timeline.every((e: any) => e.changed_by === null), true)
   })
 })
+
+function buildMinimalJpegBytes(width = 800, height = 600): Uint8Array {
+  return new Uint8Array([
+    0xff, 0xd8, // SOI
+    0xff, 0xc0, // SOF0
+    0x00, 0x0b, // segment length 11
+    0x08, // 8-bit precision
+    (height >> 8) & 0xff, height & 0xff,
+    (width >> 8) & 0xff, width & 0xff,
+    0x01,
+    0x01, 0x11, 0x00,
+    0xff, 0xd9, // EOI
+  ])
+}
+
+describe('issue photos (#020) and retention notices (#021)', () => {
+  it('enforces photo upload validation, 3-photo limit, idempotency, privacy, and delete permissions', () => {
+    const nowMs = Date.now()
+    const store = createDefaultIssuesSeed(nowMs)
+    const issue = store[0] // Reported by RESIDENT_APT14
+    const idem = new Map()
+    const jpeg = buildMinimalJpegBytes(2400, 1800)
+
+    // Non-reporter neighbor cannot upload
+    const forbidden = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT02,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(forbidden.ok, false)
+    assert.equal(forbidden.status, 403)
+    assert.equal(forbidden.errorCode, 'FORBIDDEN')
+
+    // Simulated uploadsDisabled rejects with 403 UPLOADS_DISABLED
+    const disabled = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyStore: idem,
+      nowMs,
+      uploadsDisabled: true,
+    })
+    assert.equal(disabled.ok, false)
+    assert.equal(disabled.status, 403)
+    assert.equal(disabled.errorCode, 'UPLOADS_DISABLED')
+    assert.equal(toIssueView(issue, RESIDENT_APT14, { uploadsDisabled: true }).can_add_photo, false)
+
+    // Missing Content-Length -> 411 LENGTH_REQUIRED
+    const missingLen = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: null,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(missingLen.status, 411)
+    assert.equal(missingLen.errorCode, 'LENGTH_REQUIRED')
+
+    // > 4 MB -> 413 FILE_TOO_LARGE
+    const tooLarge = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: 4 * 1024 * 1024 + 1,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(tooLarge.status, 413)
+    assert.equal(tooLarge.errorCode, 'FILE_TOO_LARGE')
+
+    // Non-JPEG mime or bytes -> 415 UNSUPPORTED_MEDIA_TYPE
+    const wrongMime = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentType: 'image/png',
+      contentLength: jpeg.byteLength,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(wrongMime.status, 415)
+    assert.equal(wrongMime.errorCode, 'UNSUPPORTED_MEDIA_TYPE')
+
+    // Invalid JPEG structure -> 422 INVALID_IMAGE
+    const corrupt = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      contentLength: 4,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(corrupt.status, 422)
+    assert.equal(corrupt.errorCode, 'INVALID_IMAGE')
+
+    // > 2560 px -> 422 IMAGE_TOO_LARGE
+    const overDim = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: buildMinimalJpegBytes(3000, 2000),
+      contentLength: 17,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(overDim.status, 422)
+    assert.equal(overDim.errorCode, 'IMAGE_TOO_LARGE')
+
+    // Upload 1 with UUID Idempotency-Key succeeds (201) and clamps display dims <= 1920
+    const key1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const up1 = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyKey: key1,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(up1.ok, true)
+    assert.equal(up1.status, 201)
+    assert.equal(up1.photo?.width, 1920)
+    assert.equal(up1.photo?.height, 1440)
+    assert.equal('uploader_user_id' in (up1.photo || {}), false)
+
+    // Replay with same key returns 200 with existing photo
+    const replay = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyKey: key1,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(replay.ok, true)
+    assert.equal(replay.status, 200)
+    assert.equal(replay.photo?.id, up1.photo?.id)
+    assert.equal(issue.photos.length, 1)
+
+    // Same key on another issue -> 409 IDEMPOTENCY_KEY_REUSED
+    const otherIssue = store[2]
+    const reusedOther = addIssuePhotoInStore({
+      issue: otherIssue,
+      user: CHAIRMAN_USER,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyKey: key1,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    // Different user scopes idempotency per user, so test same user (RESIDENT_APT14)
+    const ownSecond = createIssueInStore({
+      issuesStore: store,
+      settingsStore: cloneDefaultAssociationSettings(),
+      user: RESIDENT_APT14,
+      userMemberships: [{ apartment_id: '018f0000-0000-7000-8000-000000000314', apartment_number: '14' }],
+      body: { category: 'CLEANING', entrance: 2, title: 'Another issue by Apt 14' },
+      nowMs,
+    })
+    assert.equal(ownSecond.ok, true)
+    const reusedSameUser = addIssuePhotoInStore({
+      issue: ownSecond.rawIssue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyKey: key1,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(reusedSameUser.status, 409)
+    assert.equal(reusedSameUser.errorCode, 'IDEMPOTENCY_KEY_REUSED')
+    assert.equal(reusedOther.status, 409) // otherIssue is RESOLVED -> ISSUE_ENDED
+
+    // Fill up to MAX_ISSUE_PHOTOS (3); 4th returns 409 PHOTO_LIMIT_REACHED
+    const up2 = addIssuePhotoInStore({
+      issue,
+      user: CHAIRMAN_USER,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    const up3 = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(up2.ok, true)
+    assert.equal(up3.ok, true)
+    assert.equal(issue.photos.length, MAX_ISSUE_PHOTOS)
+    assert.equal(toIssueView(issue, RESIDENT_APT14).can_add_photo, false)
+
+    const overLimit = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(overLimit.status, 409)
+    assert.equal(overLimit.errorCode, 'PHOTO_LIMIT_REACHED')
+
+    // Check mine/can_delete flags per viewer
+    const neighborView = toIssueView(issue, RESIDENT_APT02)
+    assert.equal(neighborView.photos.every((p: any) => !p.mine && !p.can_delete), true)
+
+    const chairmanView = toIssueView(issue, CHAIRMAN_USER)
+    assert.equal(chairmanView.photos[0].mine, false)
+    assert.equal(chairmanView.photos[0].can_delete, true)
+    assert.equal(chairmanView.photos[1].mine, true)
+    assert.equal(chairmanView.photos[1].can_delete, true)
+
+    // Delete & fetch 404 + reusing deleted idempotency key -> 409 IDEMPOTENCY_KEY_REUSED
+    const neighborDel = deleteIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT02,
+      photoId: up1.photo!.id,
+      idempotencyStore: idem,
+    })
+    assert.equal(neighborDel.status, 403)
+
+    const reporterDel = deleteIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      photoId: up1.photo!.id,
+      idempotencyStore: idem,
+    })
+    assert.equal(reporterDel.ok, true)
+
+    const missingGet = getIssuePhotoFromStore({ issue, photoId: up1.photo!.id, variant: 'thumb' })
+    assert.equal(missingGet.status, 404)
+    assert.equal(missingGet.errorCode, 'PHOTO_NOT_FOUND')
+
+    const reuseAfterDelete = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyKey: key1,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(reuseAfterDelete.status, 409)
+    assert.equal(reuseAfterDelete.errorCode, 'UPLOAD_REMOVED')
+  })
+
+  it('computes photos_delete_at on RESOLVED issues and immediately deletes photos on WITHDRAWN/DECLINED/DUPLICATE (#021)', () => {
+    const nowMs = Date.UTC(2026, 10, 1, 12, 0, 0)
+    const store = createDefaultIssuesSeed(nowMs)
+    const jpeg = buildMinimalJpegBytes(800, 600)
+
+    const memberships = [
+      { apartment_id: '018f0000-0000-7000-8000-000000000314', apartment_number: '14' },
+    ]
+    const created1 = createIssueInStore({
+      issuesStore: store,
+      settingsStore: cloneDefaultAssociationSettings(),
+      user: RESIDENT_APT14,
+      userMemberships: memberships,
+      body: { category: 'LIFT', entrance: 1, title: 'Lift button stuck' },
+      nowMs,
+    })
+    const issue1 = created1.rawIssue
+    addIssuePhotoInStore({ issue: issue1, user: RESIDENT_APT14, bytes: jpeg, contentLength: jpeg.byteLength, nowMs })
+    assert.equal(toIssueView(issue1, RESIDENT_APT14).photos_delete_at, null)
+
+    // Resolving sets photos_delete_at to ended_at + 30 days
+    const resolved = changeIssueStatusInStore({
+      issuesStore: store,
+      issue: issue1,
+      user: CHAIRMAN_USER,
+      body: { status: 'RESOLVED' },
+      nowMs: nowMs + 1000,
+    })
+    assert.equal(resolved.ok, true)
+    assert.equal(
+      resolved.issue?.photos_delete_at,
+      new Date(nowMs + 1000 + THIRTY_DAYS_MS).toISOString(),
+    )
+    // Uploader can no longer delete on resolved issue, board still can
+    assert.equal(resolved.issue?.photos[0].can_delete, true)
+    assert.equal(toIssueView(issue1, RESIDENT_APT14).photos[0].can_delete, false)
+
+    // Reopen clears photos_delete_at and preserves photo
+    const reopened = changeIssueStatusInStore({
+      issuesStore: store,
+      issue: issue1,
+      user: CHAIRMAN_USER,
+      body: { status: 'IN_PROGRESS' },
+      nowMs: nowMs + 2000,
+    })
+    assert.equal(reopened.issue?.photos.length, 1)
+    assert.equal(reopened.issue?.photos_delete_at, null)
+
+    // Declining immediately deletes photos, never restored on reopen
+    const declined = changeIssueStatusInStore({
+      issuesStore: store,
+      issue: issue1,
+      user: CHAIRMAN_USER,
+      body: { status: 'DECLINED' },
+      nowMs: nowMs + 3000,
+    })
+    assert.deepEqual(declined.issue?.photos, [])
+    assert.equal(declined.issue?.photos_delete_at, null)
+
+    const reopenedDeclined = changeIssueStatusInStore({
+      issuesStore: store,
+      issue: issue1,
+      user: CHAIRMAN_USER,
+      body: { status: 'IN_PROGRESS' },
+      nowMs: nowMs + 4000,
+    })
+    assert.deepEqual(reopenedDeclined.issue?.photos, [])
+
+    // Resolving an issue WITHOUT photos leaves photos_delete_at as null
+    const emptyResolved = changeIssueStatusInStore({
+      issuesStore: store,
+      issue: issue1,
+      user: CHAIRMAN_USER,
+      body: { status: 'RESOLVED' },
+      nowMs: nowMs + 5000,
+    })
+    assert.equal(emptyResolved.issue?.photos_delete_at, null)
+
+    // Withdrawing immediately deletes photos
+    const created2 = createIssueInStore({
+      issuesStore: store,
+      settingsStore: cloneDefaultAssociationSettings(),
+      user: RESIDENT_APT14,
+      userMemberships: memberships,
+      body: { category: 'YARD', entrance: null, title: 'Broken bench' },
+      nowMs: nowMs + 6000,
+    })
+    addIssuePhotoInStore({ issue: created2.rawIssue, user: RESIDENT_APT14, bytes: jpeg, contentLength: jpeg.byteLength, nowMs })
+    const withdrawn = withdrawIssueInStore({
+      issue: created2.rawIssue,
+      user: RESIDENT_APT14,
+      nowMs: nowMs + 7000,
+    })
+    assert.deepEqual(withdrawn.issue?.photos, [])
+    assert.equal(withdrawn.issue?.photos_delete_at, null)
+
+    // Marking DUPLICATE immediately deletes duplicate's photos (never copied to original)
+    const created3 = createIssueInStore({
+      issuesStore: store,
+      settingsStore: cloneDefaultAssociationSettings(),
+      user: RESIDENT_APT14,
+      userMemberships: memberships,
+      body: { category: 'CLEANING', entrance: 2, title: 'Dirty stairwell' },
+      nowMs: nowMs + 8000,
+    })
+    const rawIssue3 = created3.rawIssue!
+    assert.ok(rawIssue3)
+    addIssuePhotoInStore({ issue: rawIssue3, user: RESIDENT_APT14, bytes: jpeg, contentLength: jpeg.byteLength, nowMs })
+    const dupTarget = store.find((item) => item.id !== rawIssue3.id && isIssueOpen(item.status))!
+    assert.ok(dupTarget)
+    const dupTargetPhotosBefore = dupTarget.photos?.length || 0
+    const duplicated = changeIssueStatusInStore({
+      issuesStore: store,
+      issue: rawIssue3,
+      user: CHAIRMAN_USER,
+      body: { status: 'DUPLICATE', duplicate_of: dupTarget.id },
+      nowMs: nowMs + 9000,
+    })
+    assert.equal(duplicated.ok, true)
+    assert.deepEqual(duplicated.issue?.photos, [])
+    assert.equal(duplicated.issue?.photos_delete_at, null)
+    assert.equal(dupTarget.photos?.length || 0, dupTargetPhotosBefore)
+  })
+
+  it('tracks can_add_photo matrix, restores slot after deletion, enforces 30-day reopen window, accepts JPEG charset param, and strips private uploader fields', () => {
+    const nowMs = Date.UTC(2026, 10, 1, 10, 0, 0)
+    const store = createDefaultIssuesSeed(nowMs)
+    const memberships = [
+      { apartment_id: '018f0000-0000-7000-8000-000000000314', apartment_number: '14' },
+    ]
+    const created = createIssueInStore({
+      issuesStore: store,
+      settingsStore: cloneDefaultAssociationSettings(),
+      user: RESIDENT_APT14,
+      userMemberships: memberships,
+      body: { category: 'DOORS_AND_LOCKS', entrance: 1, title: 'Entrance door closer broken' },
+      nowMs,
+    })
+    const issue = created.rawIssue!
+    const jpeg = buildMinimalJpegBytes(1024, 768)
+
+    // Reporter and Board/Chairman have can_add_photo=true when open & <3; neighbor has false
+    assert.equal(toIssueView(issue, RESIDENT_APT14).can_add_photo, true)
+    assert.equal(toIssueView(issue, CHAIRMAN_USER).can_add_photo, true)
+    assert.equal(toIssueView(issue, BOARD_USER).can_add_photo, true)
+    assert.equal(toIssueView(issue, RESIDENT_APT02).can_add_photo, false)
+
+    // Content-Type with charset parameter accepted cleanly
+    const p1 = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentType: 'image/jpeg; charset=binary',
+      contentLength: jpeg.byteLength,
+      nowMs,
+    })
+    const p2 = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      nowMs: nowMs + 1000,
+    })
+    const p3 = addIssuePhotoInStore({
+      issue,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      nowMs: nowMs + 2000,
+    })
+    assert.equal(p1.ok && p2.ok && p3.ok, true)
+    assert.equal(toIssueView(issue, RESIDENT_APT14).can_add_photo, false)
+
+    // Deleting 1 of 3 restores can_add_photo=true
+    const del = deleteIssuePhotoInStore({ issue, user: RESIDENT_APT14, photoId: p2.photo!.id })
+    assert.equal(del.ok, true)
+    assert.equal(toIssueView(issue, RESIDENT_APT14).can_add_photo, true)
+
+    // Summary & Detail views strip uploader_user_id and raw bytes across all roles
+    const queryRes = queryIssuesStore(store, RESIDENT_APT02, {}, nowMs)
+    const listedIssue = (queryRes.items || []).find((it: any) => it.id === issue.id)
+    assert.ok(listedIssue)
+    assert.equal(listedIssue.photos.length, 2)
+    for (const ph of listedIssue.photos) {
+      assert.equal('uploader_user_id' in ph, false)
+      assert.equal('bytes' in ph, false)
+      assert.equal(ph.mine, false)
+      assert.equal(ph.can_delete, false)
+    }
+
+    // Resolve issue -> 29 days later canBoardReopenIssue is still true and keeps photos
+    changeIssueStatusInStore({
+      issuesStore: store,
+      issue,
+      user: CHAIRMAN_USER,
+      body: { status: 'RESOLVED' },
+      nowMs: nowMs + 5000,
+    })
+    assert.equal(toIssueView(issue, CHAIRMAN_USER).can_add_photo, false)
+    assert.equal(canBoardReopenIssue(issue, nowMs + 5000 + 29 * 24 * 3600 * 1000), true)
+    assert.equal(canBoardReopenIssue(issue, nowMs + 5000 + 31 * 24 * 3600 * 1000), false)
+
+    const reopenedDay29 = changeIssueStatusInStore({
+      issuesStore: store,
+      issue,
+      user: CHAIRMAN_USER,
+      body: { status: 'IN_PROGRESS' },
+      nowMs: nowMs + 5000 + 29 * 24 * 3600 * 1000,
+    })
+    assert.equal(reopenedDay29.ok, true)
+    assert.equal(reopenedDay29.issue?.photos.length, 2)
+    assert.equal(reopenedDay29.issue?.photos_delete_at, null)
+  })
+
+  it('enforces #025 server answers: UPLOAD_REMOVED on ended/discarded issues, contentLength collision IDEMPOTENCY_KEY_REUSED, 24h daily limit (board exempt), and 507 quota reasons', () => {
+    const nowMs = Date.UTC(2026, 10, 10, 9, 0, 0)
+    const store = createDefaultIssuesSeed(nowMs)
+    const memberships = [
+      { apartment_id: '018f0000-0000-7000-8000-000000000314', apartment_number: '14' },
+    ]
+    const jpeg = buildMinimalJpegBytes(800, 600)
+    const idem = new Map()
+    const dailyStore: Array<{ userId: string; bytes: number; atMs: number }> = []
+
+    const settingsStore = cloneDefaultAssociationSettings()
+    const limitSetting = settingsStore.find((s) => s.key === 'issues.reports_per_apartment_per_day')
+    if (limitSetting) limitSetting.value = 20
+
+    const createForResident = (title: string) =>
+      createIssueInStore({
+        issuesStore: store,
+        settingsStore,
+        user: RESIDENT_APT14,
+        userMemberships: memberships,
+        body: { category: 'LIGHTING', entrance: 1, title },
+        nowMs,
+      }).rawIssue!
+
+    // 1) Resolved keeps photo -> replay returns 200; mismatched contentLength returns 409 IDEMPOTENCY_KEY_REUSED
+    const issueResolved = createForResident('Hallway lamp out')
+    const keyResolved = '11111111-1111-4111-8111-111111111111'
+    const upRes = addIssuePhotoInStore({
+      issue: issueResolved,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentType: 'image/pjpeg',
+      contentLength: jpeg.byteLength,
+      idempotencyKey: keyResolved,
+      idempotencyStore: idem,
+      dailyUploadsStore: dailyStore,
+      nowMs,
+    })
+    assert.equal(upRes.ok, true)
+
+    const mismatchReplay = addIssuePhotoInStore({
+      issue: issueResolved,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength + 10,
+      idempotencyKey: keyResolved,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(mismatchReplay.status, 409)
+    assert.equal(mismatchReplay.errorCode, 'IDEMPOTENCY_KEY_REUSED')
+
+    changeIssueStatusInStore({
+      issuesStore: store,
+      issue: issueResolved,
+      user: CHAIRMAN_USER,
+      body: { status: 'RESOLVED' },
+      nowMs: nowMs + 1000,
+    })
+    const replayAfterResolve = addIssuePhotoInStore({
+      issue: issueResolved,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyKey: keyResolved,
+      idempotencyStore: idem,
+      nowMs: nowMs + 2000,
+    })
+    assert.equal(replayAfterResolve.ok, true)
+    assert.equal(replayAfterResolve.status, 200)
+
+    // 2) Declined, Duplicate, and Withdrawn destroy photos -> replay returns 409 UPLOAD_REMOVED
+    for (const mode of ['DECLINED', 'DUPLICATE', 'WITHDRAWN'] as const) {
+      const targetIssue = createForResident(`Issue for ${mode}`)
+      const key = `22222222-2222-4222-8222-00000000000${mode === 'DECLINED' ? '1' : mode === 'DUPLICATE' ? '2' : '3'}`
+      const uploaded = addIssuePhotoInStore({
+        issue: targetIssue,
+        user: RESIDENT_APT14,
+        bytes: jpeg,
+        contentLength: jpeg.byteLength,
+        idempotencyKey: key,
+        idempotencyStore: idem,
+        nowMs,
+      })
+      assert.equal(uploaded.ok, true)
+      if (mode === 'WITHDRAWN') {
+        withdrawIssueInStore({ issue: targetIssue, user: RESIDENT_APT14, nowMs: nowMs + 500 })
+      } else if (mode === 'DUPLICATE') {
+        const dupOrig = store.find((it) => it.id !== targetIssue.id && isIssueOpen(it.status))!
+        const dupRes = changeIssueStatusInStore({
+          issuesStore: store,
+          issue: targetIssue,
+          user: CHAIRMAN_USER,
+          body: { status: 'DUPLICATE', duplicate_of: dupOrig.id },
+          nowMs: nowMs + 500,
+        })
+        assert.equal(dupRes.ok, true)
+      } else {
+        changeIssueStatusInStore({
+          issuesStore: store,
+          issue: targetIssue,
+          user: CHAIRMAN_USER,
+          body: { status: 'DECLINED' },
+          nowMs: nowMs + 500,
+        })
+      }
+      const replayRemoved = addIssuePhotoInStore({
+        issue: targetIssue,
+        user: RESIDENT_APT14,
+        bytes: jpeg,
+        contentLength: jpeg.byteLength,
+        idempotencyKey: key,
+        idempotencyStore: idem,
+        nowMs: nowMs + 1000,
+      })
+      assert.equal(replayRemoved.status, 409)
+      assert.equal(replayRemoved.errorCode, 'UPLOAD_REMOVED')
+    }
+
+    // 3) Daily limit blocks resident once threshold exceeded, resets after 24h, exempts CHAIRMAN/BOARD
+    const issueDaily = createForResident('Daily quota issue')
+    const isolatedDailyStore: Array<{ userId: string; bytes: number; atMs: number }> = []
+    const smallLimit = jpeg.byteLength * 2 - 1
+    const r1 = addIssuePhotoInStore({
+      issue: issueDaily,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      dailyUploadsStore: isolatedDailyStore,
+      dailyUserLimitBytes: smallLimit,
+      nowMs,
+    })
+    assert.equal(r1.ok, true)
+
+    const rBlocked = addIssuePhotoInStore({
+      issue: issueDaily,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      dailyUploadsStore: isolatedDailyStore,
+      dailyUserLimitBytes: smallLimit,
+      nowMs: nowMs + 10_000,
+    })
+    assert.equal(rBlocked.status, 429)
+    assert.equal(rBlocked.errorCode, 'RATE_LIMITED')
+    assert.equal(rBlocked.extra?.reason, 'DAILY_LIMIT')
+    assert.ok((rBlocked.extra?.retry_after_seconds || 0) > 86000)
+
+    const rAfter24h = addIssuePhotoInStore({
+      issue: issueDaily,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      dailyUploadsStore: isolatedDailyStore,
+      dailyUserLimitBytes: smallLimit,
+      nowMs: nowMs + 24 * 60 * 60 * 1000 + 1000,
+    })
+    assert.equal(rAfter24h.ok, true)
+
+    const boardExempt = addIssuePhotoInStore({
+      issue: issueDaily,
+      user: BOARD_USER,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      dailyUploadsStore: [{ userId: BOARD_USER.user_id, bytes: 50_000_000, atMs: nowMs }],
+      dailyUserLimitBytes: 100,
+      nowMs: nowMs + 10_000,
+    })
+    assert.equal(boardExempt.ok, true)
+
+    // 4) 507 STORAGE_QUOTA_EXCEEDED with QUOTA and DELETIONS_PENDING
+    const issueQuota = createForResident('Quota check issue')
+    const quotaFail = addIssuePhotoInStore({
+      issue: issueQuota,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      storageStats: { photosUsedBytes: 90, photosLimitBytes: 100, pendingDeletionBytes: 0, quotaBytes: 200 },
+      nowMs,
+    })
+    assert.equal(quotaFail.status, 507)
+    assert.equal(quotaFail.errorCode, 'STORAGE_QUOTA_EXCEEDED')
+    assert.equal(quotaFail.extra?.reason, 'QUOTA')
+    assert.equal(quotaFail.extra?.category, 'photos')
+
+    const pendingFail = addIssuePhotoInStore({
+      issue: issueQuota,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      storageStats: { photosUsedBytes: 0, photosLimitBytes: 100, pendingDeletionBytes: 190, quotaBytes: 200 },
+      nowMs,
+    })
+    assert.equal(pendingFail.status, 507)
+    assert.equal(pendingFail.errorCode, 'STORAGE_QUOTA_EXCEEDED')
+    assert.equal(pendingFail.extra?.reason, 'DELETIONS_PENDING')
+
+    // 5) Strict API.md check order: route rules (403, 409) -> Content-Type/Length -> demo mode -> quota
+    const issuePreflight = createForResident('Preflight order issue')
+    const keyPre = '22222222-2222-4222-8222-222222222222'
+    const firstPre = addIssuePhotoInStore({
+      issue: issuePreflight,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength,
+      idempotencyKey: keyPre,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(firstPre.ok, true)
+
+    // Missing Content-Length on a NEW upload -> 411 LENGTH_REQUIRED
+    const missingLenNew = checkIssuePhotoUploadPreflight({
+      issue: issuePreflight,
+      user: RESIDENT_APT14,
+      contentType: 'image/jpeg',
+      contentLength: null,
+      idempotencyKey: '33333333-3333-4333-8333-333333333333',
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(missingLenNew.ok, false)
+    assert.equal(missingLenNew.status, 411)
+    assert.equal(missingLenNew.errorCode, 'LENGTH_REQUIRED')
+
+    // Bad MIME overrides 411/413/UPLOADS_DISABLED
+    const badMimePreflight = checkIssuePhotoUploadPreflight({
+      issue: issuePreflight,
+      user: RESIDENT_APT14,
+      contentType: 'image/png',
+      contentLength: null,
+      uploadsDisabled: true,
+      nowMs,
+    })
+    assert.equal(badMimePreflight.status, 415)
+    assert.equal(badMimePreflight.errorCode, 'UNSUPPORTED_MEDIA_TYPE')
+
+    // Closed issue overrides UPLOADS_DISABLED and Content-Length/Type (route rules first)
+    const closedIssue = createForResident('Closed order issue')
+    closedIssue.status = 'RESOLVED'
+    const closedFirst = checkIssuePhotoUploadPreflight({
+      issue: closedIssue,
+      user: RESIDENT_APT14,
+      contentType: 'image/png',
+      contentLength: null,
+      uploadsDisabled: true,
+      nowMs,
+    })
+    assert.equal(closedFirst.status, 409)
+    assert.equal(closedFirst.errorCode, 'ISSUE_ENDED')
+
+    // Whitespace-only Idempotency-Key -> 422 VALIDATION_ERROR
+    const whitespaceKey = checkIssuePhotoUploadPreflight({
+      issue: issuePreflight,
+      user: RESIDENT_APT14,
+      contentType: 'image/jpeg',
+      contentLength: jpeg.byteLength,
+      idempotencyKey: '   ',
+      nowMs,
+    })
+    assert.equal(whitespaceKey.status, 422)
+    assert.equal(whitespaceKey.errorCode, 'VALIDATION_ERROR')
+
+    // Same length + same key + different payload bytes -> 409 IDEMPOTENCY_KEY_REUSED
+    const altSameLenJpeg = new Uint8Array(jpeg)
+    altSameLenJpeg[altSameLenJpeg.length - 3] ^= 0x01
+    const digestCollision = addIssuePhotoInStore({
+      issue: issuePreflight,
+      user: RESIDENT_APT14,
+      bytes: altSameLenJpeg,
+      contentLength: altSameLenJpeg.byteLength,
+      idempotencyKey: keyPre,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(digestCollision.ok, false)
+    assert.equal(digestCollision.status, 409)
+    assert.equal(digestCollision.errorCode, 'IDEMPOTENCY_KEY_REUSED')
+
+    // Actual body longer or shorter than declared Content-Length
+    const bodyLonger = addIssuePhotoInStore({
+      issue: issuePreflight,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength - 2,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(bodyLonger.status, 413)
+    assert.equal(bodyLonger.errorCode, 'FILE_TOO_LARGE')
+
+    const bodyShorter = addIssuePhotoInStore({
+      issue: issuePreflight,
+      user: RESIDENT_APT14,
+      bytes: jpeg,
+      contentLength: jpeg.byteLength + 10,
+      idempotencyStore: idem,
+      nowMs,
+    })
+    assert.equal(bodyShorter.status, 400)
+    assert.equal(bodyShorter.errorCode, 'UPLOAD_INTERRUPTED')
+  })
+})
+
+
+
 

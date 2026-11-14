@@ -70,7 +70,7 @@ const session = useSessionStore()
         </h3>
 
         <p class="font-body-md text-body-md text-on-surface-variant mb-space-sm leading-relaxed">
-          {{ notice.body }}
+          {{ notice.body ?? '' }}
         </p>
 
         <div class="flex flex-wrap items-center justify-between gap-space-sm pt-space-xs">

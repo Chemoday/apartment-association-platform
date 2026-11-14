@@ -1,15 +1,22 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
+import { ApiError } from '@/api/client.js'
 import {
   editMaintenanceLogEntry,
+  exportMaintenanceReportCsv,
+  getMaintenanceReport,
   listMaintenanceLog,
   listMaintenanceTasks,
 } from '@/api/endpoints/maintenance.js'
 import {
+  extractMaintenanceCsvFilename,
+  fetchAllMaintenanceLogForYears,
   formatCost,
+  getAvailableReportYears,
+  getTodayDateInTallinn,
   normalizeCostInput,
   sumCosts,
 } from '@/utils/maintenance.js'
@@ -19,11 +26,15 @@ import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const route = useRoute()
+const router = useRouter()
 const session = useSessionStore()
 const { canManageMaintenance, canViewMaintenanceLog } = useRole()
 
+const activeTab = ref(route.query.tab === 'report' ? 'report' : 'log')
+
 const entries = ref([])
 const knownTasksMap = ref(new Map()) // task_id -> task_title
+const knownLogEntriesForYears = ref([]) // baseline unfiltered entries for year discovery
 const loading = ref(true)
 const loadError = ref(null)
 
@@ -38,6 +49,29 @@ const editNote = ref('')
 const editCost = ref('')
 const editError = ref('')
 const editPending = ref(false)
+
+// Yearly report state (#029)
+const currentYear = Number(getTodayDateInTallinn().slice(0, 4))
+const selectedYear = ref(currentYear)
+const reportData = ref(null)
+const reportLoading = ref(false)
+const reportError = ref(null)
+const reportDirty = ref(false)
+const csvDownloading = ref(false)
+const csvBanner = ref(null) // { tone: 'success' | 'error', text: string }
+
+let logRequestSeq = 0
+let reportRequestSeq = 0
+let csvRequestSeq = 0
+let yearDiscoverySeq = 0
+let tasksRequestSeq = 0
+let editRequestSeq = 0
+let isUnmounted = false
+const revokeTimers = new Set()
+
+const availableReportYears = computed(() => {
+  return getAvailableReportYears(knownLogEntriesForYears.value, currentYear)
+})
 
 const taskOptions = computed(() => {
   return Array.from(knownTasksMap.value.entries()).map(([id, title]) => ({
@@ -54,6 +88,11 @@ const totalCostFormatted = computed(() => {
   const rawTotal = sumCosts(entries.value.map((e) => e.cost))
   return formatCost(rawTotal, session.lang)
 })
+
+function formatMoneyEur(costStr) {
+  const formatted = formatCost(costStr, session.lang)
+  return formatted ? `${formatted} €` : '—'
+}
 
 function logKindBadgeClass(kind) {
   if (kind === 'DONE') {
@@ -72,13 +111,29 @@ function recordKnownTasksFromEntries(list) {
   knownTasksMap.value = next
 }
 
+function setActiveTab(tab) {
+  const normalized = tab === 'report' ? 'report' : 'log'
+  if (activeTab.value === normalized) return
+  activeTab.value = normalized
+  const nextQuery = { ...route.query }
+  if (normalized === 'report') {
+    nextQuery.tab = 'report'
+  } else {
+    delete nextQuery.tab
+  }
+  router.replace({ query: nextQuery }).catch(() => {})
+}
+
 async function fetchKnownTasksForBoard() {
-  if (!canManageMaintenance.value) return
+  if (!canManageMaintenance.value || isUnmounted) return
+  const seq = ++tasksRequestSeq
+  const expectedUserId = session.actingUserId
   try {
     const [activeTasks, archivedTasks] = await Promise.all([
       listMaintenanceTasks(),
       listMaintenanceTasks({ status: 'ARCHIVED' }),
     ])
+    if (isUnmounted || seq !== tasksRequestSeq || session.actingUserId !== expectedUserId) return
     const next = new Map(knownTasksMap.value)
     for (const t of [...(activeTasks || []), ...(archivedTasks || [])]) {
       if (t?.id && t?.title) {
@@ -91,8 +146,29 @@ async function fetchKnownTasksForBoard() {
   }
 }
 
+async function fetchLogBaselineYears() {
+  if (!canViewMaintenanceLog.value || isUnmounted) return
+  const seq = ++yearDiscoverySeq
+  const expectedUserId = session.actingUserId
+  const isStale = () =>
+    isUnmounted || seq !== yearDiscoverySeq || session.actingUserId !== expectedUserId
+  try {
+    const { entries: collected, stale } = await fetchAllMaintenanceLogForYears(
+      (params) => listMaintenanceLog(params),
+      { pageSize: 100, maxPages: 50, isStale },
+    )
+    if (stale || isStale()) return
+    knownLogEntriesForYears.value = collected
+    recordKnownTasksFromEntries(collected)
+  } catch {
+    // Non-blocking: dropdown still offers currentYear and prior year
+  }
+}
+
 async function fetchLog() {
-  if (!canViewMaintenanceLog.value) return
+  if (!canViewMaintenanceLog.value || isUnmounted) return
+  const seq = ++logRequestSeq
+  const expectedUserId = session.actingUserId
   loading.value = true
   loadError.value = null
 
@@ -103,13 +179,120 @@ async function fetchLog() {
     if (toFilter.value) params.to = toFilter.value
 
     const data = await listMaintenanceLog(params)
+    if (isUnmounted || seq !== logRequestSeq || session.actingUserId !== expectedUserId) return
     const list = Array.isArray(data) ? data : []
     entries.value = list
     recordKnownTasksFromEntries(list)
+    if (!hasActiveFilters.value && list.length > knownLogEntriesForYears.value.length) {
+      knownLogEntriesForYears.value = list
+    }
   } catch (err) {
+    if (isUnmounted || seq !== logRequestSeq || session.actingUserId !== expectedUserId) return
     loadError.value = err
   } finally {
-    loading.value = false
+    if (!isUnmounted && seq === logRequestSeq) {
+      loading.value = false
+    }
+  }
+}
+
+async function fetchReport() {
+  if (!canViewMaintenanceLog.value || isUnmounted) return
+  const seq = ++reportRequestSeq
+  const expectedUserId = session.actingUserId
+  reportLoading.value = true
+  reportError.value = null
+
+  try {
+    const data = await getMaintenanceReport(selectedYear.value)
+    if (isUnmounted || seq !== reportRequestSeq || session.actingUserId !== expectedUserId) return
+    reportData.value = data
+    reportDirty.value = false
+  } catch (err) {
+    if (isUnmounted || seq !== reportRequestSeq || session.actingUserId !== expectedUserId) return
+    reportError.value = err
+    reportData.value = null
+  } finally {
+    if (!isUnmounted && seq === reportRequestSeq) {
+      reportLoading.value = false
+    }
+  }
+}
+
+async function handleDownloadCsv() {
+  if (csvDownloading.value || !canViewMaintenanceLog.value || isUnmounted) return
+  const seq = ++csvRequestSeq
+  const expectedUserId = session.actingUserId
+  const targetYear = selectedYear.value
+  const isStale = () =>
+    isUnmounted ||
+    seq !== csvRequestSeq ||
+    session.actingUserId !== expectedUserId ||
+    selectedYear.value !== targetYear
+
+  csvDownloading.value = true
+  csvBanner.value = null
+
+  try {
+    const response = await exportMaintenanceReportCsv(targetYear)
+    if (isStale()) return
+
+    if (response && 'ok' in response && !response.ok) {
+      let errorBody = null
+      try {
+        errorBody = await response.json()
+      } catch {
+        /* ignore non-JSON error body */
+      }
+      if (isStale()) return
+      throw new ApiError(
+        response.status || 500,
+        errorBody,
+        response.headers?.get?.('X-Trace-Id') || '',
+      )
+    }
+
+    const blob = await response.blob()
+    if (isStale()) return
+
+    const disposition = response.headers?.get?.('Content-Disposition') || ''
+    const filename = extractMaintenanceCsvFilename(disposition, targetYear)
+
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    try {
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+    } finally {
+      if (link.parentNode) {
+        link.parentNode.removeChild(link)
+      }
+      const timerEntry = {
+        url,
+        timer: setTimeout(() => {
+          revokeTimers.delete(timerEntry)
+          URL.revokeObjectURL(url)
+        }, 1000),
+      }
+      revokeTimers.add(timerEntry)
+    }
+
+    csvBanner.value = {
+      tone: 'success',
+      text: session.t('maintenance.report.csvDownloaded', { filename }),
+    }
+  } catch (err) {
+    if (isStale()) return
+    csvBanner.value = {
+      tone: 'error',
+      text: localizeError(err, {}, session.lang),
+    }
+  } finally {
+    if (!isUnmounted && seq === csvRequestSeq) {
+      csvDownloading.value = false
+    }
   }
 }
 
@@ -129,7 +312,7 @@ function openEditModal(entry) {
 }
 
 async function handleSaveEdit() {
-  if (!editingEntry.value || !canManageMaintenance.value) return
+  if (!editingEntry.value || !canManageMaintenance.value || editPending.value || isUnmounted) return
   editError.value = ''
 
   const trimmedNote = editNote.value.trim()
@@ -155,18 +338,35 @@ async function handleSaveEdit() {
     payload.cost = normalizedCost
   }
 
+  const seq = ++editRequestSeq
+  const expectedUserId = session.actingUserId
   editPending.value = true
   try {
     const updated = await editMaintenanceLogEntry(editingEntry.value.id, payload)
+    if (isUnmounted || seq !== editRequestSeq || session.actingUserId !== expectedUserId) return
     entries.value = entries.value.map((item) => (item.id === updated.id ? updated : item))
     showEditModal.value = false
     editingEntry.value = null
+    reportDirty.value = true
+    if (activeTab.value === 'report') {
+      fetchReport()
+    }
   } catch (err) {
+    if (isUnmounted || seq !== editRequestSeq || session.actingUserId !== expectedUserId) return
     editError.value = localizeError(err, {}, session.lang)
   } finally {
-    editPending.value = false
+    if (!isUnmounted && seq === editRequestSeq) {
+      editPending.value = false
+    }
   }
 }
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    activeTab.value = tab === 'report' ? 'report' : 'log'
+  },
+)
 
 watch(
   () => [taskFilter.value, fromFilter.value, toFilter.value, session.actingUserId],
@@ -176,19 +376,89 @@ watch(
 )
 
 watch(
+  () => selectedYear.value,
+  () => {
+    csvRequestSeq += 1
+    csvDownloading.value = false
+    csvBanner.value = null
+    if (activeTab.value === 'report' && canViewMaintenanceLog.value) {
+      fetchReport()
+    } else {
+      reportDirty.value = true
+    }
+  },
+)
+
+watch(
+  () => activeTab.value,
+  (tab) => {
+    if (
+      tab === 'report' &&
+      canViewMaintenanceLog.value &&
+      !reportLoading.value &&
+      (!reportData.value || reportDirty.value)
+    ) {
+      fetchReport()
+    }
+  },
+)
+
+watch(
   () => session.actingUserId,
   () => {
+    logRequestSeq += 1
+    reportRequestSeq += 1
+    csvRequestSeq += 1
+    yearDiscoverySeq += 1
+    tasksRequestSeq += 1
+    editRequestSeq += 1
+    entries.value = []
+    knownLogEntriesForYears.value = []
+    knownTasksMap.value = new Map()
+    showEditModal.value = false
+    editingEntry.value = null
+    editError.value = ''
+    editPending.value = false
+    csvBanner.value = null
+    reportError.value = null
+    reportData.value = null
+    reportDirty.value = false
+    csvDownloading.value = false
+
     if (canManageMaintenance.value) {
       fetchKnownTasksForBoard()
+    }
+    if (canViewMaintenanceLog.value) {
+      fetchLogBaselineYears()
+      if (activeTab.value === 'report') {
+        fetchReport()
+      }
     }
   },
 )
 
 onMounted(async () => {
-  if (canManageMaintenance.value) {
-    fetchKnownTasksForBoard()
+  await Promise.allSettled([
+    canManageMaintenance.value ? fetchKnownTasksForBoard() : Promise.resolve(),
+    canViewMaintenanceLog.value ? fetchLogBaselineYears() : Promise.resolve(),
+    fetchLog(),
+    activeTab.value === 'report' && canViewMaintenanceLog.value ? fetchReport() : Promise.resolve(),
+  ])
+})
+
+onBeforeUnmount(() => {
+  isUnmounted = true
+  logRequestSeq += 1
+  reportRequestSeq += 1
+  csvRequestSeq += 1
+  yearDiscoverySeq += 1
+  tasksRequestSeq += 1
+  editRequestSeq += 1
+  for (const entry of revokeTimers) {
+    clearTimeout(entry.timer)
+    URL.revokeObjectURL(entry.url)
   }
-  await fetchLog()
+  revokeTimers.clear()
 })
 </script>
 
@@ -245,6 +515,258 @@ onMounted(async () => {
     </div>
 
     <template v-else>
+      <!-- Log / Yearly Report Tab Switcher -->
+      <div
+        role="tablist"
+        :aria-label="session.t('maintenance.report.tabsAriaLabel')"
+        class="inline-flex p-1 rounded-xl bg-surface-container border border-surface-container-high gap-1"
+      >
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'log'"
+          data-testid="maintenance-tab-log"
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+          :class="
+            activeTab === 'log'
+              ? 'bg-surface-container-lowest text-on-surface shadow-2xs'
+              : 'text-on-surface-variant hover:text-on-surface'
+          "
+          @click="setActiveTab('log')"
+        >
+          <span class="material-symbols-outlined text-[16px]">history_edu</span>
+          <span>{{ session.t('maintenance.report.tabLog') }}</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'report'"
+          data-testid="maintenance-tab-report"
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+          :class="
+            activeTab === 'report'
+              ? 'bg-surface-container-lowest text-on-surface shadow-2xs'
+              : 'text-on-surface-variant hover:text-on-surface'
+          "
+          @click="setActiveTab('report')"
+        >
+          <span class="material-symbols-outlined text-[16px]">summarize</span>
+          <span>{{ session.t('maintenance.report.tabReport') }}</span>
+        </button>
+      </div>
+
+      <!-- Yearly Report Tab Panel (#029) -->
+      <section v-if="activeTab === 'report'" data-testid="maintenance-yearly-report-panel" class="space-y-5">
+        <!-- Toolbar: Year Picker + Download CSV -->
+        <div class="bg-surface-container-lowest border border-surface-container rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-end justify-between gap-4 shadow-2xs">
+          <div class="space-y-1">
+            <h2 class="font-bold text-base text-on-surface">
+              {{ session.t('maintenance.report.heading') }}
+            </h2>
+            <p class="text-xs text-on-surface-variant max-w-2xl">
+              {{ session.t('maintenance.report.subtitle') }}
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-end gap-3 shrink-0">
+            <div>
+              <label
+                for="report-year-select"
+                class="block text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant mb-1"
+              >
+                {{ session.t('maintenance.report.yearLabel') }}
+              </label>
+              <select
+                id="report-year-select"
+                v-model.number="selectedYear"
+                data-testid="report-year-select"
+                class="rounded-xl border border-surface-container-high bg-surface-container-low/40 px-3 py-2 font-mono text-xs font-semibold text-on-surface focus:border-primary focus:outline-none"
+              >
+                <option v-for="y in availableReportYears" :key="y" :value="y">
+                  {{ y }}
+                </option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              data-testid="download-maintenance-csv-btn"
+              :disabled="csvDownloading"
+              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container disabled:opacity-60 transition-colors cursor-pointer"
+              @click="handleDownloadCsv"
+            >
+              <span class="material-symbols-outlined text-[17px]">download</span>
+              <span>
+                {{
+                  csvDownloading
+                    ? session.t('maintenance.report.downloadingCsv')
+                    : session.t('maintenance.report.downloadCsv')
+                }}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- CSV Export Feedback Banner (success or visible error) -->
+        <div
+          v-if="csvBanner"
+          data-testid="report-csv-banner"
+          role="alert"
+          class="p-3.5 rounded-xl border text-xs font-semibold flex items-center justify-between gap-3"
+          :class="
+            csvBanner.tone === 'error'
+              ? 'bg-error/10 border-error/30 text-error'
+              : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+          "
+        >
+          <span>{{ csvBanner.text }}</span>
+          <button
+            type="button"
+            :aria-label="session.t('maintenance.report.dismissBanner')"
+            class="text-current opacity-70 hover:opacity-100 cursor-pointer"
+            @click="csvBanner = null"
+          >
+            <span class="material-symbols-outlined text-[16px]">close</span>
+          </button>
+        </div>
+
+        <ErrorCard
+          v-if="reportError"
+          data-testid="report-load-error"
+          :error="reportError"
+          @retry="fetchReport"
+        />
+
+        <!-- Loading Skeleton -->
+        <div v-else-if="reportLoading" class="space-y-4">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div v-for="i in 3" :key="i" class="p-5 rounded-2xl bg-surface-container-lowest border border-surface-container animate-pulse space-y-2">
+              <div class="h-3 bg-surface-container rounded w-1/2"></div>
+              <div class="h-6 bg-surface-container-high rounded w-1/3"></div>
+            </div>
+          </div>
+        </div>
+
+        <template v-else-if="reportData">
+          <!-- KPI Totals -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="p-4 sm:p-5 rounded-2xl bg-surface-container-lowest border border-surface-container space-y-1 shadow-2xs">
+              <span class="block text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+                {{ session.t('maintenance.report.totalDone') }}
+              </span>
+              <span data-testid="report-total-done" class="block font-mono text-2xl font-bold text-on-surface tabular-nums">
+                {{ reportData.done_count }}
+              </span>
+            </div>
+
+            <div class="p-4 sm:p-5 rounded-2xl bg-surface-container-lowest border border-surface-container space-y-1 shadow-2xs">
+              <span class="block text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+                {{ session.t('maintenance.report.totalSkipped') }}
+              </span>
+              <span data-testid="report-total-skipped" class="block font-mono text-2xl font-bold text-on-surface tabular-nums">
+                {{ reportData.skipped_count }}
+              </span>
+            </div>
+
+            <div class="p-4 sm:p-5 rounded-2xl bg-surface-container-lowest border border-surface-container space-y-1 shadow-2xs">
+              <span class="block text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+                {{ session.t('maintenance.report.totalCost') }}
+              </span>
+              <span data-testid="report-total-cost" class="block font-mono text-2xl font-bold text-on-surface tabular-nums">
+                {{ formatMoneyEur(reportData.total_cost) }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Empty State for Year with No Entries -->
+          <div
+            v-if="!reportData.tasks || reportData.tasks.length === 0"
+            data-testid="maintenance-report-empty"
+            class="py-16 text-center rounded-2xl bg-surface-container-lowest border border-surface-container space-y-3"
+          >
+            <div class="w-12 h-12 rounded-full bg-surface-container-low mx-auto flex items-center justify-center text-on-surface-variant">
+              <span class="material-symbols-outlined text-[24px]">event_busy</span>
+            </div>
+            <h3 class="font-bold text-sm text-on-surface">
+              {{ session.t('maintenance.report.emptyTitle', { year: reportData.year }) }}
+            </h3>
+            <p class="text-xs text-on-surface-variant max-w-sm mx-auto">
+              {{ session.t('maintenance.report.emptyDesc') }}
+            </p>
+          </div>
+
+          <!-- Per-Task Breakdown Table -->
+          <div
+            v-else
+            data-testid="maintenance-report-table"
+            class="bg-surface-container-lowest border border-surface-container rounded-2xl overflow-hidden shadow-2xs"
+          >
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="border-b border-surface-container bg-surface-container-low/60 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+                    <th class="px-4 py-3">{{ session.t('maintenance.report.tableTask') }}</th>
+                    <th class="px-4 py-3 text-right">{{ session.t('maintenance.report.tableDone') }}</th>
+                    <th class="px-4 py-3 text-right">{{ session.t('maintenance.report.tableSkipped') }}</th>
+                    <th class="px-4 py-3 text-right">{{ session.t('maintenance.report.tableCost') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-surface-container text-sm">
+                  <tr
+                    v-for="task in reportData.tasks"
+                    :key="task.task_id"
+                    :data-testid="`report-task-row-${task.task_id}`"
+                    class="hover:bg-surface-container-low/40 transition-colors"
+                  >
+                    <td class="px-4 py-3 font-semibold text-on-surface">
+                      <RouterLink
+                        v-if="canManageMaintenance"
+                        :to="`/maintenance/${task.task_id}`"
+                        :data-testid="`report-task-link-${task.task_id}`"
+                        class="hover:text-primary transition-colors"
+                      >
+                        {{ task.task_title }}
+                      </RouterLink>
+                      <span v-else :data-testid="`report-task-text-${task.task_id}`">
+                        {{ task.task_title }}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono tabular-nums text-on-surface">
+                      {{ task.done_count }}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono tabular-nums text-on-surface">
+                      {{ task.skipped_count }}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono tabular-nums font-semibold text-on-surface">
+                      {{ formatMoneyEur(task.total_cost) }}
+                    </td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr class="border-t border-surface-container-high bg-surface-container-low/70 text-sm font-bold text-on-surface">
+                    <td class="px-4 py-3">
+                      {{ session.t('maintenance.report.totalsRow', { year: reportData.year }) }}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono tabular-nums">
+                      {{ reportData.done_count }}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono tabular-nums">
+                      {{ reportData.skipped_count }}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono tabular-nums">
+                      {{ formatMoneyEur(reportData.total_cost) }}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </template>
+      </section>
+
+      <!-- Log Entries Tab Panel -->
+      <template v-else>
       <!-- Filters & Total Cost Bar -->
       <div class="bg-surface-container-lowest border border-surface-container rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xs">
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -448,6 +970,7 @@ onMounted(async () => {
           </div>
         </div>
       </div>
+      </template>
     </template>
 
     <!-- Edit Log Entry Modal (Board & Chairman only) -->

@@ -1,4 +1,5 @@
 import { createI18n } from 'vue-i18n'
+import { formatMonthName } from '../utils/dates.js'
 import en from './en.js'
 import et from './et.js'
 import ru from './ru.js'
@@ -96,8 +97,11 @@ export function localizeError(errorOrCode, payload = {}, lang) {
   payload = normalizedPayload
 
   let key = dict[errorCode] ? errorCode : 'DEFAULT'
-  if (errorCode === 'PASSWORD_TOO_WEAK' && payload?.reason) {
-    const reasonKey = `PASSWORD_TOO_WEAK_${String(payload.reason).toUpperCase()}`
+  if (
+    (errorCode === 'PASSWORD_TOO_WEAK' || errorCode === 'RATE_LIMITED') &&
+    payload?.reason
+  ) {
+    const reasonKey = `${errorCode}_${String(payload.reason).toUpperCase()}`
     if (dict[reasonKey]) {
       key = reasonKey
     }
@@ -130,10 +134,15 @@ export function localizeError(errorOrCode, payload = {}, lang) {
         : ` Error code: ${payload.trace_id}`
     : ''
 
+  const month = payload?.target_period_code
+    ? formatMonthName(payload.target_period_code, activeLocale)
+    : payload?.month || ''
+
   return i18n.global.t(
     `errors.${key}`,
     {
       ...payload,
+      month,
       seconds,
       minutes,
       previous_value: previousValue,

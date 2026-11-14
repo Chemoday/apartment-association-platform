@@ -7,7 +7,8 @@ import { getMyDashboard } from '@/api/endpoints/meters.js'
 import { listPosts } from '@/api/endpoints/communication.js'
 import { listIssues } from '@/api/endpoints/issues.js'
 import { listPolls } from '@/api/endpoints/governance.js'
-import { formatPeriodLabel } from '@/utils/dates.js'
+import { formatMonthName, formatPeriodLabel } from '@/utils/dates.js'
+import { summarizeNextSubmissions } from '@/utils/nextSubmission.js'
 import DashboardMetersSummary from './components/DashboardMetersSummary.vue'
 import DashboardLatestNotices from './components/DashboardLatestNotices.vue'
 import DashboardQuickActions from './components/DashboardQuickActions.vue'
@@ -88,13 +89,25 @@ watch(
 const apartments = computed(() => dashboardData.value?.apartments || [])
 const period = computed(() => dashboardData.value?.period || null)
 
+const submissionSummary = computed(() => summarizeNextSubmissions(apartments.value))
+
 const allMetersSubmitted = computed(() => {
-  if (!apartments.value.length) return false
-  return apartments.value.every((apt) => apt.meters.every((m) => m.reading !== null))
+  if (!apartments.value.length || !submissionSummary.value.total) return false
+  return submissionSummary.value.allSubmitted
 })
 
+const targetPeriodCode = computed(
+  () => submissionSummary.value.activePeriodCode || period.value?.period_code || null,
+)
+
 const periodLabel = computed(() =>
-  period.value ? formatPeriodLabel(period.value.period_code, session.lang) : 'October 2026',
+  targetPeriodCode.value ? formatPeriodLabel(targetPeriodCode.value, session.lang) : 'October 2026',
+)
+
+const quickActionMonthLabel = computed(() =>
+  targetPeriodCode.value
+    ? formatMonthName(targetPeriodCode.value, session.lang, { capitalize: true })
+    : periodLabel.value,
 )
 </script>
 
@@ -188,7 +201,7 @@ const periodLabel = computed(() =>
       <!-- Quick Action Shortcuts Bar -->
       <DashboardQuickActions
         :all-meters-submitted="allMetersSubmitted"
-        :period-label="periodLabel"
+        :period-label="quickActionMonthLabel"
       />
 
       <!-- 4 Focused Metric KPI Cards -->

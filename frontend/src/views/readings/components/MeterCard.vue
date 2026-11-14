@@ -14,9 +14,13 @@ import {
   resetAnomalyOnEdit,
   transitionOnReadingError,
 } from '@/utils/anomalyFlow.js'
+import { formatDate, formatMonthName } from '@/utils/dates.js'
+import { getFinalWarningMonths, resolveResidentFormContext } from '@/utils/nextSubmission.js'
 import { localizeError } from '@/locales/index.js'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
+import BaseButton from '@/components/base/BaseButton.vue'
+import BaseModal from '@/components/base/BaseModal.vue'
 import StatusChip from '@/components/domain/StatusChip.vue'
 import MeterCardAnomalyModal from './MeterCardAnomalyModal.vue'
 
@@ -37,21 +41,55 @@ const props = defineProps({
     type: Boolean,
     default: true,
   },
+  useNextSubmission: {
+    type: Boolean,
+    default: false,
+  },
+  preservedDraft: {
+    type: String,
+    default: null,
+  },
 })
 
-const emit = defineEmits(['saved', 'open-history', 'draft-change'])
+const emit = defineEmits(['saved', 'open-history', 'draft-change', 'wrong-period'])
 
 const session = useSessionStore()
 const { canSubmitAnyMeter } = useRole()
 
-const input = ref(props.meter.reading?.value || '')
+const formCtx = computed(() => resolveResidentFormContext(props.meter, props.useNextSubmission))
+const effectivePeriodCode = computed(() => formCtx.value.periodCode || props.periodCode)
+const effectivePreviousValue = computed(() =>
+  props.useNextSubmission ? formCtx.value.previousValue : props.meter.previous_value,
+)
+const effectiveAverageDelta = computed(() =>
+  props.useNextSubmission ? formCtx.value.averageDelta : props.meter.average_delta,
+)
+const effectiveReading = computed(() =>
+  props.useNextSubmission ? formCtx.value.reading : props.meter.reading,
+)
+
+const input = ref(
+  props.preservedDraft !== null ? props.preservedDraft : effectiveReading.value?.value || '',
+)
 const reason = ref('')
 const submitting = ref(false)
 const flow = ref(createAnomalyFlowState())
+const finalConfirmPending = ref(null) // { value: string, confirmationLevel: number } | null
 
 watch(
-  () => props.meter.reading?.value,
-  (newVal) => {
+  () => [props.preservedDraft, formCtx.value.periodCode, effectiveReading.value?.value],
+  ([draft, newPeriod, newVal], oldTuple) => {
+    if (draft !== null && draft !== undefined) {
+      input.value = draft
+      return
+    }
+    const prevPeriod = oldTuple?.[1]
+    if (props.useNextSubmission && newPeriod !== prevPeriod) {
+      input.value = newVal || ''
+      flow.value = createAnomalyFlowState()
+      finalConfirmPending.value = null
+      return
+    }
     if (newVal) {
       input.value = newVal
     }
@@ -59,6 +97,22 @@ watch(
 )
 
 const displayUnit = computed(() => (props.meter.unit === 'm3' ? 'm³' : props.meter.unit))
+
+const targetMonthTitle = computed(() => {
+  if (!props.useNextSubmission || !formCtx.value.periodCode) return ''
+  return formatMonthName(formCtx.value.periodCode, session.lang, { capitalize: true })
+})
+
+const formattedSubDueDate = computed(() => {
+  if (!formCtx.value.dueDate) return ''
+  return formatDate(formCtx.value.dueDate, session.lang)
+})
+
+const finalWarningMonths = computed(() =>
+  formCtx.value.periodCode
+    ? getFinalWarningMonths(formCtx.value.periodCode, session.lang)
+    : { prevMonth: '', nextMonth: '' },
+)
 
 const resourceLabel = computed(() => {
   switch (props.meter.resource_type) {
@@ -104,31 +158,36 @@ const resourceIconClass = computed(() => {
 // Live consumption delta computed via scaled BigInt
 const liveDelta = computed(() => {
   const normalized = normalizeMeterInput(input.value)
-  if (normalized !== null && props.meter.previous_value) {
-    return subtractMeterValues(normalized, props.meter.previous_value)
+  if (normalized !== null && effectivePreviousValue.value) {
+    return subtractMeterValues(normalized, effectivePreviousValue.value)
   }
-  return props.meter.reading?.consumption_delta || null
+  return effectiveReading.value?.consumption_delta || null
 })
 
 // Whether the current input matches the previous reading (resulting in 0.000 consumption)
 const isSameAsPrevious = computed(() => {
   const normalized = normalizeMeterInput(input.value)
-  if (normalized === null || !props.meter.previous_value) return false
-  return compareMeterValues(normalized, props.meter.previous_value) === 0
+  if (normalized === null || !effectivePreviousValue.value) return false
+  return compareMeterValues(normalized, effectivePreviousValue.value) === 0
 })
 
 // Board/Accountant changing an existing reading must provide a reason (REASON_REQUIRED)
 const needsReasonField = computed(
-  () => Boolean(props.meter.reading) && canSubmitAnyMeter.value,
+  () => Boolean(effectiveReading.value) && canSubmitAnyMeter.value,
 )
 
 const isLockedByBoardForResident = computed(
   () =>
-    props.meter.reading?.source === 'ADMIN_OVERRIDE' && !canSubmitAnyMeter.value,
+    effectiveReading.value?.source === 'ADMIN_OVERRIDE' && !canSubmitAnyMeter.value,
 )
 
 const isInputDisabled = computed(() => {
   if (!props.canSubmit) return true
+  if (props.useNextSubmission) {
+    if (!formCtx.value.hasForm) return true
+    if (isLockedByBoardForResident.value) return true
+    return false
+  }
   if (props.periodStatus === 'LOCKED') return true
   if (props.periodStatus !== 'OPEN_FOR_RESIDENTS' && !canSubmitAnyMeter.value) return true
   if (isLockedByBoardForResident.value) return true
@@ -143,17 +202,22 @@ const errorMessage = computed(() => {
       ...flow.value.apiError?.payload,
       previous_value:
         flow.value.apiError?.payload?.previous_value ||
-        `${props.meter.previous_value} ${displayUnit.value}`,
+        `${effectivePreviousValue.value} ${displayUnit.value}`,
     },
     session.lang,
   )
 })
 
+const historyReadingId = computed(
+  () => effectiveReading.value?.reading_id || props.meter.reading?.reading_id || '',
+)
+
 const meterStatus = computed(() => {
-  if (!props.meter.reading) return 'MISSING'
-  if (props.meter.reading.is_anomaly_confirmed) return 'ANOMALY_CONFIRMED'
-  if (props.meter.reading.source === 'ADMIN_OVERRIDE') return 'ADMIN_OVERRIDE'
-  if (props.meter.reading.source === 'AUTO_ESTIMATED') return 'AUTO_ESTIMATED'
+  const reading = effectiveReading.value
+  if (!reading) return 'MISSING'
+  if (reading.is_anomaly_confirmed) return 'ANOMALY_CONFIRMED'
+  if (reading.source === 'ADMIN_OVERRIDE') return 'ADMIN_OVERRIDE'
+  if (reading.source === 'AUTO_ESTIMATED') return 'AUTO_ESTIMATED'
   return 'SUBMITTED'
 })
 
@@ -162,6 +226,9 @@ function updateInputValue(nextVal) {
   // Editing the input while a popup is open cancels it; the next submit starts again at level 0
   if (flow.value.anomaly || flow.value.fieldError) {
     flow.value = resetAnomalyOnEdit(flow.value)
+  }
+  if (finalConfirmPending.value) {
+    finalConfirmPending.value = null
   }
   emit('draft-change', {
     meterId: props.meter.meter_id,
@@ -175,15 +242,47 @@ function handleInputEdit(event) {
 }
 
 function applyPreviousReading() {
-  if (isInputDisabled.value || submitting.value || !props.meter.previous_value) return
-  updateInputValue(props.meter.previous_value)
+  if (isInputDisabled.value || submitting.value || !effectivePreviousValue.value) return
+  updateInputValue(effectivePreviousValue.value)
 }
 
 function stepReadingByTenths(stepTenths) {
   if (isInputDisabled.value || submitting.value) return
-  const fallbackBase = props.meter.previous_value || props.meter.reading?.value || '0.000'
+  const fallbackBase =
+    effectivePreviousValue.value || effectiveReading.value?.value || '0.000'
   const nextVal = stepMeterValue(input.value, fallbackBase, stepTenths)
   updateInputValue(nextVal)
+}
+
+async function performSubmit(value, confirmationLevel) {
+  submitting.value = true
+  try {
+    const savedReading = await submitReading({
+      meter_id: props.meter.meter_id,
+      period_code: effectivePeriodCode.value,
+      value,
+      confirmation_level: confirmationLevel,
+      reason: reason.value.trim() || null,
+    })
+    flow.value = createAnomalyFlowState()
+    finalConfirmPending.value = null
+    input.value = savedReading.value
+    emit('saved', savedReading)
+  } catch (error) {
+    if (error?.errorCode === 'WRONG_PERIOD') {
+      flow.value = createAnomalyFlowState()
+      finalConfirmPending.value = null
+      emit('wrong-period', {
+        meterId: props.meter.meter_id,
+        targetPeriodCode: error.payload?.target_period_code || null,
+        draftValue: input.value,
+      })
+      return
+    }
+    flow.value = transitionOnReadingError(flow.value, error)
+  } finally {
+    submitting.value = false
+  }
 }
 
 async function submit(level = 0) {
@@ -201,27 +300,44 @@ async function submit(level = 0) {
     return
   }
 
-  submitting.value = true
-  try {
-    const savedReading = await submitReading({
-      meter_id: props.meter.meter_id,
-      period_code: props.periodCode,
+  if (props.useNextSubmission && formCtx.value.isFinal && level === 0) {
+    finalConfirmPending.value = {
       value: prep.value,
-      confirmation_level: prep.confirmationLevel,
-      reason: reason.value.trim() || null,
-    })
-    flow.value = createAnomalyFlowState()
-    input.value = savedReading.value
-    emit('saved', savedReading)
-  } catch (error) {
-    flow.value = transitionOnReadingError(flow.value, error)
-  } finally {
-    submitting.value = false
+      confirmationLevel: prep.confirmationLevel,
+    }
+    return
   }
+
+  await performSubmit(prep.value, prep.confirmationLevel)
+}
+
+async function confirmFinalSubmission() {
+  if (!finalConfirmPending.value || submitting.value) return
+  const pending = finalConfirmPending.value
+  finalConfirmPending.value = null
+  await performSubmit(pending.value, pending.confirmationLevel)
+}
+
+function cancelFinalSubmission() {
+  finalConfirmPending.value = null
 }
 
 function handleCancelAnomaly() {
   flow.value = resetAnomalyOnEdit(flow.value)
+}
+
+function handleEnter(e) {
+  submit(0)
+  if (typeof document !== 'undefined') {
+    const allInputs = Array.from(
+      document.querySelectorAll('input[id^="meter-input-"]:not([disabled])'),
+    )
+    const currentIndex = allInputs.indexOf(e.target)
+    if (currentIndex >= 0 && currentIndex < allInputs.length - 1) {
+      allInputs[currentIndex + 1].focus()
+      allInputs[currentIndex + 1].select()
+    }
+  }
 }
 
 defineExpose({
@@ -253,44 +369,109 @@ defineExpose({
         </div>
       </div>
 
+      <div
+        v-if="useNextSubmission && formCtx.hasForm"
+        class="flex flex-wrap items-center justify-between gap-1.5 py-1.5 px-2.5 mb-1.5 rounded-md text-xs"
+        :class="
+          formCtx.isFinal
+            ? 'bg-amber-100/90 text-amber-950 dark:bg-amber-950/50 dark:text-amber-200 border border-amber-300/70'
+            : 'bg-surface-container text-on-surface'
+        "
+      >
+        <div class="flex items-center gap-1.5 font-semibold">
+          <span class="material-symbols-outlined text-[15px]">calendar_today</span>
+          <span>{{ session.t('readings.meterCard.readingForMonth', { month: targetMonthTitle }) }}</span>
+          <span
+            v-if="formCtx.isFinal"
+            class="px-1.5 py-0.5 rounded bg-amber-200/90 dark:bg-amber-900 text-amber-950 dark:text-amber-100 text-[10px] font-bold uppercase tracking-wider"
+          >
+            {{ session.t('readings.meterCard.lateFinalBadge') }}
+          </span>
+        </div>
+        <span v-if="formattedSubDueDate" class="text-[11px] opacity-85 font-medium">
+          {{ session.t('readings.meterCard.dueBy', { date: formattedSubDueDate }) }}
+        </span>
+      </div>
+
+      <p
+        v-if="useNextSubmission && formCtx.hasForm && formCtx.isFinal"
+        class="text-[11px] text-amber-900 dark:text-amber-200 mb-1.5 leading-snug"
+      >
+        {{ session.t('readings.meterCard.finalWarningBody', finalWarningMonths) }}
+      </p>
+
       <div class="flex items-baseline justify-between py-1 text-on-surface-variant font-label-md text-label-md">
         <span>{{ session.t('readings.meterCard.previousReading') }}</span>
         <span class="font-mono tabular-nums text-on-surface font-medium">
-          {{ meter.previous_value }} {{ displayUnit }}
+          {{ effectivePreviousValue }} {{ displayUnit }}
         </span>
       </div>
 
       <div
-        v-if="meter.previous_delta || meter.average_delta"
+        v-if="meter.previous_delta || effectiveAverageDelta"
         class="flex flex-wrap items-center justify-between gap-2 pb-1 text-[11px] text-on-surface-variant border-b border-surface-container/60"
       >
         <span v-if="meter.previous_delta" class="font-mono tabular-nums">
           {{ session.t('readings.meterCard.lastMonth') }}
           <strong class="text-on-surface">+{{ meter.previous_delta }} {{ displayUnit }}</strong>
         </span>
-        <span v-if="meter.average_delta" class="font-mono tabular-nums">
+        <span v-if="effectiveAverageDelta" class="font-mono tabular-nums">
           {{ session.t('readings.meterCard.threeMoAvg') }}
-          <strong class="text-on-surface">{{ meter.average_delta }} {{ displayUnit }}</strong>
+          <strong class="text-on-surface">{{ effectiveAverageDelta }} {{ displayUnit }}</strong>
         </span>
       </div>
     </div>
 
+    <!-- Nothing to submit state when next_submission is null in resident mode -->
+    <div
+      v-if="useNextSubmission && !formCtx.hasForm"
+      class="p-3 rounded-lg bg-surface-container text-on-surface-variant text-xs flex items-start gap-2"
+    >
+      <span class="material-symbols-outlined text-[16px] shrink-0 mt-0.5">lock_clock</span>
+      <div>
+        <p class="font-semibold text-on-surface">
+          {{ session.t('readings.meterCard.nothingToSubmitTitle') }}
+        </p>
+        <p class="text-[11px] opacity-85 mt-0.5">
+          {{ session.t('readings.meterCard.nothingToSubmitDesc') }}
+        </p>
+      </div>
+    </div>
+
     <!-- Input Field -->
-    <div class="flex flex-col gap-1">
+    <div v-else class="flex flex-col gap-1">
       <div class="flex items-center justify-between gap-2 mb-0.5">
-        <label
-          :for="`meter-input-${meter.meter_id}`"
-          class="font-label-md text-label-md text-on-surface font-semibold"
-        >
-          {{ session.t('readings.meterCard.newReading') }}
-        </label>
+        <div class="flex items-center gap-2">
+          <label
+            :for="`meter-input-${meter.meter_id}`"
+            class="font-label-md text-label-md text-on-surface font-semibold"
+          >
+            {{ session.t('readings.meterCard.newReading') }}
+          </label>
+
+          <!-- Inline live consumption delta chip -->
+          <span
+            v-if="liveDelta !== null && !isInputDisabled"
+            class="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold inline-flex items-center gap-1 transition-all"
+            :class="
+              liveDelta.startsWith('-')
+                ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-200'
+                : isSameAsPrevious
+                  ? 'bg-surface-container-high text-on-surface-variant'
+                  : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200'
+            "
+          >
+            <span>{{ isSameAsPrevious ? '0.000' : formatSignedDelta(liveDelta) }}</span>
+            <span class="text-[10px] font-normal opacity-80">{{ displayUnit }}</span>
+          </span>
+        </div>
 
         <button
-          v-if="!isInputDisabled && meter.previous_value"
+          v-if="!isInputDisabled && effectivePreviousValue"
           type="button"
           :disabled="submitting"
           :aria-pressed="isSameAsPrevious"
-          :title="session.t('readings.meterCard.sameAsPreviousTooltip', { value: meter.previous_value, unit: displayUnit })"
+          :title="session.t('readings.meterCard.sameAsPreviousTooltip', { value: effectivePreviousValue, unit: displayUnit })"
           class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] leading-none transition-colors border cursor-pointer select-none disabled:opacity-50"
           :class="
             isSameAsPrevious
@@ -336,11 +517,11 @@ defineExpose({
             type="text"
             inputmode="decimal"
             :disabled="isInputDisabled || submitting"
-            :placeholder="meter.previous_value"
+            :placeholder="effectivePreviousValue"
             class="w-full h-11 px-3 pr-16 bg-surface-container-lowest border rounded-lg font-numeric-display tabular-nums text-lg text-on-surface font-semibold focus:outline-none focus:ring-2 focus:ring-primary shadow-2xs disabled:opacity-60 disabled:bg-surface-container"
             :class="flow.fieldError ? 'border-error focus:ring-error' : 'border-outline-variant'"
             @input="handleInputEdit"
-            @keydown.enter.prevent="submit(0)"
+            @keydown.enter.prevent="handleEnter"
             @keydown.up.prevent="stepReadingByTenths(1)"
             @keydown.down.prevent="stepReadingByTenths(-1)"
           />
@@ -444,7 +625,7 @@ defineExpose({
           :class="
             liveDelta.startsWith('-')
               ? 'text-error'
-              : meter.reading?.is_anomaly_confirmed
+              : effectiveReading?.is_anomaly_confirmed
                 ? 'text-error'
                 : 'text-secondary'
           "
@@ -455,15 +636,54 @@ defineExpose({
       </div>
 
       <button
-        v-if="meter.reading?.reading_id"
+        v-if="historyReadingId"
         type="button"
         class="text-xs text-on-surface-variant hover:text-on-surface inline-flex items-center gap-1 font-medium transition-colors"
-        @click="$emit('open-history', meter.reading.reading_id, `${resourceLabel} (${meter.location_label})`)"
+        @click="$emit('open-history', historyReadingId, `${resourceLabel} (${meter.location_label})`)"
       >
         <span class="material-symbols-outlined text-[15px]">history</span>
         <span>{{ session.t('readings.meterCard.history') }}</span>
       </button>
     </div>
+
+    <!-- Late Final Reading Confirmation Modal -->
+    <BaseModal
+      :open="Boolean(finalConfirmPending)"
+      :title="session.t('readings.meterCard.finalWarningTitle')"
+      :subtitle="`${resourceLabel} • ${meter.location_label || meter.serial_number || ''}`"
+      max-width="max-w-md"
+      @close="cancelFinalSubmission"
+    >
+      <template #icon>
+        <div class="w-9 h-9 rounded-lg bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200 flex items-center justify-center shrink-0">
+          <span class="material-symbols-outlined text-[20px]">event_busy</span>
+        </div>
+      </template>
+
+      <div class="space-y-3">
+        <p class="font-body-sm text-body-sm text-on-surface leading-relaxed">
+          {{ session.t('readings.meterCard.finalWarningBody', finalWarningMonths) }}
+        </p>
+        <div
+          v-if="finalConfirmPending"
+          class="p-3 rounded-xl bg-surface-container-low border border-surface-container flex items-center justify-between text-xs"
+        >
+          <span class="text-on-surface-variant">{{ session.t('readings.meterCard.newReading') }}</span>
+          <strong class="font-mono text-sm text-on-surface">
+            {{ finalConfirmPending.value }} {{ displayUnit }}
+          </strong>
+        </div>
+      </div>
+
+      <template #footer>
+        <BaseButton variant="secondary" :disabled="submitting" @click="cancelFinalSubmission">
+          {{ session.t('common.cancel') }}
+        </BaseButton>
+        <BaseButton variant="primary" :loading="submitting" @click="confirmFinalSubmission">
+          {{ session.t('readings.meterCard.finalConfirmBtn', finalWarningMonths) }}
+        </BaseButton>
+      </template>
+    </BaseModal>
 
     <!-- Two-Popup Anomaly Confirmation Modal (child of MeterCard only) -->
     <MeterCardAnomalyModal

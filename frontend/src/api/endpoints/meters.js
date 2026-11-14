@@ -3,10 +3,11 @@ import { apiRequest } from '../client.js'
 /**
  * List all billing periods of the building, newest first.
  * Added in PR #31 (GET /api/v1/meters/periods).
+ * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<import('../schema').PeriodDTO[]>}
  */
-export async function listPeriods() {
-  const res = await apiRequest('/meters/periods')
+export async function listPeriods({ signal } = {}) {
+  const res = await apiRequest('/meters/periods', signal ? { signal } : {})
   if (Array.isArray(res)) return res
   if (res && Array.isArray(res.periods)) return res.periods
   return []
@@ -48,8 +49,11 @@ export function getReadingHistory(readingId) {
  * @param {string} periodCode
  * @returns {Promise<import('../schema').MatrixResponse>}
  */
-export function getPeriodMatrix(periodCode) {
-  return apiRequest(`/meters/periods/${encodeURIComponent(periodCode)}/matrix`)
+export function getPeriodMatrix(periodCode, { signal } = {}) {
+  return apiRequest(
+    `/meters/periods/${encodeURIComponent(periodCode)}/matrix`,
+    signal ? { signal } : {},
+  )
 }
 
 /**
@@ -94,5 +98,39 @@ export function exportPeriodCsv(periodCode) {
  */
 export function getApartmentReadings(apartmentId) {
   return apiRequest(`/meters/apartments/${encodeURIComponent(apartmentId)}/readings`)
+}
+
+/**
+ * Get one apartment's monthly consumption chart series (oldest first).
+ * @param {string} apartmentId
+ * @param {number | string} [months=12] - 1..24
+ * @param {{ signal?: AbortSignal }} [options]
+ * @returns {Promise<import('../schema').ApartmentConsumptionResponse>}
+ */
+export function getApartmentConsumption(apartmentId, months = 12, { signal } = {}) {
+  const query =
+    months !== undefined && months !== null && String(months).trim() !== ''
+      ? `?months=${encodeURIComponent(String(months))}`
+      : ''
+  const requestOptions = signal ? { signal } : {}
+  return apiRequest(
+    `/meters/apartments/${encodeURIComponent(apartmentId)}/consumption${query}`,
+    requestOptions,
+  )
+}
+
+/**
+ * Get whole-building monthly consumption totals and averages for staff (CHAIRMAN, BOARD, ACCOUNTANT).
+ * @param {number | string} [months=12] - 1..24
+ * @param {{ signal?: AbortSignal }} [options]
+ * @returns {Promise<import('../schema').BuildingConsumptionResponse>}
+ */
+export function getBuildingConsumption(months = 12, { signal } = {}) {
+  const query =
+    months !== undefined && months !== null && String(months).trim() !== ''
+      ? `?months=${encodeURIComponent(String(months))}`
+      : ''
+  const requestOptions = signal ? { signal } : {}
+  return apiRequest(`/meters/consumption${query}`, requestOptions)
 }
 

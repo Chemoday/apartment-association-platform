@@ -539,7 +539,7 @@ watch(
             </div>
 
             <p class="text-xs text-on-surface-variant line-clamp-2 mb-2.5">
-              {{ thread.body }}
+              {{ thread.body ?? '' }}
             </p>
 
             <div class="flex items-center justify-between gap-2 pt-2 border-t border-surface-container text-xs">
@@ -618,18 +618,19 @@ watch(
             </div>
 
             <div class="text-sm text-on-surface whitespace-pre-line leading-relaxed">
-              {{ selectedThreadDetail.body }}
+              {{ selectedThreadDetail.body ?? '' }}
             </div>
 
             <!-- Replies & Comment Composer -->
             <div class="pt-4 border-t border-surface-container space-y-4">
               <h3 class="text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                {{ session.t('messages.repliesHeading') }} ({{ selectedThreadDetail.comments?.length ?? 0 }})
+                {{ session.t('messages.repliesHeading') }} ({{ selectedThreadDetail.comments_count ?? selectedThreadDetail.comments?.length ?? 0 }})
               </h3>
 
               <CommentList :comments="selectedThreadDetail.comments || []" />
 
               <CommentComposer
+                :key="selectedThreadDetail.id"
                 :post-id="selectedThreadDetail.id"
                 :disabled="false"
                 :omit-author-apartment="true"

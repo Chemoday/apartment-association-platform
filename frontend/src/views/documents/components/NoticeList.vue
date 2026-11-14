@@ -57,6 +57,17 @@ const session = useSessionStore()
             <span class="text-xs font-mono text-on-surface-variant">
               {{ formatDateTime(notice.created_at, session.lang) }}
             </span>
+            <span
+              v-if="notice.edited_at"
+              class="text-xs text-on-surface-variant italic underline decoration-dotted cursor-help"
+              :title="
+                session.t('forum.editedAtTooltip', {
+                  time: formatDateTime(notice.edited_at, session.lang),
+                })
+              "
+            >
+              {{ session.t('forum.editedLabel') }}
+            </span>
             <AuthorBadge
               v-if="notice.author_badge"
               :badge="notice.author_badge"
@@ -71,7 +82,7 @@ const session = useSessionStore()
             {{ notice.title }}
           </h3>
           <p class="text-xs text-on-surface-variant line-clamp-2">
-            {{ notice.body }}
+            {{ notice.body ?? '' }}
           </p>
         </div>
 
