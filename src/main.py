@@ -35,6 +35,8 @@ from src.modules.auth.mail import auth_catalog
 from src.modules.auth.passwords import PasswordHashing
 from src.modules.auth.policies import validate_auth_settings
 from src.modules.auth.router import router as auth_router
+from src.modules.chat.purge import run_purge_loop as run_chat_purge_loop
+from src.modules.chat.router import router as chat_router
 from src.modules.communication.router import router as communication_router
 from src.modules.documents.router import router as documents_router
 from src.modules.governance.router import router as governance_router
@@ -112,6 +114,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 run_cleanup_loop(lambda: app.state.auth_session_factory), name="auth-cleanup"
             )
         )
+    if settings.CHAT_PURGE_ENABLED:
+        loops.append(
+            asyncio.create_task(
+                run_chat_purge_loop(lambda: app.state.chat_session_factory), name="chat-purge"
+            )
+        )
     await app.state.auth_passwords.warm_up()  # the dummy hash for unknown e-mails
     yield
     await app.state.auth_background.drain(
@@ -138,6 +146,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     # Read on every tick, so tests can swap the factory after create_app.
     app.state.auth_session_factory = async_session_factory
+    app.state.chat_session_factory = async_session_factory  # the chat purge; tests swap it
     app.include_router(property_router)
     app.include_router(meters_router)
     app.include_router(communication_router)
@@ -147,6 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(issues_router)
     app.include_router(maintenance_router)
     app.include_router(documents_router)
+    app.include_router(chat_router)
     # Posts go out even without notifications; the factory is read on every tick (tests swap it).
     app.state.maintenance_session_factory = async_session_factory
     app.state.maintenance_publisher = Publisher(
