@@ -1,7 +1,8 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
-import { formatRelativeTime } from '@/utils/dates.js'
+import { formatDateTime, formatRelativeTime } from '@/utils/dates.js'
+import BaseChip from '@/components/base/BaseChip.vue'
 
 defineProps({
   topics: {
@@ -72,6 +73,10 @@ const session = useSessionStore()
             >
               {{ session.t(`forum.categories.${topic.category}`) }}
             </span>
+            <BaseChip v-if="topic.hidden_at" tone="warning">
+              <span class="material-symbols-outlined text-[12px] mr-0.5" aria-hidden="true">visibility_off</span>
+              <span>{{ session.t('forum.hiddenTopicBadge') }}</span>
+            </BaseChip>
             <span class="text-xs text-on-surface-variant">
               {{ topic.author_badge?.display_label || 'Neighbor' }}
             </span>
@@ -79,9 +84,23 @@ const session = useSessionStore()
             <span class="text-xs text-on-surface-variant">
               {{ formatRelativeTime(topic.created_at, session.lang) }}
             </span>
+            <span
+              v-if="topic.edited_at"
+              class="text-xs text-on-surface-variant italic underline decoration-dotted cursor-help"
+              :title="
+                session.t('forum.editedAtTooltip', {
+                  time: formatDateTime(topic.edited_at, session.lang),
+                })
+              "
+            >
+              {{ session.t('forum.editedLabel') }}
+            </span>
           </div>
 
-          <h3 class="text-sm font-semibold text-on-surface group-hover:text-primary transition-colors truncate">
+          <h3
+            class="text-sm font-semibold group-hover:text-primary transition-colors truncate"
+            :class="topic.hidden_at ? 'text-on-surface-variant' : 'text-on-surface'"
+          >
             {{ topic.title }}
           </h3>
         </div>
@@ -91,7 +110,7 @@ const session = useSessionStore()
             class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface font-label-md text-xs font-semibold"
           >
             <span class="material-symbols-outlined text-[14px]" aria-hidden="true">chat_bubble</span>
-            <span>{{ session.t('dashboard.commentsCount', { count: topic.comments?.length || 0 }) }}</span>
+            <span>{{ session.t('dashboard.commentsCount', { count: topic.comments_count ?? topic.comments?.length ?? 0 }) }}</span>
           </span>
           <span class="material-symbols-outlined text-[16px] text-on-surface-variant group-hover:translate-x-0.5 transition-transform" aria-hidden="true">
             chevron_right

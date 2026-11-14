@@ -60,7 +60,11 @@ const hasApartment = computed(() => (session.memberships?.length || 0) > 0)
             {{ session.t('dashboard.quickActionSubmitReadings') }}
           </div>
           <p class="text-[11px] text-on-surface-variant truncate mt-0.5">
-            {{ session.t('dashboard.quickActionSubmitReadingsSub') }}
+            {{
+              hasApartment && periodLabel
+                ? session.t('dashboard.quickActionReadingForMonth', { month: periodLabel })
+                : session.t('dashboard.quickActionSubmitReadingsSub')
+            }}
           </p>
         </div>
       </button>

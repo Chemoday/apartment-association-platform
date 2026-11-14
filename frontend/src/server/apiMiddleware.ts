@@ -29,13 +29,20 @@ import {
   validateAndApplySettingsUpdate,
 } from '../utils/associationSettings.js';
 import {
+  MAX_ISSUE_PHOTO_BYTES,
+  MAX_ISSUE_PHOTOS,
+  addIssuePhotoInStore,
   buildIssueReportedNotification,
   canUserAccessIssues,
   changeIssueStatusInStore,
+  checkIssuePhotoUploadPreflight,
   clearIssueUrgentInStore,
   createDefaultIssuesSeed,
   createIssueInStore,
+  deleteIssuePhotoInStore,
   editIssueInStore,
+  getIssuePhotoFromStore,
+  isIssueOpen,
   isIssueVisibleToUser,
   queryIssuesStore,
   readSettingFromStore,
@@ -44,9 +51,27 @@ import {
   withdrawIssueInStore,
 } from '../utils/issues.js';
 import {
+  MAX_DOCUMENT_BYTES,
+  addDocumentInStore,
+  checkDocumentUploadPreflight,
+  createDefaultDocumentsSeed,
+  deleteDocumentInStore,
+  editDocumentInStore,
+  getDocumentFileFromStore,
+  getDocumentFromStore,
+  getUploadOptionsForUser,
+  queryDocumentsStore,
+} from '../utils/documents.js';
+import {
+  computeStorageUsage,
+  evaluateStorageThresholdNotification,
+} from '../utils/storage.js';
+import {
   applyLogEditInStore,
   applyTaskDoneInStore,
   applyTaskSkipInStore,
+  buildMaintenanceYearCsv,
+  buildMaintenanceYearReport,
   computeOccurrenceState,
   createDefaultMaintenanceLogSeed,
   createDefaultMaintenanceSeed,
@@ -58,6 +83,25 @@ import {
   toTaskView,
   validateTaskDraft,
 } from '../utils/maintenance.js';
+import {
+  COMMENT_BODY_MAX_LENGTH,
+  POST_BODY_MAX_LENGTH,
+  POST_TITLE_MAX_LENGTH,
+  canViewerSeePost,
+  getEditWindowDeadlineMs,
+  hasDisallowedControlChars,
+  isCommentHideableOnPost,
+  isPostHideable,
+  isWithinEditWindow,
+  projectCommentForViewer,
+  validateCommentEdit,
+  validateHideReason,
+} from '../utils/communication.js';
+import {
+  buildApartmentConsumptionResponse,
+  buildBuildingConsumptionResponse,
+  parseConsumptionMonths,
+} from '../utils/consumption.js';
 
 const BUILDING_ID = '018f0000-0000-7000-8000-000000000001';
 
@@ -584,6 +628,85 @@ for (const histCode of ['2026-09', '2026-08', '2026-07']) {
   masterMetersByPeriod[histCode] = JSON.parse(JSON.stringify(masterMetersByPeriod['2026-10']));
 }
 
+// Populate current period 2026-11 based on 2026-10 readings (leave reading: null for residents to submit)
+apartmentsByPeriod['2026-11'] = JSON.parse(JSON.stringify(apartmentsByPeriod['2026-10'])).map(
+  (apt: InternalApartment) => ({
+    ...apt,
+    can_submit_readings: true,
+    meters: apt.meters.map((m) => ({
+      ...m,
+      previous_value: m.reading ? m.reading.value : m.previous_value,
+      reading: null,
+    })),
+  })
+);
+masterMetersByPeriod['2026-11'] = JSON.parse(JSON.stringify(masterMetersByPeriod['2026-10'])).map(
+  (mm: MasterMeterRow) => ({
+    ...mm,
+    previous_value: mm.reading ? mm.reading.value : mm.previous_value,
+    status: 'MISSING',
+    reading: null,
+  })
+);
+
+const INITIAL_APARTMENTS_BY_PERIOD_SNAPSHOT = JSON.stringify(apartmentsByPeriod);
+const INITIAL_MASTER_METERS_BY_PERIOD_SNAPSHOT = JSON.stringify(masterMetersByPeriod);
+
+function findMeterInPeriod(periodCode: string, meterId: string): InternalMeter | null {
+  const apts = apartmentsByPeriod[periodCode] || [];
+  for (const apt of apts) {
+    const m = apt.meters.find((item) => item.meter_id === meterId);
+    if (m) return m;
+  }
+  return null;
+}
+
+function computeMeterNextSubmission(
+  meterId: string,
+  aptCanSubmit: boolean,
+  membershipCanSubmit: boolean
+): {
+  period_code: string;
+  due_date: string;
+  final: boolean;
+  previous_value: string;
+  average_delta: string | null;
+  reading: ReadingSummary | null;
+} | null {
+  if (!aptCanSubmit || !membershipCanSubmit) return null;
+  const pPrev = periodsMap['2026-10'];
+  const pCurr = periodsMap['2026-11'];
+  const mPrev = findMeterInPeriod('2026-10', meterId);
+  const mCurr = findMeterInPeriod('2026-11', meterId);
+
+  const hasSubmittedPrev = Boolean(mPrev?.reading && mPrev.reading.source !== 'AUTO_ESTIMATED');
+  const hasAnyCurr = Boolean(mCurr?.reading);
+
+  if (pPrev && pPrev.status === 'OPEN_FOR_RESIDENTS' && mPrev && !hasSubmittedPrev && !hasAnyCurr) {
+    return {
+      period_code: pPrev.period_code,
+      due_date: pPrev.due_date,
+      final: true,
+      previous_value: mPrev.previous_value,
+      average_delta: mPrev.historical_avg,
+      reading: null,
+    };
+  }
+
+  if (pCurr && pCurr.status === 'OPEN_FOR_RESIDENTS' && mCurr) {
+    return {
+      period_code: pCurr.period_code,
+      due_date: pCurr.due_date,
+      final: false,
+      previous_value: mCurr.previous_value,
+      average_delta: mCurr.historical_avg,
+      reading: mCurr.reading ? { ...mCurr.reading } : null,
+    };
+  }
+
+  return null;
+}
+
 const historyStore: Record<string, { meter_id: string; period_code: string; entries: HistoryEntry[] }> = {
   '018f0000-0000-7000-8000-000000000901': {
     meter_id: '018f0000-0000-7000-8000-000000000514',
@@ -611,6 +734,10 @@ interface InternalComment {
   author_user_id: string;
   author_apartment_id: string | null;
   created_at: string;
+  edited_at: string | null;
+  hidden_at: string | null;
+  hidden_reason: string | null;
+  hidden_by_user_id?: string | null;
 }
 
 interface InternalPost {
@@ -627,204 +754,332 @@ interface InternalPost {
   is_active: boolean;
   comments_enabled: boolean;
   created_at: string;
+  edited_at: string | null;
+  hidden_at: string | null;
+  hidden_reason: string | null;
+  hidden_by_user_id?: string | null;
   acknowledged_by: Record<string, string>;
   comments: InternalComment[];
   origin?: PostOrigin | null;
 }
 
-const postsStore: InternalPost[] = [
-  {
-    id: '018f0000-0000-7000-8000-000000000701',
-    post_type: 'EMERGENCY',
-    category: 'WATER_SHUTOFF',
-    title: 'Basement Heating Valve Pressure Drop (Stairwell B)',
-    body: 'Pressure sensor in Stairwell B heat exchanger dropped from 2.4 bar to 1.6 bar. Technician is on site inspecting the expansion vessel.',
-    author_user_id: '018f0000-0000-7000-8000-000000000101',
-    author_apartment_id: '018f0000-0000-7000-8000-000000000301',
-    target_scope: 'ALL_BUILDING',
-    target_entrance: null,
-    target_apartment_ids: null,
-    is_active: true,
-    comments_enabled: true,
-    created_at: '2026-10-25T08:15:00Z',
-    acknowledged_by: {},
-    comments: [],
-  },
-  {
-    id: '018f0000-0000-7000-8000-000000000601',
-    post_type: 'OFFICIAL_NOTICE',
-    category: 'GENERAL',
-    title: 'October 2026 Utility Meter Submission & Courtyard Maintenance',
-    body: 'Dear residents of Sõpruse pst 12,\n\nPlease submit all October 2026 cold and hot water readings by November 4 at 23:59. Unsubmitted meters will be automatically estimated from your 3-month rolling average.\n\nAdditionally, autumn courtyard leaf clearing and underground garage drain flushing will take place on Saturday, November 7 from 09:00 to 14:00.',
-    author_user_id: '018f0000-0000-7000-8000-000000000101',
-    author_apartment_id: '018f0000-0000-7000-8000-000000000301',
-    target_scope: 'ALL_BUILDING',
-    target_entrance: null,
-    target_apartment_ids: null,
-    is_active: true,
-    comments_enabled: true,
-    created_at: '2026-10-23T11:00:00Z',
-    acknowledged_by: {},
-    comments: [
-      {
-        id: '018f0000-0000-7000-8000-000000000651',
-        post_id: '018f0000-0000-7000-8000-000000000601',
-        body: 'Thank you Peeter! Should cars be moved out of the courtyard parking spots before 08:45 on Saturday?',
-        author_user_id: '018f0000-0000-7000-8000-000000000102',
-        author_apartment_id: '018f0000-0000-7000-8000-000000000314',
-        created_at: '2026-10-23T13:20:00Z',
-      },
-      {
-        id: '018f0000-0000-7000-8000-000000000652',
-        post_id: '018f0000-0000-7000-8000-000000000601',
-        body: 'Yes, please clear the courtyard bays by 08:45 so the maintenance vehicle can access all corners.',
-        author_user_id: '018f0000-0000-7000-8000-000000000101',
-        author_apartment_id: '018f0000-0000-7000-8000-000000000301',
-        created_at: '2026-10-23T14:05:00Z',
-      },
-    ],
-  },
-  {
-    id: '018f0000-0000-7000-8000-000000000602',
-    post_type: 'FORUM_TOPIC',
-    category: 'MAINTENANCE',
-    title: 'Bicycle Storage Rack Expansion in Ground Floor Room #2',
-    body: 'Several families on the 3rd and 4th floors proposed installing vertical wall-mounted bike hooks in the secondary storage room. Total quote for 12 heavy-duty hooks is 480 EUR from the maintenance fund.',
-    author_user_id: '018f0000-0000-7000-8000-000000000102',
-    author_apartment_id: '018f0000-0000-7000-8000-000000000314',
-    target_scope: 'ALL_BUILDING',
-    target_entrance: null,
-    target_apartment_ids: null,
-    is_active: true,
-    comments_enabled: true,
-    created_at: '2026-10-20T17:30:00Z',
-    acknowledged_by: {},
-    comments: [
-      {
-        id: '018f0000-0000-7000-8000-000000000653',
-        post_id: '018f0000-0000-7000-8000-000000000602',
-        body: 'We have sufficient allocation in the Q4 minor improvements budget line to cover 480 EUR without affecting the reserve fund.',
-        author_user_id: '018f0000-0000-7000-8000-000000000103',
-        author_apartment_id: null,
-        created_at: '2026-10-21T09:15:00Z',
-      },
-    ],
-  },
-  {
-    id: '018f0000-0000-7000-8000-000000000603',
-    post_type: 'OFFICIAL_NOTICE',
-    category: 'MAINTENANCE',
-    title: 'District Heating Substation Winter Calibration Completed',
-    body: 'Utilitas Tallinn completed the scheduled diagnostic check of our primary heating substation. Efficiency is within 99.1% of nominal specification and night-time setback curve has been calibrated.',
-    author_user_id: '018f0000-0000-7000-8000-000000000101',
-    author_apartment_id: '018f0000-0000-7000-8000-000000000301',
-    target_scope: 'ALL_BUILDING',
-    target_entrance: null,
-    target_apartment_ids: null,
-    is_active: true,
-    comments_enabled: true,
-    created_at: '2026-10-15T10:00:00Z',
-    acknowledged_by: {},
-    comments: [],
-  },
-  {
-    id: '018f0000-0000-7000-8000-000000000751',
-    post_type: 'APARTMENT_THREAD',
-    category: 'MAINTENANCE',
-    title: 'Access to the cold water meter in apartment 14',
-    body: 'Hello! Could we arrange a 10-minute inspection of the bathroom cold water meter seal this Thursday between 17:00 and 19:00?',
-    author_user_id: '018f0000-0000-7000-8000-000000000101',
-    author_apartment_id: null,
-    target_scope: 'APARTMENT_LIST',
-    target_entrance: null,
-    target_apartment_ids: ['018f0000-0000-7000-8000-000000000314'],
-    is_active: true,
-    comments_enabled: true,
-    created_at: '2026-10-24T10:15:00Z',
-    acknowledged_by: {},
-    comments: [
-      {
-        id: '018f0000-0000-7000-8000-000000000752',
-        post_id: '018f0000-0000-7000-8000-000000000751',
-        body: 'Thursday at 18:00 works well for us. See you then!',
-        author_user_id: '018f0000-0000-7000-8000-000000000102',
-        author_apartment_id: null,
-        created_at: '2026-10-24T12:40:00Z',
-      },
-    ],
-  },
-  {
-    id: '018f0000-0000-7000-8000-000000000761',
-    post_type: 'BOARD_TOPIC',
-    category: 'GENERAL',
-    title: 'Where the keys to the basement and the roof are',
-    body: 'The spare set of keys to the basement technical room, district heating node, and roof hatch is stored in the locked fire-rated cabinet in Entrance 1 utility room. The combination was shared at the October board meeting.',
-    author_user_id: '018f0000-0000-7000-8000-000000000101',
-    author_apartment_id: null,
-    target_scope: 'ALL_BUILDING',
-    target_entrance: null,
-    target_apartment_ids: null,
-    is_active: true,
-    comments_enabled: true,
-    created_at: '2026-10-25T11:30:00Z',
-    acknowledged_by: {},
-    comments: [
-      {
-        id: '018f0000-0000-7000-8000-000000000762',
-        post_id: '018f0000-0000-7000-8000-000000000761',
-        body: 'Confirmed — I also labelled the roof hatch key and the main water shut-off valve key on the yellow tag.',
-        author_user_id: '018f0000-0000-7000-8000-000000000105',
-        author_apartment_id: null,
-        created_at: '2026-10-25T14:20:00Z',
-      },
-    ],
-  },
-  {
-    id: '018f0000-0000-7000-8000-000000000604',
-    post_type: 'OFFICIAL_NOTICE',
-    origin: 'MAINTENANCE',
-    category: 'MAINTENANCE',
-    title: 'Annual Fire Extinguisher Inspection',
-    body: 'Inspector will check all stairwell and common area fire safety equipment. No access to individual flats needed.\n\nPlanned date: 2026-11-05',
-    author_user_id: '018f0000-0000-7000-8000-000000000101',
-    author_apartment_id: '018f0000-0000-7000-8000-000000000301',
-    target_scope: 'ALL_BUILDING',
-    target_entrance: null,
-    target_apartment_ids: null,
-    is_active: true,
-    comments_enabled: false,
-    created_at: '2026-10-25T09:00:00Z',
-    acknowledged_by: {},
-    comments: [],
-  },
-  {
-    id: '018f0000-0000-7000-8000-000000000763',
-    post_type: 'BOARD_TOPIC',
-    origin: 'MAINTENANCE',
-    category: 'MAINTENANCE',
-    title: 'Maintenance: Inspect fire extinguishers, overdue since 05.11.2026',
-    body: 'Basement, technical rooms, and all 4 landings in both entrances. Certified technician needed.',
-    author_user_id: '018f0000-0000-7000-8000-000000000101',
-    author_apartment_id: null,
-    target_scope: 'ALL_BUILDING',
-    target_entrance: null,
-    target_apartment_ids: null,
-    is_active: true,
-    comments_enabled: true,
-    created_at: '2026-10-25T09:00:00Z',
-    acknowledged_by: {},
-    comments: [
-      {
-        id: '018f0000-0000-7000-8000-000000000764',
-        post_id: '018f0000-0000-7000-8000-000000000763',
-        body: 'Still not done: overdue since 05.11.2026 (reminder 1)',
-        author_user_id: '018f0000-0000-7000-8000-000000000101',
-        author_apartment_id: null,
-        created_at: '2026-11-06T09:00:00Z',
-      },
-    ],
-  },
-];
+function createDefaultServerPosts(): InternalPost[] {
+  const nowMs = Date.now();
+  const twoHoursAgoIso = new Date(nowMs - 2 * 60 * 60 * 1000).toISOString();
+  const ninetyMinAgoIso = new Date(nowMs - 90 * 60 * 1000).toISOString();
+  const fortyFiveMinAgoIso = new Date(nowMs - 45 * 60 * 1000).toISOString();
+  return [
+    {
+      id: '018f0000-0000-7000-8000-000000000606',
+      post_type: 'FORUM_TOPIC',
+      category: 'GENERAL',
+      title: 'Weekend courtyard bench repainting helpers',
+      body: 'We have two cans of weatherproof timber oil left in the shed. Anyone free on Sunday at 11:00 to help coat the courtyard benches before the rain?',
+      author_user_id: '018f0000-0000-7000-8000-000000000102',
+      author_apartment_id: '018f0000-0000-7000-8000-000000000314',
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: twoHoursAgoIso,
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [
+        {
+          id: '018f0000-0000-7000-8000-000000000655',
+          post_id: '018f0000-0000-7000-8000-000000000606',
+          body: 'I can bring sandpaper and extra brushes from the utility room.',
+          author_user_id: '018f0000-0000-7000-8000-000000000101',
+          author_apartment_id: '018f0000-0000-7000-8000-000000000301',
+          created_at: ninetyMinAgoIso,
+          edited_at: null,
+          hidden_at: null,
+          hidden_reason: null,
+        },
+        {
+          id: '018f0000-0000-7000-8000-000000000656',
+          post_id: '018f0000-0000-7000-8000-000000000606',
+          body: 'Thank you Peeter! I will also pick up masking tape tomorrow morning.',
+          author_user_id: '018f0000-0000-7000-8000-000000000102',
+          author_apartment_id: '018f0000-0000-7000-8000-000000000314',
+          created_at: fortyFiveMinAgoIso,
+          edited_at: null,
+          hidden_at: null,
+          hidden_reason: null,
+        },
+      ],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000701',
+      post_type: 'EMERGENCY',
+      category: 'WATER_SHUTOFF',
+      title: 'Basement Heating Valve Pressure Drop (Stairwell B)',
+      body: 'Pressure sensor in Stairwell B heat exchanger dropped from 2.4 bar to 1.6 bar. Technician is on site inspecting the expansion vessel.',
+      author_user_id: '018f0000-0000-7000-8000-000000000101',
+      author_apartment_id: '018f0000-0000-7000-8000-000000000301',
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-25T08:15:00Z',
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000601',
+      post_type: 'OFFICIAL_NOTICE',
+      category: 'GENERAL',
+      title: 'October 2026 Utility Meter Submission & Courtyard Maintenance',
+      body: 'Dear residents of Sõpruse pst 12,\n\nPlease submit all October 2026 cold and hot water readings by November 4 at 23:59. Unsubmitted meters will be automatically estimated from your 3-month rolling average.\n\nAdditionally, autumn courtyard leaf clearing and underground garage drain flushing will take place on Saturday, November 7 from 09:00 to 14:00.',
+      author_user_id: '018f0000-0000-7000-8000-000000000101',
+      author_apartment_id: '018f0000-0000-7000-8000-000000000301',
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-23T11:00:00Z',
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [
+        {
+          id: '018f0000-0000-7000-8000-000000000651',
+          post_id: '018f0000-0000-7000-8000-000000000601',
+          body: 'Thank you Peeter! Should cars be moved out of the courtyard parking spots before 08:45 on Saturday?',
+          author_user_id: '018f0000-0000-7000-8000-000000000102',
+          author_apartment_id: '018f0000-0000-7000-8000-000000000314',
+          created_at: '2026-10-23T13:20:00Z',
+          edited_at: null,
+          hidden_at: null,
+          hidden_reason: null,
+        },
+        {
+          id: '018f0000-0000-7000-8000-000000000652',
+          post_id: '018f0000-0000-7000-8000-000000000601',
+          body: 'Yes, please clear the courtyard bays by 08:45 so the maintenance vehicle can access all corners.',
+          author_user_id: '018f0000-0000-7000-8000-000000000101',
+          author_apartment_id: '018f0000-0000-7000-8000-000000000301',
+          created_at: '2026-10-23T14:05:00Z',
+          edited_at: null,
+          hidden_at: null,
+          hidden_reason: null,
+        },
+      ],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000605',
+      post_type: 'FORUM_TOPIC',
+      category: 'MARKETPLACE',
+      title: 'Commercial courier discount code spam',
+      body: 'Use my referral link every day for commercial deliveries and promotional flyers in every mailbox.',
+      author_user_id: '018f0000-0000-7000-8000-000000000104',
+      author_apartment_id: '018f0000-0000-7000-8000-000000000302',
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-22T15:00:00Z',
+      edited_at: null,
+      hidden_at: '2026-10-22T16:15:00Z',
+      hidden_reason: 'Commercial advertising is not allowed in the building forum.',
+      acknowledged_by: {},
+      comments: [],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000602',
+      post_type: 'FORUM_TOPIC',
+      category: 'MAINTENANCE',
+      title: 'Bicycle Storage Rack Expansion in Ground Floor Room #2',
+      body: 'Several families on the 3rd and 4th floors proposed installing vertical wall-mounted bike hooks in the secondary storage room. Total quote for 12 heavy-duty hooks is 480 EUR from the maintenance fund.',
+      author_user_id: '018f0000-0000-7000-8000-000000000102',
+      author_apartment_id: '018f0000-0000-7000-8000-000000000314',
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-20T17:30:00Z',
+      edited_at: '2026-10-20T18:05:00Z',
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [
+        {
+          id: '018f0000-0000-7000-8000-000000000653',
+          post_id: '018f0000-0000-7000-8000-000000000602',
+          body: 'We have sufficient allocation in the Q4 minor improvements budget line to cover 480 EUR without affecting the reserve fund.',
+          author_user_id: '018f0000-0000-7000-8000-000000000103',
+          author_apartment_id: null,
+          created_at: '2026-10-21T09:15:00Z',
+          edited_at: '2026-10-21T09:22:00Z',
+          hidden_at: null,
+          hidden_reason: null,
+        },
+        {
+          id: '018f0000-0000-7000-8000-000000000654',
+          post_id: '018f0000-0000-7000-8000-000000000602',
+          body: 'Why are ground floor residents paying for upper floor bikes?! Keep them in your own flats!',
+          author_user_id: '018f0000-0000-7000-8000-000000000104',
+          author_apartment_id: '018f0000-0000-7000-8000-000000000302',
+          created_at: '2026-10-21T11:40:00Z',
+          edited_at: null,
+          hidden_at: '2026-10-21T12:10:00Z',
+          hidden_reason: 'Personal attacks against neighbors violate house rules.',
+        },
+      ],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000603',
+      post_type: 'OFFICIAL_NOTICE',
+      category: 'MAINTENANCE',
+      title: 'District Heating Substation Winter Calibration Completed',
+      body: 'Utilitas Tallinn completed the scheduled diagnostic check of our primary heating substation. Efficiency is within 99.1% of nominal specification and night-time setback curve has been calibrated.',
+      author_user_id: '018f0000-0000-7000-8000-000000000101',
+      author_apartment_id: '018f0000-0000-7000-8000-000000000301',
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-15T10:00:00Z',
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000751',
+      post_type: 'APARTMENT_THREAD',
+      category: 'MAINTENANCE',
+      title: 'Access to the cold water meter in apartment 14',
+      body: 'Hello! Could we arrange a 10-minute inspection of the bathroom cold water meter seal this Thursday between 17:00 and 19:00?',
+      author_user_id: '018f0000-0000-7000-8000-000000000101',
+      author_apartment_id: null,
+      target_scope: 'APARTMENT_LIST',
+      target_entrance: null,
+      target_apartment_ids: ['018f0000-0000-7000-8000-000000000314'],
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-24T10:15:00Z',
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [
+        {
+          id: '018f0000-0000-7000-8000-000000000752',
+          post_id: '018f0000-0000-7000-8000-000000000751',
+          body: 'Thursday at 18:00 works well for us. See you then!',
+          author_user_id: '018f0000-0000-7000-8000-000000000102',
+          author_apartment_id: null,
+          created_at: '2026-10-24T12:40:00Z',
+          edited_at: null,
+          hidden_at: null,
+          hidden_reason: null,
+        },
+      ],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000761',
+      post_type: 'BOARD_TOPIC',
+      category: 'GENERAL',
+      title: 'Where the keys to the basement and the roof are',
+      body: 'The spare set of keys to the basement technical room, district heating node, and roof hatch is stored in the locked fire-rated cabinet in Entrance 1 utility room. The combination was shared at the October board meeting.',
+      author_user_id: '018f0000-0000-7000-8000-000000000101',
+      author_apartment_id: null,
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-25T11:30:00Z',
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [
+        {
+          id: '018f0000-0000-7000-8000-000000000762',
+          post_id: '018f0000-0000-7000-8000-000000000761',
+          body: 'Confirmed — I also labelled the roof hatch key and the main water shut-off valve key on the yellow tag.',
+          author_user_id: '018f0000-0000-7000-8000-000000000105',
+          author_apartment_id: null,
+          created_at: '2026-10-25T14:20:00Z',
+          edited_at: null,
+          hidden_at: null,
+          hidden_reason: null,
+        },
+      ],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000604',
+      post_type: 'OFFICIAL_NOTICE',
+      origin: 'MAINTENANCE',
+      category: 'MAINTENANCE',
+      title: 'Annual Fire Extinguisher Inspection',
+      body: 'Inspector will check all stairwell and common area fire safety equipment. No access to individual flats needed.\n\nPlanned date: 2026-11-05',
+      author_user_id: '018f0000-0000-7000-8000-000000000101',
+      author_apartment_id: '018f0000-0000-7000-8000-000000000301',
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: false,
+      created_at: '2026-10-25T09:00:00Z',
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [],
+    },
+    {
+      id: '018f0000-0000-7000-8000-000000000763',
+      post_type: 'BOARD_TOPIC',
+      origin: 'MAINTENANCE',
+      category: 'MAINTENANCE',
+      title: 'Maintenance: Inspect fire extinguishers, overdue since 05.11.2026',
+      body: 'Basement, technical rooms, and all 4 landings in both entrances. Certified technician needed.',
+      author_user_id: '018f0000-0000-7000-8000-000000000101',
+      author_apartment_id: null,
+      target_scope: 'ALL_BUILDING',
+      target_entrance: null,
+      target_apartment_ids: null,
+      is_active: true,
+      comments_enabled: true,
+      created_at: '2026-10-25T09:00:00Z',
+      edited_at: null,
+      hidden_at: null,
+      hidden_reason: null,
+      acknowledged_by: {},
+      comments: [
+        {
+          id: '018f0000-0000-7000-8000-000000000764',
+          post_id: '018f0000-0000-7000-8000-000000000763',
+          body: 'Still not done: overdue since 05.11.2026 (reminder 1)',
+          author_user_id: '018f0000-0000-7000-8000-000000000101',
+          author_apartment_id: null,
+          created_at: '2026-11-06T09:00:00Z',
+          edited_at: null,
+          hidden_at: null,
+          hidden_reason: null,
+        },
+      ],
+    },
+  ];
+}
+
+const postsStore: InternalPost[] = createDefaultServerPosts();
 
 const userLocales: Record<string, 'et' | 'ru' | 'en' | null> = {};
 
@@ -1002,6 +1257,7 @@ const EVENT_TYPES: Array<MockPreference['event_type']> = [
   'ISSUE_STATUS_CHANGED',
   'MAINTENANCE_DUE',
   'NOTICE_PUBLISHED',
+  'STORAGE_ALMOST_FULL',
 ];
 const CHANNELS: Array<'in_app' | 'email' | 'telegram' | 'webpush'> = [
   'in_app',
@@ -1023,7 +1279,9 @@ function getUserPreferences(userId: string): MockPreference[] {
           ev === 'ISSUE_REPORTED' ||
           ev === 'MAINTENANCE_DUE'
             ? ch === 'in_app'
-            : true;
+            : ev === 'STORAGE_ALMOST_FULL'
+              ? ch === 'in_app' || ch === 'email'
+              : true;
         list.push({
           event_type: ev,
           channel: ch,
@@ -1126,6 +1384,29 @@ function emitServerIssueNotificationBatch(batch: {
         read_at: null,
       });
     }
+  }
+}
+
+function checkAndEmitServerStorageAlert() {
+  const currentUsage = computeStorageUsage({
+    issuesStore,
+    documentsStore,
+    extraPendingDeletionBytes: serverExtraPendingDeletionBytes,
+  });
+  const triggered = evaluateStorageThresholdNotification(currentUsage, serverStorageAlertState);
+  if (triggered) {
+    const boardUserIds = ['018f0000-0000-7000-8000-000000000101', '018f0000-0000-7000-8000-000000000105'];
+    emitServerIssueNotificationBatch({
+      recipientUserIds: boardUserIds,
+      event_type: 'STORAGE_ALMOST_FULL',
+      subject_type: 'storage',
+      subject_id: 'storage',
+      params: {
+        threshold: triggered.threshold,
+        used_percent: triggered.used_percent,
+      },
+      created_at: new Date().toISOString(),
+    });
   }
 }
 
@@ -1572,6 +1853,12 @@ function sendError(
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('X-Trace-Id', traceId);
+  if (status === 429 && typeof extra?.retry_after_seconds === 'number') {
+    res.setHeader(
+      'Retry-After',
+      String(Math.max(1, Math.ceil(extra.retry_after_seconds)))
+    );
+  }
   res.end(
     JSON.stringify({
       error_code: errorCode,
@@ -1596,6 +1883,88 @@ function readBody(req: IncomingMessage): Promise<any> {
         resolve({});
       }
     });
+  });
+}
+
+function readRawBody(
+  req: IncomingMessage,
+  maxBytes = MAX_ISSUE_PHOTO_BYTES,
+  declaredLength: number | null = null,
+): Promise<{ interrupted?: boolean; tooLarge?: boolean; buffer: Buffer }> {
+  const effectiveCap =
+    declaredLength !== null && Number.isFinite(declaredLength) && declaredLength >= 0
+      ? Math.min(maxBytes, declaredLength)
+      : maxBytes;
+
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      if (typeof req.off === 'function') {
+        req.off('data', onData);
+        req.off('aborted', onAborted);
+        req.off('close', onClose);
+        req.off('error', onError);
+        req.off('end', onEnd);
+      } else {
+        req.removeListener('data', onData);
+        req.removeListener('aborted', onAborted);
+        req.removeListener('close', onClose);
+        req.removeListener('error', onError);
+        req.removeListener('end', onEnd);
+      }
+    };
+
+    const finish = (outcome: { interrupted?: boolean; tooLarge?: boolean; buffer: Buffer }) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(outcome);
+    };
+
+    const onData = (chunk: Buffer | string) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.byteLength;
+      if (total > effectiveCap) {
+        chunks.length = 0;
+        finish({ tooLarge: true, buffer: Buffer.alloc(0) });
+        if (typeof req.resume === 'function') {
+          req.resume();
+        }
+        return;
+      }
+      chunks.push(buf);
+    };
+
+    const onAborted = () => {
+      chunks.length = 0;
+      finish({ interrupted: true, buffer: Buffer.alloc(0) });
+    };
+
+    const onClose = () => {
+      if (!req.complete) {
+        chunks.length = 0;
+        finish({ interrupted: true, buffer: Buffer.alloc(0) });
+      }
+    };
+
+    const onError = () => {
+      chunks.length = 0;
+      finish({ interrupted: true, buffer: Buffer.alloc(0) });
+    };
+
+    const onEnd = () => {
+      finish({ buffer: Buffer.concat(chunks) });
+    };
+
+    req.on('data', onData);
+    req.on('aborted', onAborted);
+    req.on('close', onClose);
+    req.on('error', onError);
+    req.on('end', onEnd);
   });
 }
 
@@ -3169,22 +3538,12 @@ export function createApiMiddleware() {
       return sendJson(res, 200, { periods: sortedPeriods });
     }
 
-    // 3c. GET /api/v1/meters/apartments/{apartment_id}/readings (E8/P1)
-    const aptReadingsMatch = pathname.match(/^\/api\/v1\/meters\/apartments\/([^/]+)\/readings$/);
-    if (aptReadingsMatch && method === 'GET') {
-      const aptId = aptReadingsMatch[1];
-      const cardMeta = DEMO_APARTMENT_CARDS.find((a) => a.apartment_id === aptId);
-      const userMems = membershipsByUser[user.user_id] || [];
-      const isOwnApartment = userMems.some((m) => m.apartment_id === aptId);
-      if (!cardMeta || (!isBoardOrAccountant && !isOwnApartment)) {
-        return sendError(res, 404, 'APARTMENT_NOT_FOUND', 'Apartment not found.');
-      }
-
-      const sortedPeriods = Object.values(periodsMap).sort((a, b) =>
-        b.period_code.localeCompare(a.period_code)
-      );
+    function buildMiddlewareApartmentMeters(
+      cardMeta: (typeof DEMO_APARTMENT_CARDS)[number],
+      sortedPeriods: PeriodDTO[],
+    ) {
       const baseApt =
-        apartmentsByPeriod['2026-10'].find((a) => a.apartment_id === aptId) ||
+        apartmentsByPeriod['2026-10'].find((a) => a.apartment_id === cardMeta.apartment_id) ||
         apartmentsByPeriod['2026-10'][0];
 
       const metersHistory = baseApt.meters.map((baseMeter, mIdx) => {
@@ -3251,40 +3610,182 @@ export function createApiMiddleware() {
         });
       }
 
+      return metersHistory;
+    }
+
+    function safeDecodePathSegment(raw: string): string {
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return '';
+      }
+    }
+
+    // 3c. GET /api/v1/meters/apartments/{apartment_id}/readings (E8/P1)
+    const aptReadingsMatch = pathname.match(/^\/api\/v1\/meters\/apartments\/([^/]+)\/readings$/);
+    if (aptReadingsMatch && method === 'GET') {
+      const aptId = safeDecodePathSegment(aptReadingsMatch[1]);
+      const cardMeta = aptId ? DEMO_APARTMENT_CARDS.find((a) => a.apartment_id === aptId) : undefined;
+      const userMems = membershipsByUser[user.user_id] || [];
+      const isOwnApartment = Boolean(aptId) && userMems.some((m) => m.apartment_id === aptId);
+      if (!cardMeta || (!isBoardOrAccountant && !isOwnApartment)) {
+        return sendError(res, 404, 'APARTMENT_NOT_FOUND', 'Apartment not found.');
+      }
+
+      const sortedPeriods = Object.values(periodsMap).sort((a, b) =>
+        b.period_code.localeCompare(a.period_code)
+      );
+
       return sendJson(res, 200, {
         apartment_id: cardMeta.apartment_id,
         apartment_number: cardMeta.apartment_number,
         periods: sortedPeriods,
-        meters: metersHistory,
+        meters: buildMiddlewareApartmentMeters(cardMeta, sortedPeriods),
       });
+    }
+
+    // 3d. GET /api/v1/meters/apartments/{apartment_id}/consumption (#030)
+    const aptConsumptionMatch = pathname.match(/^\/api\/v1\/meters\/apartments\/([^/]+)\/consumption$/);
+    if (aptConsumptionMatch && method === 'GET') {
+      const aptId = safeDecodePathSegment(aptConsumptionMatch[1]);
+      const cardMeta = aptId ? DEMO_APARTMENT_CARDS.find((a) => a.apartment_id === aptId) : undefined;
+      const userMems = membershipsByUser[user.user_id] || [];
+      const isOwnApartment = Boolean(aptId) && userMems.some((m) => m.apartment_id === aptId);
+      if (!cardMeta || (!isBoardOrAccountant && !isOwnApartment)) {
+        return sendError(res, 404, 'APARTMENT_NOT_FOUND', 'Apartment not found.');
+      }
+
+      const parsedMonths = parseConsumptionMonths(urlObj.searchParams.get('months'));
+      if (!parsedMonths.ok) {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          parsedMonths.message || 'months must be between 1 and 24.'
+        );
+      }
+
+      const sortedPeriods = Object.values(periodsMap).sort((a, b) =>
+        b.period_code.localeCompare(a.period_code)
+      );
+      const metersHistory = buildMiddlewareApartmentMeters(cardMeta, sortedPeriods);
+
+      return sendJson(
+        res,
+        200,
+        buildApartmentConsumptionResponse({
+          apartmentId: cardMeta.apartment_id,
+          apartmentNumber: cardMeta.apartment_number,
+          periods: sortedPeriods,
+          meters: metersHistory,
+          months: parsedMonths.months,
+        })
+      );
+    }
+
+    // 3e. GET /api/v1/meters/consumption (#031) - staff only (CHAIRMAN, BOARD, ACCOUNTANT)
+    if (pathname === '/api/v1/meters/consumption' && method === 'GET') {
+      if (!isBoardOrAccountant) {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman, Board, or Accountant role required.');
+      }
+
+      const parsedMonths = parseConsumptionMonths(urlObj.searchParams.get('months'));
+      if (!parsedMonths.ok) {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          parsedMonths.message || 'months must be between 1 and 24.'
+        );
+      }
+
+      const sortedPeriods = Object.values(periodsMap).sort((a, b) =>
+        b.period_code.localeCompare(a.period_code)
+      );
+      const apartmentsPayload = (apartmentsByPeriod['2026-10'] || []).map((baseApt) => {
+        const cardMeta = DEMO_APARTMENT_CARDS.find((a) => a.apartment_id === baseApt.apartment_id);
+        return {
+          apartment_id: baseApt.apartment_id,
+          area_m2: cardMeta?.area_m2 || '0',
+          meters: cardMeta ? buildMiddlewareApartmentMeters(cardMeta, sortedPeriods) : [],
+        };
+      });
+
+      return sendJson(
+        res,
+        200,
+        buildBuildingConsumptionResponse({
+          periods: sortedPeriods,
+          apartments: apartmentsPayload,
+          months: parsedMonths.months,
+        })
+      );
     }
 
     // 4. GET /api/v1/meters/my-dashboard
     if (pathname === '/api/v1/meters/my-dashboard' && method === 'GET') {
-      const periodCode = urlObj.searchParams.get('period_code') || '2026-10';
-      const period = periodsMap[periodCode] || periodsMap['2026-10'];
-      const periodApts = apartmentsByPeriod[periodCode] || apartmentsByPeriod['2026-10'];
+      const requestedPeriodCode = urlObj.searchParams.get('period_code');
       const userMems = membershipsByUser[user.user_id] || [];
       const userAptIds = new Set(userMems.map((m) => m.apartment_id));
+      const memByAptId = new Map(userMems.map((m) => [m.apartment_id, m]));
+
+      // Determine default period without period_code: P ('2026-10') while any meter still goes to P, else M ('2026-11')
+      let periodCode = requestedPeriodCode;
+      if (!periodCode) {
+        const refApts = apartmentsByPeriod['2026-10'] || [];
+        let hasPendingPrev = false;
+        for (const a of refApts) {
+          if (!userAptIds.has(a.apartment_id)) continue;
+          const memCanSubmit = Boolean(memByAptId.get(a.apartment_id)?.can_submit_readings);
+          for (const m of a.meters) {
+            const sub = computeMeterNextSubmission(m.meter_id, a.can_submit_readings, memCanSubmit);
+            if (sub?.period_code === '2026-10') {
+              hasPendingPrev = true;
+              break;
+            }
+          }
+          if (hasPendingPrev) break;
+        }
+        periodCode = hasPendingPrev ? '2026-10' : '2026-11';
+      }
+
+      const period = periodsMap[periodCode] || periodsMap['2026-10'];
+      const periodApts = apartmentsByPeriod[period.period_code] || apartmentsByPeriod['2026-10'];
+
+      const baseCanSubmitByAptId = new Map(
+        (apartmentsByPeriod['2026-10'] || []).map((a) => [
+          a.apartment_id,
+          Boolean(a.can_submit_readings),
+        ])
+      );
 
       const apartments = periodApts
         .filter((a) => userAptIds.has(a.apartment_id))
-        .map((a) => ({
-          apartment_id: a.apartment_id,
-          apartment_number: a.apartment_number,
-          can_submit_readings: period.status === 'OPEN_FOR_RESIDENTS' && a.can_submit_readings,
-          meters: a.meters.map((m) => ({
-            meter_id: m.meter_id,
-            resource_type: m.resource_type,
-            serial_number: m.serial_number,
-            location_label: m.location_label,
-            unit: m.unit,
-            previous_value: m.previous_value,
-            previous_delta: m.historical_avg,
-            average_delta: m.historical_avg,
-            reading: m.reading,
-          })),
-        }));
+        .map((a) => {
+          const memCanSubmit = Boolean(memByAptId.get(a.apartment_id)?.can_submit_readings);
+          const baseAptCanSubmit = baseCanSubmitByAptId.get(a.apartment_id) ?? false;
+          return {
+            apartment_id: a.apartment_id,
+            apartment_number: a.apartment_number,
+            can_submit_readings: baseAptCanSubmit && memCanSubmit,
+            meters: a.meters.map((m) => ({
+              meter_id: m.meter_id,
+              resource_type: m.resource_type,
+              serial_number: m.serial_number,
+              location_label: m.location_label,
+              unit: m.unit,
+              previous_value: m.previous_value,
+              previous_delta: m.historical_avg,
+              average_delta: m.historical_avg,
+              reading: m.reading,
+              next_submission: computeMeterNextSubmission(
+                m.meter_id,
+                baseAptCanSubmit,
+                memCanSubmit
+              ),
+            })),
+          };
+        });
 
       return sendJson(res, 200, {
         period,
@@ -3303,16 +3804,16 @@ export function createApiMiddleware() {
         reason = null,
       } = body;
 
-      const period = periodsMap[period_code] || periodsMap['2026-10'];
+      const period = periodsMap[period_code];
+      if (!period) {
+        return sendError(res, 404, 'PERIOD_NOT_FOUND', 'The requested billing period was not found.');
+      }
       if (period.status === 'LOCKED') {
         return sendError(res, 409, 'PERIOD_LOCKED', 'This billing period is locked.');
       }
-      if (period.status !== 'OPEN_FOR_RESIDENTS' && !isBoardOrAccountant) {
-        return sendError(res, 409, 'PERIOD_CLOSED', 'Period is closed for residents.');
-      }
 
-      const periodApts = apartmentsByPeriod[period_code] || apartmentsByPeriod['2026-10'];
-      const masterMeters = masterMetersByPeriod[period_code] || masterMetersByPeriod['2026-10'];
+      const periodApts = apartmentsByPeriod[period_code] || [];
+      const masterMeters = masterMetersByPeriod[period_code] || [];
 
       let foundMeter: InternalMeter | null = null;
       let foundApt: InternalApartment | null = null;
@@ -3335,11 +3836,112 @@ export function createApiMiddleware() {
         return sendError(res, 404, 'METER_NOT_FOUND', 'Meter not found.');
       }
 
+      const userMems = membershipsByUser[user.user_id] || [];
+      const matchingMem = foundApt
+        ? userMems.find((m) => m.apartment_id === foundApt!.apartment_id)
+        : null;
+      const isOwnUnit = Boolean(matchingMem);
+      const isPrivilegedRole = user.building_role === 'CHAIRMAN' || user.building_role === 'ACCOUNTANT';
+
+      if (foundMaster && !isPrivilegedRole) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only Chairman or Accountant may submit master meters.');
+      }
+      if (foundMeter && !isOwnUnit && !isPrivilegedRole) {
+        return sendError(res, 404, 'METER_NOT_FOUND', 'Meter not found.');
+      }
+
       if (typeof value !== 'string' || !/^[0-9]{1,9}(\.[0-9]{1,3})?$/.test(value)) {
         return sendError(res, 422, 'VALIDATION_ERROR', 'Invalid decimal meter reading.');
       }
 
       const normalizedVal = fromBigInt3(toBigInt3(value));
+      const existingReading = foundMeter ? foundMeter.reading : foundMaster!.reading;
+
+      const nextSub = foundMeter && foundApt
+        ? computeMeterNextSubmission(
+            meter_id,
+            foundApt.can_submit_readings,
+            Boolean(matchingMem?.can_submit_readings)
+          )
+        : null;
+
+      // Resident mode applies to non-privileged users, OR to Chairman/Accountant submitting on own unit's target period
+      const actingAsResident =
+        Boolean(foundMeter) &&
+        (!isPrivilegedRole || (isOwnUnit && nextSub?.period_code === period_code));
+
+      if (actingAsResident) {
+        if (!matchingMem?.can_submit_readings || !foundApt?.can_submit_readings) {
+          return sendError(res, 403, 'FORBIDDEN', 'You cannot submit readings for this apartment.');
+        }
+
+        // Idempotent retry of own reading in an open period
+        if (
+          existingReading &&
+          existingReading.source === 'RESIDENT' &&
+          existingReading.value === normalizedVal &&
+          period.status === 'OPEN_FOR_RESIDENTS'
+        ) {
+          return sendJson(res, 200, {
+            reading_id: existingReading.reading_id,
+            meter_id,
+            period_code,
+            value: existingReading.value,
+            consumption_delta: existingReading.consumption_delta,
+            source: existingReading.source,
+            is_anomaly_confirmed: existingReading.is_anomaly_confirmed,
+          });
+        }
+
+        if (period.status !== 'OPEN_FOR_RESIDENTS') {
+          return sendError(res, 409, 'PERIOD_CLOSED', 'Period is closed for residents.');
+        }
+
+        if (!nextSub) {
+          return sendError(res, 409, 'PERIOD_CLOSED', 'Submission for this meter is closed.');
+        }
+
+        if (period_code !== nextSub.period_code) {
+          return sendError(
+            res,
+            409,
+            'WRONG_PERIOD',
+            `Reading belongs to period ${nextSub.period_code}.`,
+            { target_period_code: nextSub.period_code }
+          );
+        }
+
+        if (existingReading?.source === 'ADMIN_OVERRIDE') {
+          return sendError(
+            res,
+            409,
+            'READING_SET_BY_BOARD',
+            'This reading was set by the board and cannot be overwritten by a resident.'
+          );
+        }
+      } else {
+        if (period.status !== 'OPEN_FOR_RESIDENTS' && !isPrivilegedRole) {
+          return sendError(res, 409, 'PERIOD_CLOSED', 'Period is closed for residents.');
+        }
+      }
+
+      // Check LATER_READING_EXISTS (cannot modify a period when a newer period already has a reading)
+      const sortedPeriodCodes = Object.keys(periodsMap).sort();
+      const targetIdx = sortedPeriodCodes.indexOf(period_code);
+      if (targetIdx >= 0 && foundMeter) {
+        for (let i = targetIdx + 1; i < sortedPeriodCodes.length; i++) {
+          const newerMeter = findMeterInPeriod(sortedPeriodCodes[i], meter_id);
+          if (newerMeter?.reading) {
+            return sendError(
+              res,
+              409,
+              'LATER_READING_EXISTS',
+              'A newer period already has a reading for this meter.'
+            );
+          }
+        }
+      }
+
       const previousValue = foundMeter ? foundMeter.previous_value : foundMaster!.previous_value;
       const prevScaled = toBigInt3(previousValue);
       const currScaled = toBigInt3(normalizedVal);
@@ -3354,15 +3956,10 @@ export function createApiMiddleware() {
         );
       }
 
-      // Check if Board/Accountant is modifying an existing reading -> require reason
-      const existingReading = foundMeter ? foundMeter.reading : foundMaster!.reading;
-      const userMems = membershipsByUser[user.user_id] || [];
-      const isOwnUnit = foundApt && userMems.some((m) => m.apartment_id === foundApt!.apartment_id);
-
       if (
         existingReading &&
-        isBoardOrAccountant &&
-        !isOwnUnit &&
+        !actingAsResident &&
+        isPrivilegedRole &&
         (!reason || !String(reason).trim())
       ) {
         return sendError(
@@ -3417,7 +4014,7 @@ export function createApiMiddleware() {
       const readingId =
         existingReading?.reading_id ||
         `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`;
-      const source: ReadingSource = isOwnUnit ? 'RESIDENT' : 'ADMIN_OVERRIDE';
+      const source: ReadingSource = actingAsResident ? 'RESIDENT' : 'ADMIN_OVERRIDE';
 
       const newReading: ReadingSummary = {
         reading_id: readingId,
@@ -3429,6 +4026,14 @@ export function createApiMiddleware() {
 
       if (foundMeter) {
         foundMeter.reading = newReading;
+        // Propagate new reading value to the subsequent period's previous_value if it has no reading yet
+        const nextIdx = targetIdx + 1;
+        if (nextIdx > 0 && nextIdx < sortedPeriodCodes.length) {
+          const nextMeter = findMeterInPeriod(sortedPeriodCodes[nextIdx], meter_id);
+          if (nextMeter && !nextMeter.reading) {
+            nextMeter.previous_value = normalizedVal;
+          }
+        }
       } else if (foundMaster) {
         foundMaster.reading = newReading;
         foundMaster.status = 'SUBMITTED';
@@ -3681,8 +4286,18 @@ export function createApiMiddleware() {
 
     // 11. GET /api/v1/communication/emergencies/active
     if (pathname === '/api/v1/communication/emergencies/active' && method === 'GET') {
+      const userMems = membershipsByUser[user.user_id] || [];
       const activeList: EmergencyView[] = postsStore
-        .filter((p) => p.post_type === 'EMERGENCY' && p.is_active)
+        .filter(
+          (p) =>
+            p.post_type === 'EMERGENCY' &&
+            p.is_active &&
+            canViewerSeePost(p, {
+              viewerUserId: user.user_id,
+              viewerRole: user.building_role,
+              memberships: userMems,
+            })
+        )
         .map((p) => ({
           id: p.id,
           post_type: p.post_type,
@@ -3701,6 +4316,10 @@ export function createApiMiddleware() {
           last_activity_at:
             p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
           acknowledged_at: p.acknowledged_by[user.user_id] || null,
+          origin: p.origin || null,
+          edited_at: p.edited_at || null,
+          hidden_at: p.hidden_at || null,
+          hidden_reason: p.hidden_at ? p.hidden_reason || null : null,
         }));
       return sendJson(res, 200, activeList);
     }
@@ -3760,6 +4379,12 @@ export function createApiMiddleware() {
       const category = urlObj.searchParams.get('category');
       const limit = Number(urlObj.searchParams.get('limit') || '20');
       const offset = Number(urlObj.searchParams.get('offset') || '0');
+      const userMems = membershipsByUser[user.user_id] || [];
+      const visibilityCtx = {
+        viewerUserId: user.user_id,
+        viewerRole: user.building_role,
+        memberships: userMems,
+      };
 
       if (apartmentId && postType !== 'APARTMENT_THREAD') {
         return sendError(
@@ -3774,42 +4399,52 @@ export function createApiMiddleware() {
         (p) =>
           p.post_type !== 'EMERGENCY' &&
           p.post_type !== 'APARTMENT_THREAD' &&
-          p.post_type !== 'BOARD_TOPIC'
+          p.post_type !== 'BOARD_TOPIC' &&
+          canViewerSeePost(p, visibilityCtx)
       );
 
       if (postType === 'APARTMENT_THREAD') {
-        const userMems = membershipsByUser[user.user_id] || [];
         filtered = postsStore.filter((p) => {
           if (p.post_type !== 'APARTMENT_THREAD') return false;
           if (apartmentId && !p.target_apartment_ids?.includes(apartmentId)) return false;
-          if (isBoard) return true;
-          return userMems.some(
-            (m) =>
-              p.target_apartment_ids?.includes(m.apartment_id) &&
-              new Date(m.since).getTime() <= new Date(p.created_at).getTime()
-          );
+          return canViewerSeePost(p, visibilityCtx);
         });
         filtered.sort((a, b) => {
           const aLast =
             a.comments.length > 0 ? a.comments[a.comments.length - 1].created_at : a.created_at;
           const bLast =
             b.comments.length > 0 ? b.comments[b.comments.length - 1].created_at : b.created_at;
-          return new Date(bLast).getTime() - new Date(aLast).getTime();
+          return new Date(bLast).getTime() - new Date(aLast).getTime() || b.id.localeCompare(a.id);
         });
       } else if (postType === 'BOARD_TOPIC') {
         if (!isBoard) {
           return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
         }
-        filtered = postsStore.filter((p) => p.post_type === 'BOARD_TOPIC');
+        filtered = postsStore.filter(
+          (p) => p.post_type === 'BOARD_TOPIC' && canViewerSeePost(p, visibilityCtx)
+        );
         filtered.sort((a, b) => {
           const aLast =
             a.comments.length > 0 ? a.comments[a.comments.length - 1].created_at : a.created_at;
           const bLast =
             b.comments.length > 0 ? b.comments[b.comments.length - 1].created_at : b.created_at;
-          return new Date(bLast).getTime() - new Date(aLast).getTime();
+          return new Date(bLast).getTime() - new Date(aLast).getTime() || b.id.localeCompare(a.id);
         });
       } else if (postType) {
-        filtered = postsStore.filter((p) => p.post_type === postType);
+        filtered = postsStore.filter(
+          (p) => p.post_type === postType && canViewerSeePost(p, visibilityCtx)
+        );
+        filtered.sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+            b.id.localeCompare(a.id)
+        );
+      } else {
+        filtered.sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+            b.id.localeCompare(a.id)
+        );
       }
 
       if (category) {
@@ -3838,6 +4473,9 @@ export function createApiMiddleware() {
         last_activity_at:
           p.comments.length > 0 ? p.comments[p.comments.length - 1].created_at : p.created_at,
         origin: p.origin || null,
+        edited_at: p.edited_at || null,
+        hidden_at: p.hidden_at || null,
+        hidden_reason: p.hidden_at ? p.hidden_reason || null : null,
       }));
       return sendJson(res, 200, paged);
     }
@@ -3845,6 +4483,26 @@ export function createApiMiddleware() {
     if (pathname === '/api/v1/communication/posts' && method === 'POST') {
       const body = await readBody(req);
       const postType: PostType = body.post_type || 'FORUM_TOPIC';
+      const hasControlChars = (str: string) => {
+        for (let i = 0; i < str.length; i += 1) {
+          const code = str.charCodeAt(i);
+          if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) {
+            return true;
+          }
+        }
+        return false;
+      };
+      const cleanTitle = typeof body.title === 'string' ? body.title.trim() : '';
+      const cleanBody = typeof body.body === 'string' ? body.body.trim() : '';
+      if (!cleanTitle || !cleanBody || hasControlChars(cleanTitle) || hasControlChars(cleanBody)) {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          'Title and body must be non-empty plain text.'
+        );
+      }
+
       if ((postType === 'OFFICIAL_NOTICE' || postType === 'EMERGENCY') && !isBoard) {
         return sendError(
           res,
@@ -3939,19 +4597,27 @@ export function createApiMiddleware() {
         id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
         post_type: postType,
         category: body.category || 'GENERAL',
-        title: body.title || 'Untitled',
-        body: body.body || '',
+        title: cleanTitle,
+        body: cleanBody,
         author_user_id: user.user_id,
         author_apartment_id:
-          postType === 'APARTMENT_THREAD' || postType === 'BOARD_TOPIC'
+          postType === 'BOARD_TOPIC'
             ? null
-            : body.author_apartment_id || null,
+            : postType === 'APARTMENT_THREAD'
+              ? isBoard
+                ? null
+                : body.target_apartment_ids?.[0] || null
+              : body.author_apartment_id || null,
         target_scope: body.target_scope || 'ALL_BUILDING',
         target_entrance: body.target_entrance || null,
         target_apartment_ids: body.target_apartment_ids || null,
         is_active: true,
         comments_enabled: body.comments_enabled !== false,
         created_at: new Date().toISOString(),
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
+        origin: null,
         acknowledged_by: {},
         comments: [],
       };
@@ -4022,6 +4688,10 @@ export function createApiMiddleware() {
         comments_count: 0,
         created_at: created.created_at,
         last_activity_at: created.created_at,
+        origin: null,
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       });
     }
 
@@ -4029,22 +4699,25 @@ export function createApiMiddleware() {
     const postDetailMatch = pathname.match(/^\/api\/v1\/communication\/posts\/([^/]+)$/);
     if (postDetailMatch && method === 'GET') {
       const post = postsStore.find((p) => p.id === postDetailMatch[1]);
-      if (!post) return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
-
-      if (post.post_type === 'APARTMENT_THREAD' && !isBoard) {
-        const userMems = membershipsByUser[user.user_id] || [];
-        const hasAccess = userMems.some(
-          (m) =>
-            post.target_apartment_ids?.includes(m.apartment_id) &&
-            new Date(m.since).getTime() <= new Date(post.created_at).getTime()
-        );
-        if (!hasAccess) {
-          return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
-        }
-      }
-      if (post.post_type === 'BOARD_TOPIC' && !isBoard) {
+      const userMems = membershipsByUser[user.user_id] || [];
+      if (
+        !post ||
+        !canViewerSeePost(post, {
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          memberships: userMems,
+        })
+      ) {
         return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
       }
+
+      const rawLimit = Number(urlObj.searchParams.get('comments_limit') || '200');
+      const commentsLimit = Number.isFinite(rawLimit)
+        ? Math.min(Math.max(Math.trunc(rawLimit), 1), 500)
+        : 200;
+      const rawOffset = Number(urlObj.searchParams.get('comments_offset') || '0');
+      const commentsOffset = Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0;
+      const pagedComments = post.comments.slice(commentsOffset, commentsOffset + commentsLimit);
 
       const targetAptId = post.target_apartment_ids?.[0] || null;
       return sendJson(res, 200, {
@@ -4067,14 +4740,17 @@ export function createApiMiddleware() {
             ? post.comments[post.comments.length - 1].created_at
             : post.created_at,
         origin: post.origin || null,
-        comments: post.comments.map((c) => ({
-          id: c.id,
-          post_id: post.id,
-          body: c.body,
-          author_badge: resolveAuthorBadge(c.author_user_id, post.post_type, targetAptId),
-          is_mine: c.author_user_id === user.user_id,
-          created_at: c.created_at,
-        })),
+        edited_at: post.edited_at || null,
+        hidden_at: post.hidden_at || null,
+        hidden_reason: post.hidden_at ? post.hidden_reason || null : null,
+        comments: pagedComments.map((c) =>
+          projectCommentForViewer(c, {
+            postId: post.id,
+            viewerUserId: user.user_id,
+            viewerRole: user.building_role,
+            authorBadge: resolveAuthorBadge(c.author_user_id, post.post_type, targetAptId),
+          })
+        ),
       });
     }
 
@@ -4082,19 +4758,13 @@ export function createApiMiddleware() {
       const idx = postsStore.findIndex((p) => p.id === postDetailMatch[1]);
       if (idx === -1) return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
       const targetPost = postsStore[idx];
-      if (targetPost.post_type === 'BOARD_TOPIC') {
-        if (!isBoard) {
-          return sendError(res, 403, 'FORBIDDEN', 'Only Board members can delete board topics.');
-        }
-        postsStore.splice(idx, 1);
-        res.statusCode = 204;
-        return res.end();
+      if (!isBoard) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only Board members can delete topics.');
       }
-      if (user.building_role !== 'CHAIRMAN') {
-        return sendError(res, 403, 'FORBIDDEN', 'Only Chairman can delete forum topics.');
-      }
-      if (targetPost.post_type !== 'FORUM_TOPIC') {
-        return sendError(res, 409, 'POST_NOT_DELETABLE', 'This post cannot be deleted.');
+      if (targetPost.post_type !== 'FORUM_TOPIC' && targetPost.post_type !== 'BOARD_TOPIC') {
+        return sendError(res, 409, 'POST_NOT_DELETABLE', 'This post cannot be deleted.', {
+          post_type: targetPost.post_type,
+        });
       }
       postsStore.splice(idx, 1);
       res.statusCode = 204;
@@ -4105,11 +4775,42 @@ export function createApiMiddleware() {
     const commentMatch = pathname.match(/^\/api\/v1\/communication\/posts\/([^/]+)\/comments$/);
     if (commentMatch && method === 'POST') {
       const post = postsStore.find((p) => p.id === commentMatch[1]);
-      if (!post) return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
+      const userMems = membershipsByUser[user.user_id] || [];
+      if (
+        !post ||
+        !canViewerSeePost(post, {
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          memberships: userMems,
+        })
+      ) {
+        return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
+      }
+      if (post.hidden_at) {
+        return sendError(res, 409, 'POST_HIDDEN', 'Cannot comment on a hidden post.');
+      }
       if (!post.comments_enabled) {
         return sendError(res, 409, 'COMMENTS_DISABLED', 'Comments are disabled on this post.');
       }
       const body = await readBody(req);
+      const hasControlChars = (str: string) => {
+        for (let i = 0; i < str.length; i += 1) {
+          const code = str.charCodeAt(i);
+          if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) {
+            return true;
+          }
+        }
+        return false;
+      };
+      const cleanCommentBody = typeof body.body === 'string' ? body.body.trim() : '';
+      if (!cleanCommentBody || hasControlChars(cleanCommentBody)) {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          'Comment body must be non-empty plain text.'
+        );
+      }
       if (post.post_type === 'APARTMENT_THREAD' || post.post_type === 'BOARD_TOPIC') {
         if (body.author_apartment_id !== undefined && body.author_apartment_id !== null) {
           return sendError(
@@ -4120,30 +4821,23 @@ export function createApiMiddleware() {
           );
         }
       }
-      if (post.post_type === 'APARTMENT_THREAD' && !isBoard) {
-        const userMems = membershipsByUser[user.user_id] || [];
-        const hasAccess = userMems.some(
-          (m) =>
-            post.target_apartment_ids?.includes(m.apartment_id) &&
-            new Date(m.since).getTime() <= new Date(post.created_at).getTime()
-        );
-        if (!hasAccess) {
-          return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
-        }
-      }
-      if (post.post_type === 'BOARD_TOPIC' && !isBoard) {
-        return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
-      }
       const comment: InternalComment = {
         id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
         post_id: post.id,
-        body: body.body || '',
+        body: cleanCommentBody,
         author_user_id: user.user_id,
         author_apartment_id:
-          post.post_type === 'APARTMENT_THREAD' || post.post_type === 'BOARD_TOPIC'
+          post.post_type === 'BOARD_TOPIC'
             ? null
-            : body.author_apartment_id || null,
+            : post.post_type === 'APARTMENT_THREAD'
+              ? isBoard
+                ? null
+                : post.target_apartment_ids?.[0] || null
+              : body.author_apartment_id || null,
         created_at: new Date().toISOString(),
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       };
       post.comments.push(comment);
       if (post.post_type === 'APARTMENT_THREAD' && post.target_apartment_ids?.[0]) {
@@ -4165,7 +4859,360 @@ export function createApiMiddleware() {
         ),
         is_mine: true,
         created_at: comment.created_at,
+        edited_at: null,
+        hidden_at: null,
+        hidden_reason: null,
       });
+    }
+
+    // 16b. POST /api/v1/communication/posts/{post_id}/hide & /unhide (#028)
+    const safeDecodePathParam = (raw: string): string | null => {
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return null;
+      }
+    };
+    const postHideMatch = pathname.match(
+      /^\/api\/v1\/communication\/posts\/([^/]+)\/(hide|unhide)$/
+    );
+    if (postHideMatch && method === 'POST') {
+      const postId = safeDecodePathParam(postHideMatch[1]);
+      const action = postHideMatch[2];
+      if (!isBoard) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only Board members can moderate forum topics.');
+      }
+      const post = postId ? postsStore.find((p) => p.id === postId) : null;
+      if (!post) {
+        return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
+      }
+      if (!isPostHideable(post)) {
+        return sendError(res, 409, 'POST_NOT_HIDEABLE', 'This post cannot be hidden.', {
+          post_type: post.post_type,
+        });
+      }
+      if (action === 'hide') {
+        const body = await readBody(req);
+        const check = validateHideReason(body?.reason);
+        if (!check.valid) {
+          return sendError(
+            res,
+            422,
+            'VALIDATION_ERROR',
+            'Hide reason must be 1 to 500 plain-text characters.'
+          );
+        }
+        if (!post.hidden_at) {
+          post.hidden_at = new Date().toISOString();
+          post.hidden_reason = check.reason;
+          post.hidden_by_user_id = user.user_id;
+        }
+      } else {
+        post.hidden_at = null;
+        post.hidden_reason = null;
+        post.hidden_by_user_id = null;
+      }
+      const targetAptId = post.target_apartment_ids?.[0] || null;
+      return sendJson(res, 200, {
+        id: post.id,
+        post_type: post.post_type,
+        category: post.category,
+        title: post.title,
+        body: post.body,
+        author_badge: resolveAuthorBadge(post.author_user_id, post.post_type, targetAptId),
+        is_mine: post.author_user_id === user.user_id,
+        target_scope: post.target_scope,
+        target_entrance: post.target_entrance,
+        target_apartment_ids: post.target_apartment_ids,
+        is_active: post.is_active,
+        comments_enabled: post.comments_enabled,
+        comments_count: post.comments.length,
+        created_at: post.created_at,
+        last_activity_at:
+          post.comments.length > 0
+            ? post.comments[post.comments.length - 1].created_at
+            : post.created_at,
+        origin: post.origin || null,
+        edited_at: post.edited_at || null,
+        hidden_at: post.hidden_at || null,
+        hidden_reason: post.hidden_at ? post.hidden_reason || null : null,
+      });
+    }
+
+    // 16c. POST /api/v1/communication/posts/{post_id}/comments/{comment_id}/hide & /unhide (#028)
+    const commentHideMatch = pathname.match(
+      /^\/api\/v1\/communication\/posts\/([^/]+)\/comments\/([^/]+)\/(hide|unhide)$/
+    );
+    if (commentHideMatch && method === 'POST') {
+      const postId = safeDecodePathParam(commentHideMatch[1]);
+      const commentId = safeDecodePathParam(commentHideMatch[2]);
+      const action = commentHideMatch[3];
+      if (!isBoard) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only Board members can moderate comments.');
+      }
+      const post = postId ? postsStore.find((p) => p.id === postId) : null;
+      if (!post) {
+        return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
+      }
+      if (!isCommentHideableOnPost(post)) {
+        return sendError(
+          res,
+          409,
+          'COMMENT_NOT_HIDEABLE',
+          'Comments on this post cannot be hidden.',
+          { post_type: post.post_type }
+        );
+      }
+      const comment = commentId ? post.comments.find((c) => c.id === commentId) : null;
+      if (!comment) {
+        return sendError(res, 404, 'COMMENT_NOT_FOUND', 'Comment not found.');
+      }
+      if (action === 'hide') {
+        const body = await readBody(req);
+        const check = validateHideReason(body?.reason);
+        if (!check.valid) {
+          return sendError(
+            res,
+            422,
+            'VALIDATION_ERROR',
+            'Hide reason must be 1 to 500 plain-text characters.'
+          );
+        }
+        if (!comment.hidden_at) {
+          comment.hidden_at = new Date().toISOString();
+          comment.hidden_reason = check.reason;
+          comment.hidden_by_user_id = user.user_id;
+        }
+      } else {
+        comment.hidden_at = null;
+        comment.hidden_reason = null;
+        comment.hidden_by_user_id = null;
+      }
+      const targetAptId = post.target_apartment_ids?.[0] || null;
+      return sendJson(
+        res,
+        200,
+        projectCommentForViewer(comment, {
+          postId: post.id,
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          authorBadge: resolveAuthorBadge(comment.author_user_id, post.post_type, targetAptId),
+        })
+      );
+    }
+
+    // 16d. PATCH /api/v1/communication/posts/{post_id} & /comments/{comment_id} (#027)
+    if (postDetailMatch && method === 'PATCH') {
+      const postId = safeDecodePathParam(postDetailMatch[1]);
+      const post = postId ? postsStore.find((p) => p.id === postId) : null;
+      const userMems = membershipsByUser[user.user_id] || [];
+      if (
+        !post ||
+        !canViewerSeePost(post, {
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          memberships: userMems,
+        })
+      ) {
+        return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
+      }
+      if (post.author_user_id !== user.user_id) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only the author can edit this post.');
+      }
+      if (
+        (post.post_type !== 'FORUM_TOPIC' && post.post_type !== 'BOARD_TOPIC') ||
+        post.origin != null ||
+        post.hidden_at
+      ) {
+        return sendError(res, 409, 'POST_NOT_EDITABLE', 'This post cannot be edited.', {
+          post_type: post.post_type,
+        });
+      }
+      if (post.post_type === 'FORUM_TOPIC') {
+        const now = Date.now();
+        if (!isWithinEditWindow(post.created_at, now)) {
+          const deadlineMs = getEditWindowDeadlineMs(post.created_at);
+          return sendError(
+            res,
+            409,
+            'EDIT_WINDOW_CLOSED',
+            'The 24-hour edit window has closed.',
+            {
+              editable_until:
+                deadlineMs !== null ? new Date(deadlineMs).toISOString() : post.created_at,
+            }
+          );
+        }
+      }
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Request body must be a JSON object.');
+      }
+      const keys = Object.keys(body);
+      if (keys.length === 0 || keys.some((k) => k !== 'title' && k !== 'body')) {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          'Provide title and/or body without unknown fields.'
+        );
+      }
+      let nextTitle = post.title;
+      let nextBody = post.body;
+      if ('title' in body) {
+        if (typeof body.title !== 'string') {
+          return sendError(res, 422, 'VALIDATION_ERROR', 'Title must be a string.');
+        }
+        const trimmedTitle = body.title.trim();
+        if (
+          !trimmedTitle ||
+          trimmedTitle.length > POST_TITLE_MAX_LENGTH ||
+          hasDisallowedControlChars(trimmedTitle)
+        ) {
+          return sendError(
+            res,
+            422,
+            'VALIDATION_ERROR',
+            `Title must be 1 to ${POST_TITLE_MAX_LENGTH} plain-text characters.`
+          );
+        }
+        nextTitle = trimmedTitle;
+      }
+      if ('body' in body) {
+        if (typeof body.body !== 'string') {
+          return sendError(res, 422, 'VALIDATION_ERROR', 'Body must be a string.');
+        }
+        const trimmedBody = body.body.trim();
+        if (
+          !trimmedBody ||
+          trimmedBody.length > POST_BODY_MAX_LENGTH ||
+          hasDisallowedControlChars(trimmedBody)
+        ) {
+          return sendError(
+            res,
+            422,
+            'VALIDATION_ERROR',
+            `Body must be 1 to ${POST_BODY_MAX_LENGTH} plain-text characters.`
+          );
+        }
+        nextBody = trimmedBody;
+      }
+      if (nextTitle !== post.title || nextBody !== post.body) {
+        post.title = nextTitle;
+        post.body = nextBody;
+        post.edited_at = new Date().toISOString();
+      }
+      const targetAptId = post.target_apartment_ids?.[0] || null;
+      return sendJson(res, 200, {
+        id: post.id,
+        post_type: post.post_type,
+        category: post.category,
+        title: post.title,
+        body: post.body,
+        author_badge: resolveAuthorBadge(post.author_user_id, post.post_type, targetAptId),
+        is_mine: post.author_user_id === user.user_id,
+        target_scope: post.target_scope,
+        target_entrance: post.target_entrance,
+        target_apartment_ids: post.target_apartment_ids,
+        is_active: post.is_active,
+        comments_enabled: post.comments_enabled,
+        comments_count: post.comments.length,
+        created_at: post.created_at,
+        last_activity_at:
+          post.comments.length > 0
+            ? post.comments[post.comments.length - 1].created_at
+            : post.created_at,
+        origin: post.origin || null,
+        edited_at: post.edited_at || null,
+        hidden_at: post.hidden_at || null,
+        hidden_reason: post.hidden_at ? post.hidden_reason || null : null,
+      });
+    }
+
+    const commentEditMatch = pathname.match(
+      /^\/api\/v1\/communication\/posts\/([^/]+)\/comments\/([^/]+)$/
+    );
+    if (commentEditMatch && method === 'PATCH') {
+      const postId = safeDecodePathParam(commentEditMatch[1]);
+      const commentId = safeDecodePathParam(commentEditMatch[2]);
+      const post = postId ? postsStore.find((p) => p.id === postId) : null;
+      const userMems = membershipsByUser[user.user_id] || [];
+      if (
+        !post ||
+        !canViewerSeePost(post, {
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          memberships: userMems,
+        })
+      ) {
+        return sendError(res, 404, 'POST_NOT_FOUND', 'Post not found.');
+      }
+      const comment = commentId ? post.comments.find((c) => c.id === commentId) : null;
+      if (!comment) {
+        return sendError(res, 404, 'COMMENT_NOT_FOUND', 'Comment not found.');
+      }
+      if (comment.author_user_id !== user.user_id) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only the author can edit this comment.');
+      }
+      const editablePostType =
+        post.post_type === 'FORUM_TOPIC' ||
+        post.post_type === 'BOARD_TOPIC' ||
+        post.post_type === 'OFFICIAL_NOTICE' ||
+        post.post_type === 'EMERGENCY';
+      if (!editablePostType || post.origin != null || post.hidden_at || comment.hidden_at) {
+        return sendError(res, 409, 'COMMENT_NOT_EDITABLE', 'This comment cannot be edited.');
+      }
+      const now = Date.now();
+      if (!isWithinEditWindow(comment.created_at, now)) {
+        const deadlineMs = getEditWindowDeadlineMs(comment.created_at);
+        return sendError(
+          res,
+          409,
+          'EDIT_WINDOW_CLOSED',
+          'The 24-hour edit window has closed.',
+          {
+            editable_until:
+              deadlineMs !== null ? new Date(deadlineMs).toISOString() : comment.created_at,
+          }
+        );
+      }
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Request body must be a JSON object.');
+      }
+      const keys = Object.keys(body);
+      if (keys.length !== 1 || keys[0] !== 'body' || typeof body.body !== 'string') {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          'Comment body is required without unknown fields.'
+        );
+      }
+      const check = validateCommentEdit(body.body);
+      if (!check.valid) {
+        return sendError(
+          res,
+          422,
+          'VALIDATION_ERROR',
+          `Comment body must be 1 to ${COMMENT_BODY_MAX_LENGTH} plain-text characters.`
+        );
+      }
+      if (check.body !== comment.body) {
+        comment.body = check.body;
+        comment.edited_at = new Date().toISOString();
+      }
+      const targetAptId = post.target_apartment_ids?.[0] || null;
+      return sendJson(
+        res,
+        200,
+        projectCommentForViewer(comment, {
+          postId: post.id,
+          viewerUserId: user.user_id,
+          viewerRole: user.building_role,
+          authorBadge: resolveAuthorBadge(comment.author_user_id, post.post_type, targetAptId),
+        })
+      );
     }
 
     // 17. AUTH ENDPOINTS (Epic E7)
@@ -5262,12 +6309,12 @@ export function createApiMiddleware() {
     if (pathname === '/api/v1/notifications/preferences' && method === 'PUT') {
       const body = await readBody(req);
       const changes = Array.isArray(body.preferences) ? body.preferences : [];
-      if (changes.length < 1 || changes.length > 48) {
+      if (changes.length < 1 || changes.length > 52) {
         return sendError(
           res,
           422,
           'VALIDATION_ERROR',
-          'Provide between 1 and 48 preference changes.'
+          'Provide between 1 and 52 preference changes.'
         );
       }
       const prefs = getUserPreferences(user.user_id);
@@ -5351,11 +6398,13 @@ export function createApiMiddleware() {
                 ? 'ISSUE_REPORTED'
                 : lower.includes('issue')
                   ? 'ISSUE_STATUS_CHANGED'
-                  : lower.includes('board')
-                    ? 'APARTMENT_MESSAGE_TO_BOARD'
-                    : lower.includes('message')
-                      ? 'APARTMENT_MESSAGE'
-                      : 'READING_DEADLINE';
+                  : lower.includes('storage')
+                    ? 'STORAGE_ALMOST_FULL'
+                    : lower.includes('board')
+                      ? 'APARTMENT_MESSAGE_TO_BOARD'
+                      : lower.includes('message')
+                        ? 'APARTMENT_MESSAGE'
+                        : 'READING_DEADLINE';
         const prefs = getUserPreferences(user.user_id);
         const match = prefs.find((p) => p.event_type === eventType && p.channel === 'email');
         if (match && !match.mandatory) {
@@ -5724,6 +6773,20 @@ export function createApiMiddleware() {
         );
       }
 
+      let refererUploadsDisabled = false;
+      if (typeof req.headers.referer === 'string' && req.headers.referer) {
+        try {
+          refererUploadsDisabled =
+            new URL(req.headers.referer).searchParams.get('simulate_uploads_disabled') === '1';
+        } catch {
+          refererUploadsDisabled = false;
+        }
+      }
+      const uploadsDisabled =
+        urlObj.searchParams.get('simulate_uploads_disabled') === '1' ||
+        req.headers['x-simulate-uploads-disabled'] === '1' ||
+        refererUploadsDisabled;
+
       if (pathname === '/api/v1/issues/form' && method === 'GET') {
         const urgentEnabled = Boolean(
           readSettingFromStore(associationSettingsStore, 'issues.urgent_enabled', false)
@@ -5734,20 +6797,27 @@ export function createApiMiddleware() {
           .map((m) => m.apartment_id);
         return sendJson(res, 200, {
           urgent_enabled: urgentEnabled,
+          uploads_enabled: !uploadsDisabled,
           apartment_ids: apartmentIds,
           entrances: [1, 2],
         });
       }
 
       if (pathname === '/api/v1/issues' && method === 'GET') {
-        const result = queryIssuesStore(issuesStore, user, {
-          status: urlObj.searchParams.get('status'),
-          category: urlObj.searchParams.get('category'),
-          entrance: urlObj.searchParams.get('entrance'),
-          include_old: urlObj.searchParams.get('include_old'),
-          limit: urlObj.searchParams.get('limit'),
-          offset: urlObj.searchParams.get('offset'),
-        });
+        const result = queryIssuesStore(
+          issuesStore,
+          user,
+          {
+            status: urlObj.searchParams.get('status'),
+            category: urlObj.searchParams.get('category'),
+            entrance: urlObj.searchParams.get('entrance'),
+            include_old: urlObj.searchParams.get('include_old'),
+            limit: urlObj.searchParams.get('limit'),
+            offset: urlObj.searchParams.get('offset'),
+          },
+          Date.now(),
+          { uploadsDisabled }
+        );
         if (!result.ok) {
           return sendError(
             res,
@@ -5792,7 +6862,11 @@ export function createApiMiddleware() {
           const notifBatch = buildIssueReportedNotification(outcome.rawIssue, DEMO_USERS, user);
           emitServerIssueNotificationBatch(notifBatch as any);
         }
-        return sendJson(res, 201, outcome.issue);
+        return sendJson(
+          res,
+          201,
+          toIssueView(outcome.rawIssue, user, { uploadsDisabled })
+        );
       }
 
       const issueStatusMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/status$/);
@@ -5821,7 +6895,7 @@ export function createApiMiddleware() {
         for (const notifBatch of outcome.notifications || []) {
           emitServerIssueNotificationBatch(notifBatch as any);
         }
-        return sendJson(res, 200, outcome.issue);
+        return sendJson(res, 200, toIssueView(found, user, { uploadsDisabled }));
       }
 
       const issueUrgentClearMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/urgent\/clear$/);
@@ -5843,7 +6917,7 @@ export function createApiMiddleware() {
             outcome.message || 'Cannot clear urgent flag.'
           );
         }
-        return sendJson(res, 200, outcome.issue);
+        return sendJson(res, 200, toIssueView(found, user, { uploadsDisabled }));
       }
 
       const issueWithdrawMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/withdraw$/);
@@ -5862,7 +6936,7 @@ export function createApiMiddleware() {
             outcome.message || 'Cannot withdraw issue.'
           );
         }
-        return sendJson(res, 200, outcome.issue);
+        return sendJson(res, 200, toIssueView(found, user, { uploadsDisabled }));
       }
 
       const issueFollowMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/follow$/);
@@ -5885,7 +6959,191 @@ export function createApiMiddleware() {
             outcome.message || 'Cannot update follow state.'
           );
         }
-        return sendJson(res, 200, outcome.issue);
+        return sendJson(res, 200, toIssueView(found, user, { uploadsDisabled }));
+      }
+
+      // POST /api/v1/issues/:issueId/photos
+      const issuePhotosMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/photos$/);
+      if (issuePhotosMatch && method === 'POST') {
+        const issueId = issuePhotosMatch[1];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+
+        const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user?.building_role);
+        const simAnswer = String(
+          urlObj.searchParams.get('simulate_upload_answer') ||
+            req.headers['x-simulate-upload-answer'] ||
+            ''
+        ).toUpperCase();
+
+        const idempotencyKeyHeader =
+          (req.headers['idempotency-key'] as string | undefined) || '';
+        const rawLengthHeader = req.headers['content-length'];
+        const parsedLength =
+          rawLengthHeader !== undefined && rawLengthHeader !== ''
+            ? Number(rawLengthHeader)
+            : null;
+        const contentTypeHeader =
+          (req.headers['content-type'] as string | undefined) || '';
+
+        const preflight = checkIssuePhotoUploadPreflight({
+          issue: found,
+          user,
+          contentType: contentTypeHeader,
+          contentLength: parsedLength,
+          idempotencyKey: idempotencyKeyHeader,
+          idempotencyStore: issuePhotoIdempotencyStore,
+          dailyUploadsStore: issuePhotoDailyUploadsStore,
+          uploadsDisabled,
+          quotaExceededReason:
+            simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+          lowDisk: simAnswer === 'LOW_DISK',
+        });
+        if (!preflight.ok) {
+          return sendError(
+            res,
+            preflight.status || 422,
+            preflight.errorCode || 'VALIDATION_ERROR',
+            preflight.message || 'Cannot upload photo.',
+            preflight.extra || {}
+          );
+        }
+        if (preflight.replay) {
+          return sendJson(res, preflight.status || 200, preflight.photo);
+        }
+
+        if (simAnswer === 'DAILY_LIMIT' && !isBoardUser) {
+          return sendError(
+            res,
+            429,
+            'RATE_LIMITED',
+            'You have stored the photos allowed for today.',
+            {
+              reason: 'DAILY_LIMIT',
+              retry_after_seconds: 3600,
+            }
+          );
+        }
+
+        const uid = user?.user_id || 'anon';
+        const activeCount = activePhotoUploadsByUser.get(uid) || 0;
+        if (activeCount >= 2 || simAnswer === 'BUSY') {
+          return sendError(res, 429, 'RATE_LIMITED', 'Server is busy.', {
+            reason: 'BUSY',
+            retry_after_seconds: simAnswer === 'BUSY' ? 15 : 5,
+          });
+        }
+
+        activePhotoUploadsByUser.set(uid, activeCount + 1);
+        try {
+          if (simAnswer === 'UPLOAD_TIMEOUT') {
+            return sendError(res, 408, 'UPLOAD_TIMEOUT', 'Upload body timed out.');
+          }
+
+          const { interrupted, tooLarge, buffer } = await readRawBody(
+            req,
+            MAX_ISSUE_PHOTO_BYTES,
+            parsedLength,
+          );
+          if (interrupted) {
+            return sendError(res, 400, 'UPLOAD_INTERRUPTED', 'Upload interrupted; please retry.');
+          }
+          if (tooLarge) {
+            return sendError(res, 413, 'FILE_TOO_LARGE', 'Photo exceeds the 4 MB limit.', {
+              max_bytes: MAX_ISSUE_PHOTO_BYTES,
+            });
+          }
+          const outcome = addIssuePhotoInStore({
+            issue: found,
+            user,
+            bytes: buffer,
+            contentType: contentTypeHeader,
+            contentLength: parsedLength as number,
+            idempotencyKey: idempotencyKeyHeader,
+            idempotencyStore: issuePhotoIdempotencyStore,
+            dailyUploadsStore: issuePhotoDailyUploadsStore,
+            uploadsDisabled,
+            quotaExceededReason:
+              simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+            lowDisk: simAnswer === 'LOW_DISK',
+          });
+          if (!outcome.ok) {
+            return sendError(
+              res,
+              outcome.status || 422,
+              outcome.errorCode || 'VALIDATION_ERROR',
+              outcome.message || 'Cannot upload photo.',
+              outcome.extra || {}
+            );
+          }
+          checkAndEmitServerStorageAlert();
+          return sendJson(res, outcome.status || 201, outcome.photo);
+        } finally {
+          const remaining = (activePhotoUploadsByUser.get(uid) || 1) - 1;
+          if (remaining <= 0) {
+            activePhotoUploadsByUser.delete(uid);
+          } else {
+            activePhotoUploadsByUser.set(uid, remaining);
+          }
+        }
+      }
+
+      // GET / DELETE /api/v1/issues/:issueId/photos/:photoId
+      const issuePhotoItemMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)\/photos\/([^/]+)$/);
+      if (issuePhotoItemMatch && method === 'GET') {
+        const issueId = issuePhotoItemMatch[1];
+        const photoId = issuePhotoItemMatch[2];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        const variant = urlObj.searchParams.get('variant') || 'display';
+        const outcome = getIssuePhotoFromStore({ issue: found, photoId, variant });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 404,
+            outcome.errorCode || 'PHOTO_NOT_FOUND',
+            outcome.message || 'Photo not found.'
+          );
+        }
+        const traceId = `018f-${Math.random().toString(16).slice(2, 10)}`;
+        res.statusCode = 200;
+        res.setHeader('Content-Type', outcome.mime || 'image/webp');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+        res.setHeader('X-Trace-Id', traceId);
+        return res.end(Buffer.from(outcome.bytes));
+      }
+
+      if (issuePhotoItemMatch && method === 'DELETE') {
+        const issueId = issuePhotoItemMatch[1];
+        const photoId = issuePhotoItemMatch[2];
+        const found = issuesStore.find((item) => item.id === issueId);
+        if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
+          return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
+        }
+        const outcome = deleteIssuePhotoInStore({
+          issue: found,
+          user,
+          photoId,
+          idempotencyStore: issuePhotoIdempotencyStore,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 404,
+            outcome.errorCode || 'PHOTO_NOT_FOUND',
+            outcome.message || 'Photo not found.'
+          );
+        }
+        const traceId = `018f-${Math.random().toString(16).slice(2, 10)}`;
+        res.statusCode = 204;
+        res.setHeader('X-Trace-Id', traceId);
+        return res.end();
       }
 
       const issueDetailMatch = pathname.match(/^\/api\/v1\/issues\/([^/]+)$/);
@@ -5895,7 +7153,7 @@ export function createApiMiddleware() {
         if (!found || !isIssueVisibleToUser(found, user, Date.now(), { byLink: true })) {
           return sendError(res, 404, 'ISSUE_NOT_FOUND', 'This issue is not available.');
         }
-        return sendJson(res, 200, toIssueView(found, user));
+        return sendJson(res, 200, toIssueView(found, user, { uploadsDisabled }));
       }
 
       if (issueDetailMatch && method === 'PATCH') {
@@ -5919,8 +7177,294 @@ export function createApiMiddleware() {
             outcome.message || 'Cannot edit issue.'
           );
         }
-        return sendJson(res, 200, outcome.issue);
+        return sendJson(res, 200, toIssueView(found, user, { uploadsDisabled }));
       }
+    }
+
+    // =========================================================================
+    // Association Documents (/api/v1/documents) - #022 & #023 (E11/F3)
+    // =========================================================================
+    if (pathname === '/api/v1/documents' || pathname.startsWith('/api/v1/documents/')) {
+      const userMems = membershipsByUser[user.user_id] || [];
+      const resolveDocBadge = (uid: string): AuthorBadgeDTO => {
+        const u = DEMO_USERS.find((item) => item.user_id === uid);
+        if (u?.building_role === 'CHAIRMAN') {
+          return { display_label: 'Board Chairman', role_badge: 'BOARD' };
+        }
+        if (u?.building_role === 'ACCOUNTANT') {
+          return { display_label: 'Accountant', role_badge: 'ACCOUNTANT' };
+        }
+        return { display_label: 'Board Member', role_badge: 'BOARD' };
+      };
+
+      let refererDocUploadsDisabled = false;
+      if (typeof req.headers.referer === 'string' && req.headers.referer) {
+        try {
+          refererDocUploadsDisabled =
+            new URL(req.headers.referer).searchParams.get('simulate_uploads_disabled') === '1';
+        } catch {
+          /* ignore */
+        }
+      }
+      const docUploadsDisabled =
+        urlObj.searchParams.get('simulate_uploads_disabled') === '1' ||
+        req.headers['x-simulate-uploads-disabled'] === '1' ||
+        refererDocUploadsDisabled;
+
+      if (pathname === '/api/v1/documents/upload-options' && method === 'GET') {
+        if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role) && userMems.length === 0) {
+          return sendError(res, 403, 'FORBIDDEN', 'Only active members and staff can access documents.');
+        }
+        return sendJson(res, 200, getUploadOptionsForUser(user, { uploadsDisabled: docUploadsDisabled }));
+      }
+
+      if (pathname === '/api/v1/documents' && method === 'GET') {
+        const result = queryDocumentsStore(
+          documentsStore,
+          user,
+          userMems,
+          {
+            category: urlObj.searchParams.get('category') || '',
+            limit: urlObj.searchParams.get('limit') ?? undefined,
+            offset: urlObj.searchParams.get('offset') ?? undefined,
+          },
+          { resolveBadgeFn: resolveDocBadge }
+        );
+        if (!result.ok) {
+          return sendError(
+            res,
+            result.status || 403,
+            result.errorCode || 'FORBIDDEN',
+            result.message || 'Cannot list documents.'
+          );
+        }
+        return sendJson(res, 200, result.items);
+      }
+
+      if (pathname === '/api/v1/documents' && method === 'POST') {
+        const simAnswer = String(
+          urlObj.searchParams.get('simulate_upload_answer') ||
+            req.headers['x-simulate-upload-answer'] ||
+            ''
+        ).toUpperCase();
+        const idempotencyKeyHeader =
+          (req.headers['idempotency-key'] as string | undefined) || '';
+        const rawLengthHeader = req.headers['content-length'];
+        const parsedLength =
+          rawLengthHeader !== undefined && rawLengthHeader !== ''
+            ? Number(rawLengthHeader)
+            : null;
+        const contentTypeHeader =
+          (req.headers['content-type'] as string | undefined) || '';
+
+        const preflight = checkDocumentUploadPreflight({
+          store: documentsStore,
+          user,
+          userMemberships: userMems,
+          query: {
+            title: urlObj.searchParams.get('title'),
+            category: urlObj.searchParams.get('category'),
+            audience: urlObj.searchParams.get('audience'),
+            document_date: urlObj.searchParams.get('document_date'),
+          },
+          contentType: contentTypeHeader,
+          contentLength: parsedLength,
+          idempotencyKey: idempotencyKeyHeader,
+          idempotencyStore: documentIdempotencyStore,
+          uploadsDisabled: docUploadsDisabled,
+          quotaExceededReason:
+            simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+          lowDisk: simAnswer === 'LOW_DISK',
+          resolveBadgeFn: resolveDocBadge,
+        });
+        if (!preflight.ok) {
+          return sendError(
+            res,
+            preflight.status || 422,
+            preflight.errorCode || 'VALIDATION_ERROR',
+            preflight.message || 'Cannot upload document.',
+            preflight.extra || {}
+          );
+        }
+        if (preflight.replay) {
+          if (simAnswer === 'UPLOAD_REMOVED') {
+            return sendError(res, 409, 'UPLOAD_REMOVED', 'This document was removed meanwhile.');
+          }
+          return sendJson(res, preflight.status || 200, preflight.document);
+        }
+
+        if (simAnswer === 'UPLOAD_REMOVED') {
+          return sendError(res, 409, 'UPLOAD_REMOVED', 'This document was removed meanwhile.');
+        }
+
+        const uid = user?.user_id || 'anon';
+        const activeCount = activeDocumentUploadsByUser.get(uid) || 0;
+        if (activeCount >= 2 || simAnswer === 'BUSY') {
+          return sendError(res, 429, 'RATE_LIMITED', 'Server is busy.', {
+            reason: 'BUSY',
+            retry_after_seconds: simAnswer === 'BUSY' ? 15 : 5,
+          });
+        }
+
+        activeDocumentUploadsByUser.set(uid, activeCount + 1);
+        try {
+          if (simAnswer === 'UPLOAD_TIMEOUT') {
+            return sendError(res, 408, 'UPLOAD_TIMEOUT', 'Upload body timed out.');
+          }
+          const { interrupted, tooLarge, buffer } = await readRawBody(
+            req,
+            MAX_DOCUMENT_BYTES,
+            parsedLength,
+          );
+          if (interrupted) {
+            return sendError(res, 400, 'UPLOAD_INTERRUPTED', 'The upload broke off; try again.');
+          }
+          if (tooLarge) {
+            return sendError(res, 413, 'FILE_TOO_LARGE', 'The file is larger than 20 MB.', {
+              max_bytes: MAX_DOCUMENT_BYTES,
+            });
+          }
+          const outcome = addDocumentInStore({
+            store: documentsStore,
+            user,
+            userMemberships: userMems,
+            bytes: buffer,
+            query: {
+              title: urlObj.searchParams.get('title'),
+              category: urlObj.searchParams.get('category'),
+              audience: urlObj.searchParams.get('audience'),
+              document_date: urlObj.searchParams.get('document_date'),
+            },
+            contentType: contentTypeHeader,
+            contentLength: parsedLength as number,
+            idempotencyKey: idempotencyKeyHeader,
+            idempotencyStore: documentIdempotencyStore,
+            uploadsDisabled: docUploadsDisabled,
+            quotaExceededReason:
+              simAnswer === 'QUOTA' || simAnswer === 'DELETIONS_PENDING' ? simAnswer : '',
+            lowDisk: simAnswer === 'LOW_DISK',
+            resolveBadgeFn: resolveDocBadge,
+          });
+          if (!outcome.ok) {
+            return sendError(
+              res,
+              outcome.status || 422,
+              outcome.errorCode || 'VALIDATION_ERROR',
+              outcome.message || 'Cannot upload document.',
+              outcome.extra || {}
+            );
+          }
+          checkAndEmitServerStorageAlert();
+          return sendJson(res, outcome.status || 201, outcome.document);
+        } finally {
+          const remaining = (activeDocumentUploadsByUser.get(uid) || 1) - 1;
+          if (remaining <= 0) {
+            activeDocumentUploadsByUser.delete(uid);
+          } else {
+            activeDocumentUploadsByUser.set(uid, remaining);
+          }
+        }
+      }
+
+      const docFileMatch = pathname.match(/^\/api\/v1\/documents\/([^/]+)\/file$/);
+      if (docFileMatch && method === 'GET') {
+        const docId = decodeURIComponent(docFileMatch[1]);
+        const outcome = getDocumentFileFromStore(documentsStore, docId, user, userMems);
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 404,
+            outcome.errorCode || 'DOCUMENT_NOT_FOUND',
+            outcome.message || 'This document is not available.'
+          );
+        }
+        const traceId = `018f-${Math.random().toString(16).slice(2, 10)}`;
+        res.statusCode = 200;
+        res.setHeader('Content-Type', outcome.contentType);
+        res.setHeader('Content-Disposition', outcome.contentDisposition);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('X-Trace-Id', traceId);
+        return res.end(Buffer.from(outcome.bytes));
+      }
+
+      const docItemMatch = pathname.match(/^\/api\/v1\/documents\/([^/]+)$/);
+      if (docItemMatch && method === 'GET') {
+        const docId = decodeURIComponent(docItemMatch[1]);
+        const outcome = getDocumentFromStore(documentsStore, docId, user, userMems, {
+          resolveBadgeFn: resolveDocBadge,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 404,
+            outcome.errorCode || 'DOCUMENT_NOT_FOUND',
+            outcome.message || 'This document is not available.'
+          );
+        }
+        return sendJson(res, 200, outcome.document);
+      }
+
+      if (docItemMatch && method === 'PATCH') {
+        const docId = decodeURIComponent(docItemMatch[1]);
+        const body = await readBody(req);
+        const outcome = editDocumentInStore({
+          store: documentsStore,
+          documentId: docId,
+          user,
+          userMemberships: userMems,
+          body,
+          resolveBadgeFn: resolveDocBadge,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 422,
+            outcome.errorCode || 'VALIDATION_ERROR',
+            outcome.message || 'Cannot edit document.',
+            outcome.extra || {}
+          );
+        }
+        return sendJson(res, 200, outcome.document);
+      }
+
+      if (docItemMatch && method === 'DELETE') {
+        const docId = decodeURIComponent(docItemMatch[1]);
+        const outcome = deleteDocumentInStore({
+          store: documentsStore,
+          documentId: docId,
+          user,
+          userMemberships: userMems,
+        });
+        if (!outcome.ok) {
+          return sendError(
+            res,
+            outcome.status || 404,
+            outcome.errorCode || 'DOCUMENT_NOT_FOUND',
+            outcome.message || 'This document is not available.'
+          );
+        }
+        const traceId = `018f-${Math.random().toString(16).slice(2, 10)}`;
+        res.statusCode = 204;
+        res.setHeader('X-Trace-Id', traceId);
+        return res.end();
+      }
+    }
+
+    // =========================================================================
+    // Storage Usage (/api/v1/files/usage) - #024 (E11/F4)
+    // =========================================================================
+    if (pathname === '/api/v1/files/usage' && method === 'GET') {
+      if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only the chairman and board members can view storage usage.');
+      }
+      const currentUsage = computeStorageUsage({
+        issuesStore,
+        documentsStore,
+        extraPendingDeletionBytes: serverExtraPendingDeletionBytes,
+      });
+      return sendJson(res, 200, currentUsage);
     }
 
     // =========================================================================
@@ -6274,11 +7818,95 @@ export function createApiMiddleware() {
       return sendJson(res, 200, outcome.entry);
     }
 
+    // =========================================================================
+    // Maintenance Yearly Report (/api/v1/maintenance/report) - #029 (E10/#132)
+    // =========================================================================
+    if (pathname === '/api/v1/maintenance/report' && method === 'GET') {
+      if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)) {
+        return sendError(
+          res,
+          403,
+          'FORBIDDEN',
+          'Only the chairman, board members, and accountant can view the maintenance yearly report.'
+        );
+      }
+      const outcome = buildMaintenanceYearReport(
+        maintenanceLogStore,
+        urlObj.searchParams.get('year')
+      );
+      if (!outcome.ok) {
+        return sendError(
+          res,
+          outcome.status || 422,
+          outcome.errorCode || 'VALIDATION_ERROR',
+          outcome.message || 'Invalid year parameter.'
+        );
+      }
+      return sendJson(res, 200, outcome.report);
+    }
+
+    if (pathname === '/api/v1/maintenance/report/export-csv' && method === 'GET') {
+      if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role)) {
+        return sendError(
+          res,
+          403,
+          'FORBIDDEN',
+          'Only the chairman, board members, and accountant can export the maintenance yearly report.'
+        );
+      }
+      const outcome = buildMaintenanceYearCsv(
+        maintenanceLogStore,
+        urlObj.searchParams.get('year')
+      );
+      if (!outcome.ok) {
+        return sendError(
+          res,
+          outcome.status || 422,
+          outcome.errorCode || 'VALIDATION_ERROR',
+          outcome.message || 'Invalid year parameter.'
+        );
+      }
+      const traceId = `018f-${Math.random().toString(16).slice(2, 10)}`;
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${outcome.filename}"`);
+      res.setHeader('X-Trace-Id', traceId);
+      return res.end(Buffer.from(outcome.csv || '', 'utf8'));
+    }
+
     return sendError(res, 404, 'NOT_FOUND', `Endpoint ${method} ${pathname} not found.`);
   };
 }
 
 let associationSettingsStore: SettingView[] = cloneDefaultAssociationSettings();
 let issuesStore: any[] = createDefaultIssuesSeed();
+const issuePhotoIdempotencyStore = new Map<string, any>();
+const issuePhotoDailyUploadsStore: Array<{ userId: string; bytes: number; atMs: number }> = [];
+const activePhotoUploadsByUser = new Map<string, number>();
+let documentsStore: any[] = createDefaultDocumentsSeed();
+const documentIdempotencyStore = new Map<string, any>();
+const activeDocumentUploadsByUser = new Map<string, number>();
 let maintenanceStore: any[] = createDefaultMaintenanceSeed();
 let maintenanceLogStore: any[] = createDefaultMaintenanceLogSeed();
+let serverExtraPendingDeletionBytes = 0;
+let serverStorageAlertState = { armed70: true, armed90: true };
+
+export function resetApiMiddlewareStateForTest() {
+  postsStore.splice(0, postsStore.length, ...createDefaultServerPosts());
+  associationSettingsStore = cloneDefaultAssociationSettings();
+  issuesStore = createDefaultIssuesSeed();
+  issuePhotoIdempotencyStore.clear();
+  issuePhotoDailyUploadsStore.length = 0;
+  activePhotoUploadsByUser.clear();
+  documentsStore = createDefaultDocumentsSeed();
+  documentIdempotencyStore.clear();
+  activeDocumentUploadsByUser.clear();
+  maintenanceStore = createDefaultMaintenanceSeed();
+  maintenanceLogStore = createDefaultMaintenanceLogSeed();
+  for (const key of Object.keys(apartmentsByPeriod)) delete apartmentsByPeriod[key];
+  Object.assign(apartmentsByPeriod, JSON.parse(INITIAL_APARTMENTS_BY_PERIOD_SNAPSHOT));
+  for (const key of Object.keys(masterMetersByPeriod)) delete masterMetersByPeriod[key];
+  Object.assign(masterMetersByPeriod, JSON.parse(INITIAL_MASTER_METERS_BY_PERIOD_SNAPSHOT));
+  serverExtraPendingDeletionBytes = 0;
+  serverStorageAlertState = { armed70: true, armed90: true };
+}

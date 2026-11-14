@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { localizeError } from '@/locales/index.js'
@@ -13,6 +13,7 @@ import {
   clearIssueUrgent,
 } from '@/api/endpoints/issues.js'
 import {
+  MAX_ISSUE_PHOTOS,
   isIssueOpen,
   getAllowedBoardMoves,
   canBoardReopenIssue,
@@ -20,6 +21,7 @@ import {
 } from '@/utils/issues.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
+import IssuePhotos from '@/components/domain/IssuePhotos.vue'
 import IssueFormModal from './components/IssueFormModal.vue'
 
 const route = useRoute()
@@ -110,14 +112,42 @@ function formatDateTime(isoStr) {
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
+      timeZone: 'Europe/Tallinn',
     }).format(new Date(isoStr))
   } catch {
     return isoStr.replace('T', ' ').slice(0, 16)
   }
 }
 
+let detailLoadSeq = 0
+let detailRefreshSeq = 0
+let detailAbortController = null
+
+function abortDetailFetch() {
+  detailRefreshSeq += 1
+  if (detailAbortController) {
+    try {
+      detailAbortController.abort()
+    } catch {
+      /* ignore */
+    }
+    detailAbortController = null
+  }
+}
+
+onBeforeUnmount(() => {
+  abortDetailFetch()
+})
+
 async function loadDetail({ preserveNotices = false } = {}) {
-  if (!issueId.value) return
+  const requestedId = issueId.value
+  if (!requestedId) return
+  const seq = ++detailLoadSeq
+  const startActingUserId = session.actingUserId
+  abortDetailFetch()
+  detailAbortController = new AbortController()
+  const signal = detailAbortController.signal
+
   isLoading.value = true
   notFound.value = false
   loadError.value = null
@@ -127,8 +157,17 @@ async function loadDetail({ preserveNotices = false } = {}) {
   }
 
   try {
-    issue.value = await getIssue(issueId.value)
+    const loaded = await getIssue(requestedId, { signal })
+    if (
+      seq !== detailLoadSeq ||
+      issueId.value !== requestedId ||
+      session.actingUserId !== startActingUserId
+    ) {
+      return
+    }
+    issue.value = loaded
   } catch (err) {
+    if (seq !== detailLoadSeq || err?.errorCode === 'REQUEST_ABORTED') return
     if (err?.status === 404 || err?.errorCode === 'ISSUE_NOT_FOUND') {
       notFound.value = true
       issue.value = null
@@ -136,8 +175,78 @@ async function loadDetail({ preserveNotices = false } = {}) {
       loadError.value = err
     }
   } finally {
-    isLoading.value = false
+    if (seq === detailLoadSeq) {
+      isLoading.value = false
+    }
   }
+}
+
+async function refreshIssueQuietly() {
+  const requestedId = issue.value?.id
+  if (!requestedId) return
+  if (!detailAbortController || detailAbortController.signal.aborted) {
+    detailAbortController = new AbortController()
+  }
+  const signal = detailAbortController.signal
+  const seq = ++detailRefreshSeq
+  const expectedLoadSeq = detailLoadSeq
+  const startActingUserId = session.actingUserId
+  try {
+    const refreshed = await getIssue(requestedId, { signal })
+    if (
+      signal.aborted ||
+      seq !== detailRefreshSeq ||
+      expectedLoadSeq !== detailLoadSeq ||
+      session.actingUserId !== startActingUserId ||
+      issue.value?.id !== requestedId
+    ) {
+      return
+    }
+    issue.value = refreshed
+  } catch {
+    // Keep existing issue view if background refresh fails or is aborted
+  }
+}
+
+function handlePhotoUploaded(photo) {
+  if (!issue.value || !photo?.id) {
+    refreshIssueQuietly()
+    return
+  }
+  const existing = issue.value.photos || []
+  const nextPhotos = existing.some((p) => p.id === photo.id) ? existing : [...existing, photo]
+  issue.value = {
+    ...issue.value,
+    photos: nextPhotos,
+    can_add_photo:
+      nextPhotos.length < MAX_ISSUE_PHOTOS ? Boolean(issue.value.can_add_photo) : false,
+  }
+  refreshIssueQuietly()
+}
+
+function handlePhotoDeleted(photoId) {
+  if (!issue.value) return
+  const nextPhotos = (issue.value.photos || []).filter((p) => p.id !== photoId)
+  issue.value = {
+    ...issue.value,
+    photos: nextPhotos,
+    photos_delete_at: nextPhotos.length > 0 ? issue.value.photos_delete_at : null,
+  }
+  refreshIssueQuietly()
+}
+
+function handlePhotoGone(photoId) {
+  if (!issue.value) return
+  const nextPhotos = (issue.value.photos || []).filter((p) => p.id !== photoId)
+  issue.value = {
+    ...issue.value,
+    photos: nextPhotos,
+    photos_delete_at: nextPhotos.length > 0 ? issue.value.photos_delete_at : null,
+  }
+}
+
+function invalidateBackgroundRefreshes() {
+  detailRefreshSeq += 1
 }
 
 async function handleToggleFollow(shouldFollow) {
@@ -145,10 +254,13 @@ async function handleToggleFollow(shouldFollow) {
   isFollowBusy.value = true
   actionError.value = ''
   conflictNotice.value = ''
+  invalidateBackgroundRefreshes()
   try {
-    issue.value = shouldFollow
+    const updated = shouldFollow
       ? await followIssue(issue.value.id)
       : await unfollowIssue(issue.value.id)
+    invalidateBackgroundRefreshes()
+    issue.value = updated
   } catch (err) {
     actionError.value = localizeError(err, session.lang)
   } finally {
@@ -161,8 +273,11 @@ async function handleConfirmWithdraw() {
   isWithdrawing.value = true
   actionError.value = ''
   conflictNotice.value = ''
+  invalidateBackgroundRefreshes()
   try {
-    issue.value = await withdrawIssue(issue.value.id)
+    const updated = await withdrawIssue(issue.value.id)
+    invalidateBackgroundRefreshes()
+    issue.value = updated
     showWithdrawConfirm.value = false
   } catch (err) {
     actionError.value = localizeError(err, session.lang)
@@ -174,6 +289,7 @@ async function handleConfirmWithdraw() {
 
 function handleEdited(updated) {
   showEditModal.value = false
+  invalidateBackgroundRefreshes()
   if (updated) {
     issue.value = updated
   } else {
@@ -248,10 +364,13 @@ async function handleConfirmStandardMove() {
   isBoardActionBusy.value = true
   actionError.value = ''
   conflictNotice.value = ''
+  invalidateBackgroundRefreshes()
   const targetStatus =
     pendingBoardMoveStatus.value === 'REOPEN' ? 'IN_PROGRESS' : pendingBoardMoveStatus.value
   try {
-    issue.value = await changeIssueStatus(issue.value.id, { status: targetStatus })
+    const updated = await changeIssueStatus(issue.value.id, { status: targetStatus })
+    invalidateBackgroundRefreshes()
+    issue.value = updated
     pendingBoardMoveStatus.value = ''
   } catch (err) {
     pendingBoardMoveStatus.value = ''
@@ -266,8 +385,11 @@ async function handleConfirmDecline() {
   isBoardActionBusy.value = true
   actionError.value = ''
   conflictNotice.value = ''
+  invalidateBackgroundRefreshes()
   try {
-    issue.value = await changeIssueStatus(issue.value.id, { status: 'DECLINED' })
+    const updated = await changeIssueStatus(issue.value.id, { status: 'DECLINED' })
+    invalidateBackgroundRefreshes()
+    issue.value = updated
     showDeclineModal.value = false
   } catch (err) {
     showDeclineModal.value = false
@@ -287,11 +409,14 @@ async function handleConfirmDuplicate() {
   duplicateModalError.value = ''
   actionError.value = ''
   conflictNotice.value = ''
+  invalidateBackgroundRefreshes()
   try {
-    issue.value = await changeIssueStatus(issue.value.id, {
+    const updated = await changeIssueStatus(issue.value.id, {
       status: 'DUPLICATE',
       duplicate_of: selectedOriginalId.value,
     })
+    invalidateBackgroundRefreshes()
+    issue.value = updated
     showDuplicateModal.value = false
   } catch (err) {
     if (err?.status === 409 && err?.errorCode === 'INVALID_ISSUE_TRANSITION') {
@@ -310,8 +435,11 @@ async function handleConfirmClearUrgent() {
   isBoardActionBusy.value = true
   actionError.value = ''
   conflictNotice.value = ''
+  invalidateBackgroundRefreshes()
   try {
-    issue.value = await clearIssueUrgent(issue.value.id)
+    const updated = await clearIssueUrgent(issue.value.id)
+    invalidateBackgroundRefreshes()
+    issue.value = updated
     showClearUrgentModal.value = false
   } catch (err) {
     showClearUrgentModal.value = false
@@ -710,6 +838,19 @@ onMounted(() => {
         </div>
       </section>
 
+      <!-- Photos Section (#020 / #021) -->
+      <IssuePhotos
+        :issue-id="issue.id"
+        :photos="issue.photos || []"
+        :can-add-photo="Boolean(issue.can_add_photo)"
+        :issue-open="isOpenStatus"
+        :photos-delete-at="issue.photos_delete_at || null"
+        @uploaded="handlePhotoUploaded"
+        @deleted="handlePhotoDeleted"
+        @photo-gone="handlePhotoGone"
+        @sync-needed="refreshIssueQuietly"
+      />
+
       <!-- Board Panel (#013): visible only to CHAIRMAN and BOARD -->
       <section
         v-if="isBoardOrChairman"
@@ -930,6 +1071,16 @@ onMounted(() => {
           <p class="text-sm text-on-surface-variant">
             {{ session.t('issues.detail.withdrawConfirmBody') }}
           </p>
+          <p
+            v-if="(issue?.photos?.length || 0) > 0"
+            data-testid="withdraw-photos-warning"
+            class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-200 flex items-center gap-2"
+          >
+            <span class="material-symbols-outlined text-[16px] text-amber-600 dark:text-amber-400 shrink-0">
+              photo_library
+            </span>
+            <span>{{ session.t('issues.photos.confirmPhotosDeletedWarning') }}</span>
+          </p>
           <div class="flex items-center justify-end gap-3 pt-2">
             <button
               type="button"
@@ -1027,6 +1178,16 @@ onMounted(() => {
           </h3>
           <p class="text-sm text-on-surface-variant">
             {{ session.t('issues.board.confirmDeclineBody') }}
+          </p>
+          <p
+            v-if="(issue?.photos?.length || 0) > 0"
+            data-testid="decline-photos-warning"
+            class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-200 flex items-center gap-2"
+          >
+            <span class="material-symbols-outlined text-[16px] text-amber-600 dark:text-amber-400 shrink-0">
+              photo_library
+            </span>
+            <span>{{ session.t('issues.photos.confirmPhotosDeletedWarning') }}</span>
           </p>
 
           <!-- Suggestion to write to the apartment when the problem is inside a flat -->
@@ -1139,6 +1300,16 @@ onMounted(() => {
             </h3>
             <p class="mt-1 text-xs text-on-surface-variant">
               {{ session.t('issues.board.duplicateModalSubtitle') }}
+            </p>
+            <p
+              v-if="(issue?.photos?.length || 0) > 0"
+              data-testid="duplicate-photos-warning"
+              class="mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-200 flex items-center gap-2"
+            >
+              <span class="material-symbols-outlined text-[16px] text-amber-600 dark:text-amber-400 shrink-0">
+                photo_library
+              </span>
+              <span>{{ session.t('issues.photos.confirmPhotosDeletedWarning') }}</span>
             </p>
           </div>
 

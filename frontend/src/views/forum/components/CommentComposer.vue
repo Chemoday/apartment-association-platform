@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { addComment } from '@/api/endpoints/communication.js'
@@ -49,6 +49,19 @@ function triggerSuccessFeedback() {
     sentSuccess.value = false
   }, 3500)
 }
+
+watch(
+  () => props.postId,
+  () => {
+    body.value = ''
+    errorMsg.value = ''
+    sentSuccess.value = false
+    if (successTimer) {
+      clearTimeout(successTimer)
+      successTimer = null
+    }
+  },
+)
 
 onBeforeUnmount(() => {
   if (successTimer) clearTimeout(successTimer)

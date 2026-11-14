@@ -1,4 +1,4 @@
-import { apiRequest } from '../client.js'
+import { apiRequest, apiUpload } from '../client.js'
 
 /**
  * GET /api/v1/issues/form
@@ -42,22 +42,25 @@ export function listIssues(params = {}) {
  * GET /api/v1/issues/{issue_id}
  * Returns full details of a single issue including description and timeline.
  * @param {string} issueId
+ * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<import('../schema.d.ts').IssueView>}
  */
-export function getIssue(issueId) {
-  return apiRequest(`/issues/${encodeURIComponent(issueId)}`, { method: 'GET' })
+export function getIssue(issueId, { signal } = {}) {
+  return apiRequest(`/issues/${encodeURIComponent(issueId)}`, { method: 'GET', signal })
 }
 
 /**
  * POST /api/v1/issues
  * Reports a common-area issue.
  * @param {import('../schema.d.ts').IssueReport} payload
+ * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<import('../schema.d.ts').IssueView>}
  */
-export function createIssue(payload) {
+export function createIssue(payload, { signal } = {}) {
   return apiRequest('/issues', {
     method: 'POST',
     body: payload,
+    signal,
   })
 }
 
@@ -135,4 +138,64 @@ export function clearIssueUrgent(issueId) {
   return apiRequest(`/issues/${encodeURIComponent(issueId)}/urgent/clear`, {
     method: 'POST',
   })
+}
+
+/**
+ * POST /api/v1/issues/{issue_id}/photos
+ * Uploads a single client-scaled JPEG photo with upload progress and idempotency key.
+ * @param {string} issueId
+ * @param {Blob} jpegBlob
+ * @param {Object} [options]
+ * @param {string} [options.idempotencyKey]
+ * @param {(loaded: number, total: number) => void} [options.onProgress]
+ * @param {AbortSignal} [options.signal]
+ * @returns {Promise<import('../schema.d.ts').IssuePhoto>}
+ */
+export function uploadIssuePhoto(issueId, jpegBlob, { idempotencyKey, onProgress, signal } = {}) {
+  return apiUpload(`/issues/${encodeURIComponent(issueId)}/photos`, {
+    method: 'POST',
+    body: jpegBlob,
+    contentType: 'image/jpeg',
+    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {},
+    onProgress,
+    signal,
+  })
+}
+
+/**
+ * GET /api/v1/issues/{issue_id}/photos/{photo_id}?variant=display|thumb
+ * Fetches an authenticated image variant as a Blob.
+ * @param {string} issueId
+ * @param {string} photoId
+ * @param {import('../schema.d.ts').PhotoVariant} [variant]
+ * @param {{ signal?: AbortSignal }} [options]
+ * @returns {Promise<Blob>}
+ */
+export async function fetchIssuePhotoBlob(issueId, photoId, variant = 'display', { signal } = {}) {
+  const qs = variant ? `?variant=${encodeURIComponent(variant)}` : ''
+  const response = await apiRequest(
+    `/issues/${encodeURIComponent(issueId)}/photos/${encodeURIComponent(photoId)}${qs}`,
+    {
+      method: 'GET',
+      raw: true,
+      signal,
+    },
+  )
+  return response.blob()
+}
+
+/**
+ * DELETE /api/v1/issues/{issue_id}/photos/{photo_id}
+ * Deletes a photo (uploader while issue is open; chairman/board anytime). Returns 204.
+ * @param {string} issueId
+ * @param {string} photoId
+ * @returns {Promise<null>}
+ */
+export function deleteIssuePhoto(issueId, photoId) {
+  return apiRequest(
+    `/issues/${encodeURIComponent(issueId)}/photos/${encodeURIComponent(photoId)}`,
+    {
+      method: 'DELETE',
+    },
+  )
 }

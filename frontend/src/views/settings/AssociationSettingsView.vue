@@ -1,10 +1,17 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { getSettings, updateSettings } from '@/api/endpoints/settings.js'
+import { getFileUsage } from '@/api/endpoints/files.js'
 import { localizeError } from '@/locales/index.js'
 import { formatDateTime } from '@/utils/dates.js'
+import {
+  formatStorageBytes,
+  clampUsedPercent,
+  resolveStorageCategoryKey,
+} from '@/utils/storage.js'
 import {
   groupSettingsByPrefix,
   buildInitialDraftState,
@@ -13,6 +20,7 @@ import {
 } from '@/utils/associationSettings.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
+const route = useRoute()
 const session = useSessionStore()
 const { isChairman, canViewAssociationSettings } = useRole()
 
@@ -26,7 +34,14 @@ const saveErrorBanner = ref('')
 const saveSuccessBanner = ref('')
 const fieldErrorMap = ref({})
 
+const storageUsage = ref(null)
+const storageLoading = ref(false)
+const storageError = ref(null)
+const storageSectionRef = ref(null)
+
 let requestSeq = 0
+let storageSeq = 0
+let storageAbortController = null
 
 const groupedSettings = computed(() => groupSettingsByPrefix(settings.value))
 
@@ -35,6 +50,35 @@ const pendingDiff = computed(() =>
 )
 
 const hasPendingChanges = computed(() => Object.keys(pendingDiff.value).length > 0)
+
+const storagePercent = computed(() => clampUsedPercent(storageUsage.value?.used_percent))
+
+const storageBarColorClass = computed(() => {
+  if (storagePercent.value >= 90) return 'bg-error'
+  if (storagePercent.value >= 70) return 'bg-tertiary'
+  return 'bg-primary'
+})
+
+const storageBadgeClass = computed(() => {
+  if (storagePercent.value >= 90) return 'bg-error-container text-on-error-container'
+  if (storagePercent.value >= 70) return 'bg-tertiary-container text-on-tertiary-container'
+  return 'bg-primary-fixed/50 text-primary'
+})
+
+function resolveStorageCategoryLabel(categoryName) {
+  const known = resolveStorageCategoryKey(categoryName)
+  if (known) {
+    return session.t(`associationSettings.storage.categories.${known}`)
+  }
+  return String(categoryName || '')
+}
+
+function computeCategoryPercent(cat) {
+  const used = Number(cat?.used_bytes || 0)
+  const limit = Number(cat?.limit_bytes || 0)
+  if (!Number.isFinite(limit) || limit <= 0) return 0
+  return clampUsedPercent(Math.floor((used * 100) / limit))
+}
 
 function resolveGroupTitle(prefix) {
   const key = `associationSettings.groups.${prefix}`
@@ -144,8 +188,61 @@ function applyLoadedSettings(loadedList) {
   fieldErrorMap.value = {}
 }
 
+function scrollToStorageHashIfNeeded() {
+  if (route.hash === '#storage') {
+    nextTick(() => {
+      storageSectionRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    })
+  }
+}
+
+async function fetchStorageUsage() {
+  if (storageAbortController) {
+    storageAbortController.abort()
+    storageAbortController = null
+  }
+  if (!canViewAssociationSettings.value) {
+    storageUsage.value = null
+    storageError.value = null
+    storageLoading.value = false
+    return
+  }
+
+  const seq = ++storageSeq
+  const controller = new AbortController()
+  storageAbortController = controller
+  storageLoading.value = true
+  storageError.value = null
+
+  try {
+    const res = await getFileUsage({ signal: controller.signal })
+    if (seq !== storageSeq) return
+    storageUsage.value = res
+    scrollToStorageHashIfNeeded()
+  } catch (err) {
+    if (seq !== storageSeq || err?.name === 'AbortError' || err?.errorCode === 'REQUEST_ABORTED') {
+      return
+    }
+    storageError.value = err
+  } finally {
+    if (seq === storageSeq) {
+      storageLoading.value = false
+      if (storageAbortController === controller) {
+        storageAbortController = null
+      }
+    }
+  }
+}
+
 async function fetchSettings() {
-  if (!canViewAssociationSettings.value) return
+  if (!canViewAssociationSettings.value) {
+    settings.value = []
+    draftValues.value = {}
+    draftResets.value = {}
+    loadError.value = null
+    loading.value = false
+    return
+  }
   const seq = ++requestSeq
   loading.value = true
   loadError.value = null
@@ -202,14 +299,35 @@ async function saveChanges() {
 }
 
 watch(
-  () => session.activeUserId,
+  [() => session.activeUserId, () => session.sessionRevision],
   () => {
+    storageUsage.value = null
+    storageError.value = null
     fetchSettings()
+    fetchStorageUsage()
+  },
+)
+
+watch(
+  () => route.hash,
+  (newHash) => {
+    if (newHash === '#storage') {
+      scrollToStorageHashIfNeeded()
+    }
   },
 )
 
 onMounted(() => {
   fetchSettings()
+  fetchStorageUsage()
+  scrollToStorageHashIfNeeded()
+})
+
+onBeforeUnmount(() => {
+  if (storageAbortController) {
+    storageAbortController.abort()
+    storageAbortController = null
+  }
 })
 </script>
 
@@ -530,5 +648,151 @@ onMounted(() => {
         </div>
       </div>
     </form>
+
+    <!-- Association Storage Block (#024 E11/F4: CHAIRMAN & BOARD) -->
+    <section
+      v-if="canViewAssociationSettings"
+      id="storage"
+      ref="storageSectionRef"
+      data-testid="association-storage-section"
+      class="bg-surface-container-lowest border border-surface-container rounded-2xl p-5 sm:p-6 space-y-5 scroll-mt-20"
+    >
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="space-y-1">
+          <h2 class="font-title-md text-base font-semibold text-on-surface flex items-center gap-2">
+            <span class="material-symbols-outlined text-[20px] text-primary" aria-hidden="true">
+              hard_drive
+            </span>
+            <span>{{ session.t('associationSettings.storage.title') }}</span>
+          </h2>
+          <p class="text-xs text-on-surface-variant">
+            {{ session.t('associationSettings.storage.subtitle') }}
+          </p>
+        </div>
+
+        <span
+          v-if="storageUsage && !storageLoading && !storageError"
+          data-testid="storage-percent-badge"
+          class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-mono font-semibold tabular-nums"
+          :class="storageBadgeClass"
+        >
+          {{ storagePercent }}%
+        </span>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="storageLoading" data-testid="storage-loading" class="space-y-3">
+        <div class="h-3 w-full bg-surface-container animate-pulse rounded-full" />
+        <div class="h-4 w-56 bg-surface-container animate-pulse rounded" />
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <div class="h-14 bg-surface-container animate-pulse rounded-xl" />
+          <div class="h-14 bg-surface-container animate-pulse rounded-xl" />
+        </div>
+      </div>
+
+      <!-- Error -->
+      <ErrorCard
+        v-else-if="storageError"
+        :error="storageError"
+        @retry="fetchStorageUsage"
+      />
+
+      <!-- Loaded Usage -->
+      <div v-else-if="storageUsage" class="space-y-5">
+        <div class="space-y-2">
+          <div
+            role="progressbar"
+            data-testid="storage-progress-bar"
+            :aria-valuenow="storagePercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-label="session.t('associationSettings.storage.progressAria', { percent: storagePercent })"
+            class="h-3 w-full rounded-full bg-surface-container overflow-hidden"
+          >
+            <div
+              class="h-full rounded-full transition-all duration-300"
+              :class="storageBarColorClass"
+              :style="{ width: `${storagePercent}%` }"
+            />
+          </div>
+
+          <p
+            data-testid="storage-used-summary"
+            class="text-xs font-medium text-on-surface-variant tabular-nums"
+          >
+            {{
+              session.t('associationSettings.storage.usedOfTotal', {
+                used: formatStorageBytes(storageUsage.used_bytes, session.lang),
+                total: formatStorageBytes(storageUsage.quota_bytes, session.lang),
+                percent: storagePercent,
+              })
+            }}
+          </p>
+        </div>
+
+        <!-- Per-category breakdown -->
+        <div v-if="Array.isArray(storageUsage.categories) && storageUsage.categories.length > 0" class="space-y-2.5">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
+            {{ session.t('associationSettings.storage.categoriesTitle') }}
+          </h3>
+
+          <ul class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <li
+              v-for="cat in storageUsage.categories"
+              :key="cat.category"
+              :data-testid="`storage-category-${cat.category}`"
+              class="rounded-xl border border-surface-container bg-surface-container-low/50 px-4 py-3 space-y-2"
+            >
+              <div class="flex items-center justify-between gap-2 text-xs">
+                <span class="font-semibold text-on-surface">
+                  {{ resolveStorageCategoryLabel(cat.category) }}
+                </span>
+                <span class="font-mono tabular-nums text-on-surface-variant whitespace-nowrap">
+                  <template v-if="cat.limit_bytes && cat.limit_bytes > 0">
+                    {{
+                      session.t('associationSettings.storage.categoryUsage', {
+                        used: formatStorageBytes(cat.used_bytes, session.lang),
+                        limit: formatStorageBytes(cat.limit_bytes, session.lang),
+                      })
+                    }}
+                  </template>
+                  <template v-else>
+                    {{ formatStorageBytes(cat.used_bytes, session.lang) }}
+                  </template>
+                </span>
+              </div>
+              <div class="h-1.5 w-full rounded-full bg-surface-container overflow-hidden">
+                <div
+                  class="h-full rounded-full bg-primary/80 transition-all duration-300"
+                  :style="{ width: `${computeCategoryPercent(cat)}%` }"
+                />
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Pending Deletion Notice (only shown when pending_deletion_bytes > 0) -->
+        <div
+          v-if="Number(storageUsage.pending_deletion_bytes) > 0"
+          data-testid="storage-pending-deletion"
+          class="rounded-xl border border-surface-container bg-surface-container-low px-4 py-3 flex items-start gap-3 text-xs text-on-surface-variant"
+          role="note"
+        >
+          <span class="material-symbols-outlined text-[18px] text-on-surface-variant shrink-0 mt-0.5" aria-hidden="true">
+            auto_delete
+          </span>
+          <div class="space-y-0.5">
+            <p class="font-medium text-on-surface">
+              {{
+                session.t('associationSettings.storage.pendingDeletion', {
+                  size: formatStorageBytes(storageUsage.pending_deletion_bytes, session.lang),
+                })
+              }}
+            </p>
+            <p>{{ session.t('associationSettings.storage.pendingDeletionHint') }}</p>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 </template>

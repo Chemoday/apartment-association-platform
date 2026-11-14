@@ -101,13 +101,16 @@ export const useSessionStore = defineStore('session', () => {
   const buildingAddress = computed(
     () => building.value?.address || 'Sõpruse pst 12, Kristiine, Tallinn',
   )
-  const buildingApartmentsCount = computed(
-    () =>
+  const knownBuildingApartmentsCount = computed(() => {
+    const raw =
       building.value?.apartment_count ??
       building.value?.apartments_count ??
       building.value?.total_apartments ??
-      36,
-  )
+      null
+    const count = Number(raw)
+    return Number.isInteger(count) && count > 0 ? count : null
+  })
+  const buildingApartmentsCount = computed(() => knownBuildingApartmentsCount.value ?? 36)
   const buildingEntrancesCount = computed(
     () =>
       building.value?.entrance_count ??
@@ -480,6 +483,7 @@ export const useSessionStore = defineStore('session', () => {
     buildingRegistryCode,
     buildingAddress,
     buildingApartmentsCount,
+    knownBuildingApartmentsCount,
     buildingEntrancesCount,
     buildingHeatedArea,
     meLoading,

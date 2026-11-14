@@ -1,13 +1,15 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { getApartmentCard } from '@/api/endpoints/property.js'
 import { getApartmentReadings } from '@/api/endpoints/meters.js'
+import { useApartmentConsumption } from '@/composables/useApartmentConsumption.js'
 import { createApartmentThread, listApartmentThreads } from '@/api/endpoints/communication.js'
 import { formatDate, formatDateTime, formatPeriodLabel, formatRelativeTime } from '@/utils/dates.js'
 import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
+import ConsumptionChart from '@/components/domain/ConsumptionChart.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const route = useRoute()
@@ -21,6 +23,13 @@ const isBoardOrChairman = computed(() =>
 
 const card = ref(null)
 const readingsData = ref(null)
+const {
+  data: consumptionData,
+  loading: consumptionLoading,
+  error: consumptionError,
+  load: loadConsumption,
+  reset: resetConsumption,
+} = useApartmentConsumption()
 const apartmentThreads = ref([])
 const loading = ref(false)
 const loadError = ref(null)
@@ -84,6 +93,14 @@ function getResourceIcon(resourceType) {
 
 let fetchCardSeq = 0
 
+function reloadConsumption() {
+  if (!isBoardOrChairman.value || !apartmentId.value) {
+    resetConsumption()
+    return
+  }
+  loadConsumption(apartmentId.value, 12)
+}
+
 async function fetchCardData() {
   if (!isBoardOrChairman.value || !apartmentId.value) {
     fetchCardSeq += 1
@@ -91,11 +108,13 @@ async function fetchCardData() {
     readingsData.value = null
     apartmentThreads.value = []
     loading.value = false
+    resetConsumption()
     return
   }
   const seq = ++fetchCardSeq
   loading.value = true
   loadError.value = null
+  reloadConsumption()
   try {
     const [cardRes, readingsRes, threadsRes] = await Promise.all([
       getApartmentCard(apartmentId.value),
@@ -149,6 +168,10 @@ onMounted(() => {
   fetchCardData()
 })
 
+onBeforeUnmount(() => {
+  fetchCardSeq += 1
+})
+
 watch(
   () => route.query.write,
   (val) => {
@@ -161,6 +184,7 @@ watch(
 watch(
   () => [apartmentId.value, session.actingUserId, session.me?.building_role, session.sessionRevision],
   () => {
+    resetConsumption()
     fetchCardData()
   },
 )
@@ -459,7 +483,7 @@ watch(
                 </span>
               </div>
               <p class="text-xs text-on-surface-variant line-clamp-1">
-                {{ thread.body }}
+                {{ thread.body ?? '' }}
               </p>
               <div class="flex items-center justify-between gap-2 pt-1">
                 <AuthorBadge
@@ -477,6 +501,17 @@ watch(
           </div>
         </section>
       </div>
+
+      <!-- Last 12 Months Consumption Chart (#030) -->
+      <ConsumptionChart
+        :periods="consumptionData?.periods || []"
+        :series="consumptionData?.resources || []"
+        :loading="consumptionLoading"
+        :error="consumptionError"
+        :title="session.t('consumptionChart.sectionTitle')"
+        :subtitle="session.t('consumptionChart.sectionSubtitle')"
+        @retry="reloadConsumption"
+      />
 
       <!-- Meter Readings Table Across Periods -->
       <section class="bg-surface-container-lowest border border-surface-container rounded-2xl p-space-md sm:p-space-lg space-y-4">

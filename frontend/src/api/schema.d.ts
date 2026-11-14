@@ -27,6 +27,7 @@ export type NotificationEventType =
   | 'ISSUE_STATUS_CHANGED'
   | 'MAINTENANCE_DUE'
   | 'NOTICE_PUBLISHED'
+  | 'STORAGE_ALMOST_FULL'
 export type PeriodStatus = 'OPEN_FOR_RESIDENTS' | 'REVIEW_BY_BOARD' | 'LOCKED'
 export type PollKind = 'INFORMATIVE'
 export type PollStatus = 'DRAFT' | 'OPEN' | 'CLOSED' | 'CANCELLED'
@@ -45,7 +46,7 @@ export type ResourceType = 'COLD_WATER' | 'HOT_WATER' | 'ELECTRICITY' | 'HEAT' |
 export type RoleBadge = 'OWNER' | 'RESIDENT' | 'BOARD' | 'ACCOUNTANT'
 export type SignInStatus = 'SIGNED_IN' | 'REGISTRATION_REQUIRED' | 'SIGN_IN_TO_ACCEPT'
 export type StaffRole = 'BOARD' | 'ACCOUNTANT' | 'CHAIRMAN'
-export type SubjectType = 'post' | 'period' | 'poll' | 'issue' | 'maintenance_task'
+export type SubjectType = 'post' | 'period' | 'poll' | 'issue' | 'maintenance_task' | 'storage'
 export type SubmissionStatus = 'SUBMITTED' | 'MISSING' | 'AUTO_ESTIMATED' | 'ANOMALY_CONFIRMED'
 export type TargetScope = 'ALL_BUILDING' | 'ENTRANCE' | 'APARTMENT_LIST'
 export type UnavailableReason = 'DEMO_MODE' | 'CHANNEL_NOT_ENABLED' | 'NO_EMAIL' | 'NOT_LINKED'
@@ -183,6 +184,45 @@ export interface ApartmentReadingsResponse {
   apartment_number: string
   periods: PeriodDTO[]
   meters: ApartmentMeterHistory[]
+}
+
+export interface ApartmentConsumptionMonth {
+  period_code: string
+  consumption: string | null
+  estimated: boolean
+}
+
+export interface ApartmentConsumptionSeries {
+  resource_type: ResourceType
+  unit: MeterUnit
+  months: ApartmentConsumptionMonth[]
+}
+
+export interface ApartmentConsumptionResponse {
+  apartment_id: string
+  apartment_number: string
+  periods: PeriodDTO[]
+  resources: ApartmentConsumptionSeries[]
+}
+
+export interface BuildingConsumptionMonth {
+  period_code: string
+  total: string | null
+  apartments_counted: number
+  average_per_apartment: string | null
+  average_per_m2: string | null
+  estimated_readings: number
+}
+
+export interface BuildingConsumptionSeries {
+  resource_type: ResourceType
+  unit: MeterUnit
+  months: BuildingConsumptionMonth[]
+}
+
+export interface BuildingConsumptionResponse {
+  periods: PeriodDTO[]
+  resources: BuildingConsumptionSeries[]
 }
 
 export interface MagicLinkRequest {
@@ -445,6 +485,15 @@ export interface ReadingSummary {
   is_anomaly_confirmed: boolean
 }
 
+export interface NextSubmission {
+  period_code: string
+  due_date: string
+  final: boolean
+  previous_value: string
+  average_delta: string | null
+  reading: ReadingSummary | null
+}
+
 export interface DashboardMeter {
   meter_id: string
   resource_type: ResourceType
@@ -455,6 +504,7 @@ export interface DashboardMeter {
   previous_delta: string | null
   average_delta: string | null
   reading: ReadingSummary | null
+  next_submission: NextSubmission | null
 }
 
 export interface DashboardApartment {
@@ -587,6 +637,10 @@ export interface EmergencyView {
   created_at: string
   last_activity_at: string
   acknowledged_at: string | null
+  origin?: PostOrigin | null
+  edited_at: string | null
+  hidden_at: string | null
+  hidden_reason: string | null
 }
 
 export interface AcknowledgeResponse {
@@ -616,15 +670,21 @@ export interface PostView {
   created_at: string
   last_activity_at: string
   origin?: PostOrigin | null
+  edited_at: string | null
+  hidden_at: string | null
+  hidden_reason: string | null
 }
 
 export interface CommentView {
   id: string
   post_id: string
-  body: string
+  body: string | null
   author_badge: AuthorBadgeDTO
   is_mine: boolean
   created_at: string
+  edited_at: string | null
+  hidden_at: string | null
+  hidden_reason: string | null
 }
 
 export interface PostDetail extends PostView {
@@ -646,6 +706,19 @@ export interface PostCreateRequest {
 export interface CommentCreateRequest {
   body: string
   author_apartment_id?: string | null
+}
+
+export interface HideRequest {
+  reason: string
+}
+
+export interface PostEditRequest {
+  title?: string
+  body?: string
+}
+
+export interface CommentEditRequest {
+  body: string
 }
 
 export interface components {
@@ -679,6 +752,7 @@ export interface components {
     ErrorResponse: ErrorResponse
     EstimateResponse: EstimateResponse
     EstimatedReading: EstimatedReading
+    HideRequest: HideRequest
     HistoryEntry: HistoryEntry
     InvitationKind: InvitationKind
     InvitationPreview: InvitationPreview
@@ -696,6 +770,7 @@ export interface components {
     MeResponse: MeResponse
     MembershipView: MembershipView
     MeterUnit: MeterUnit
+    NextSubmission: NextSubmission
     NotificationEventType: NotificationEventType
     NotificationView: NotificationView
     OwnerInvitationCreate: OwnerInvitationCreate
@@ -790,14 +865,18 @@ export interface components {
     IssueCategory: IssueCategory
     IssueEdit: IssueEdit
     IssueForm: IssueForm
+    IssuePhoto: IssuePhoto
     IssueReport: IssueReport
     IssueStatus: IssueStatus
     IssueSummary: IssueSummary
     IssueView: IssueView
+    PhotoVariant: PhotoVariant
     ReporterView: ReporterView
     StatusChange: StatusChange
     StatusFilter: StatusFilter
     TimelineEntry: TimelineEntry
+    CategoryUsage: CategoryUsage
+    FileUsage: FileUsage
   }
 }
 
@@ -1013,6 +1092,7 @@ export type IssueAction = 'STATUS' | 'URGENT_CLEARED'
 
 export interface IssueForm {
   urgent_enabled: boolean
+  uploads_enabled?: boolean
   apartment_ids: string[]
   entrances: number[]
 }
@@ -1047,6 +1127,17 @@ export interface TimelineEntry {
   changed_by?: AuthorBadgeDTO | null
 }
 
+export type PhotoVariant = 'thumb' | 'display'
+
+export interface IssuePhoto {
+  id: string
+  width: number | null
+  height: number | null
+  created_at: string
+  mine: boolean
+  can_delete: boolean
+}
+
 export interface IssueSummary {
   id: string
   category: IssueCategory
@@ -1060,17 +1151,23 @@ export interface IssueSummary {
   i_reported: boolean
   can_follow: boolean
   can_edit: boolean
-  can_manage: boolean
+  can_manage?: boolean
   duplicate_of: string | null
   created_at: string
   updated_at: string
   ended_at: string | null
+  photos?: IssuePhoto[]
+  can_add_photo?: boolean
+  photos_delete_at?: string | null
 }
 
 export interface IssueView extends IssueSummary {
   description: string
   reporter: ReporterView | null
   timeline: TimelineEntry[]
+  photos: IssuePhoto[]
+  can_add_photo: boolean
+  photos_delete_at: string | null
 }
 
 export interface StatusChange {
@@ -1185,4 +1282,78 @@ export interface ClosedOccurrence {
   entry: LogEntryView
   task: TaskView
 }
+
+export interface TaskReport {
+  task_id: string
+  task_title: string
+  done_count: number
+  skipped_count: number
+  total_cost: string
+}
+
+export interface YearReport {
+  year: number
+  done_count: number
+  skipped_count: number
+  total_cost: string
+  tasks: TaskReport[]
+}
+
+export type DocumentCategory =
+  | 'ARTICLES'
+  | 'GENERAL_MEETING_MINUTES'
+  | 'BOARD_MINUTES'
+  | 'CONTRACT'
+  | 'INVOICE'
+  | 'FINANCIAL_REPORT'
+  | 'INSURANCE'
+  | 'HOUSE_RULES'
+  | 'OTHER'
+
+export type DocumentAudience = 'EVERYONE' | 'BOARD_AND_ACCOUNTANT' | 'BOARD'
+
+export interface DocumentView {
+  id: string
+  title: string
+  category: DocumentCategory | string
+  audience: DocumentAudience
+  document_date: string | null
+  size_bytes: number
+  created_at: string
+  updated_at: string
+  mine: boolean
+  can_edit: boolean
+  can_delete: boolean
+  uploaded_by: AuthorBadgeDTO | null
+}
+
+export interface DocumentUploadOptions {
+  can_upload: boolean
+  audiences: DocumentAudience[]
+  categories: Array<DocumentCategory | string>
+  max_bytes: number
+}
+
+export interface DocumentEdit {
+  title?: string
+  category?: DocumentCategory | string
+  audience?: DocumentAudience
+  document_date?: string | null
+}
+
+export interface CategoryUsage {
+  category: string
+  used_bytes: number
+  limit_bytes: number
+}
+
+export interface FileUsage {
+  quota_bytes: number
+  used_bytes: number
+  used_percent: number
+  pending_deletion_bytes: number
+  categories: CategoryUsage[]
+}
+
+
 

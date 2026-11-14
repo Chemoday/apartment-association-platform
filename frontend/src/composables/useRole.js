@@ -37,8 +37,13 @@ export function useRole() {
     ['BOARD', 'CHAIRMAN'].includes(buildingRole.value),
   )
 
-  // Delete a forum topic: CHAIRMAN only
-  const canDeleteForumTopic = computed(() => buildingRole.value === 'CHAIRMAN')
+  // Delete or hide/unhide forum topics & moderate comments: CHAIRMAN and BOARD (#026, #028)
+  const canDeleteForumTopic = computed(() =>
+    ['BOARD', 'CHAIRMAN'].includes(buildingRole.value),
+  )
+  const canModerateForum = computed(() =>
+    ['BOARD', 'CHAIRMAN'].includes(buildingRole.value),
+  )
 
   // Association settings: CHAIRMAN (edit) and BOARD (read-only)
   const canViewAssociationSettings = computed(() =>
@@ -80,6 +85,7 @@ export function useRole() {
     canSubmitAnyMeter,
     canPublishOfficial,
     canDeleteForumTopic,
+    canModerateForum,
     canViewAssociationSettings,
     canEditAssociationSettings,
     canManageMaintenance,

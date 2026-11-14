@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
+import { unread } from '@/composables/useUnreadCount.js'
 import { APP_ROUTES, NAV_GROUPS } from '@/router/routes.js'
 
 const route = useRoute()
@@ -148,7 +149,13 @@ onBeforeUnmount(() => {
                 {{ session.t(`nav.${item.meta.navKey}`) }}
               </span>
               <span
-                v-if="item.meta.navKey === 'accounting'"
+                v-if="item.meta.navKey === 'messages' && unread > 0"
+                class="inline-flex items-center px-1.5 py-0.5 rounded-full bg-error text-on-error font-label-md text-[10px] font-bold"
+              >
+                {{ unread }}
+              </span>
+              <span
+                v-else-if="item.meta.navKey === 'accounting'"
                 class="inline-flex items-center px-1.5 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed font-label-md text-[10px] uppercase font-bold"
               >
                 {{ session.t('nav.newBadge') }}
@@ -163,10 +170,10 @@ onBeforeUnmount(() => {
     </div>
   </div>
 
-  <!-- Primary 4-Tab Mobile Bottom Bar -->
+  <!-- Primary 4-Tab Mobile Bottom Bar with iOS Safe-Area support -->
   <nav
     aria-label="Mobile Navigation"
-    class="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface-container-lowest/95 backdrop-blur-md border-t border-surface-container px-2 py-1.5 flex items-center justify-around"
+    class="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface-container-lowest/95 backdrop-blur-md border-t border-surface-container px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] flex items-center justify-around shadow-lg"
   >
     <template v-for="group in visibleNavGroups" :key="group.id">
       <!-- Single-item group (e.g., Home Dashboard) -->
@@ -204,6 +211,10 @@ onBeforeUnmount(() => {
         "
         @click="toggleSheet(group.id)"
       >
+        <span
+          v-if="group.id === 'community' && unread > 0"
+          class="absolute top-1 right-4 w-2 h-2 rounded-full bg-error"
+        />
         <span class="material-symbols-outlined text-[20px]" aria-hidden="true">
           {{ group.icon }}
         </span>

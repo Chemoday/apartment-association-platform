@@ -161,3 +161,32 @@ export function editMaintenanceLogEntry(entryId, payload) {
   })
 }
 
+/**
+ * GET /api/v1/maintenance/report?year=2027
+ * Returns the yearly maintenance report grouped by task (by closed_on year).
+ * Accessible by CHAIRMAN, BOARD, and ACCOUNTANT.
+ * @param {number} year - Integer 2000..2100
+ * @returns {Promise<import('../schema.d.ts').YearReport>}
+ */
+export function getMaintenanceReport(year) {
+  const search = new URLSearchParams()
+  search.set('year', String(year))
+  return apiRequest(`/maintenance/report?${search.toString()}`, { method: 'GET' })
+}
+
+/**
+ * GET /api/v1/maintenance/report/export-csv?year=2027
+ * Streams the yearly maintenance log CSV attachment with auth header.
+ * Returns raw Response so caller can read Blob and Content-Disposition filename.
+ * @param {number} year - Integer 2000..2100
+ * @returns {Promise<Response>}
+ */
+export function exportMaintenanceReportCsv(year) {
+  const search = new URLSearchParams()
+  search.set('year', String(year))
+  return apiRequest(`/maintenance/report/export-csv?${search.toString()}`, {
+    method: 'GET',
+    raw: true,
+  })
+}
+

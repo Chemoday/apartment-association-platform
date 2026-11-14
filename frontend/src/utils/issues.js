@@ -1,7 +1,9 @@
 /**
- * Pure domain utilities and mock state engine for #012 Issue Tracker (E9/I1).
- * Shared by Vue components, Vite apiMiddleware, and offlineDemoData.
+ * Pure domain utilities and mock state engine for #012 Issue Tracker (E9/I1),
+ * extended with photos (#020) and retention notices (#021).
  */
+
+import { parseJpegDimensions } from './photoScaling.js'
 
 export const ISSUE_CATEGORIES = [
   'LIGHTING',
@@ -55,8 +57,19 @@ export const REOPENABLE_ENDED_STATUSES = [
   'DECLINED',
 ]
 
+export const MAX_ISSUE_PHOTOS = 3
+export const MAX_ISSUE_PHOTO_BYTES = 4_000_000
+export const FILES_USER_BYTES_PER_DAY = 20 * 1024 * 1024
+export const HARD_PHOTO_MAX_EDGE = 2560
 export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
 export const ONE_DAY_MS = 24 * 60 * 60 * 1000
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/
+
+// Minimal 1x1 lossless WebP fallback for unit/demo mocks when raw photo bytes are omitted
+export const DEFAULT_SAMPLE_WEBP_BYTES = Uint8Array.from(
+  atob('UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA='),
+  (c) => c.charCodeAt(0),
+)
 
 /**
  * Returns true if the issue status is an open status.
@@ -245,7 +258,7 @@ export function validateIssueReportDraft(draft, formMeta, isBoardUser = false) {
   const rawPlace = draft?.place != null ? String(draft.place).trim() : ''
   /** @type {string|null} */
   let place = null
-  if (rawPlace.length > 80) {
+  if (rawPlace.length > 200) {
     errors.place = 'PLACE_TOO_LONG'
   } else if (rawPlace.length > 0) {
     place = rawPlace
@@ -254,7 +267,7 @@ export function validateIssueReportDraft(draft, formMeta, isBoardUser = false) {
   const title = String(draft?.title || '').trim()
   if (title.length < 1) {
     errors.title = 'TITLE_REQUIRED'
-  } else if (title.length > 140) {
+  } else if (title.length > 120) {
     errors.title = 'TITLE_TOO_LONG'
   }
 
@@ -538,14 +551,54 @@ export function compareIssuesOrder(a, b) {
 }
 
 /**
+ * Maps an internal stored photo record to the public privacy-safe IssuePhoto view.
+ * Never exposes uploader identity (`uploader_user_id`), only `mine` and `can_delete`.
+ */
+export function toIssuePhotoView(photo, issue, user) {
+  const isBoard = ['CHAIRMAN', 'BOARD'].includes(user?.building_role)
+  const mine = Boolean(photo.uploader_user_id && user?.user_id && photo.uploader_user_id === user.user_id)
+  const canDelete = isBoard || (mine && isIssueOpen(issue?.status))
+  return {
+    id: photo.id,
+    width: photo.width,
+    height: photo.height,
+    created_at: photo.created_at,
+    mine,
+    can_delete: canDelete,
+  }
+}
+
+/**
+ * Computes `photos_delete_at` (#021 Retention):
+ * `ended_at + 30 days` ONLY when `status === 'RESOLVED'` and the issue has >= 1 photo; `null` otherwise.
+ * @param {any} issue
+ * @returns {string | null}
+ */
+export function computePhotosDeleteAt(issue) {
+  if (!issue || issue.status !== 'RESOLVED' || !issue.ended_at) return null
+  const photos = Array.isArray(issue.photos) ? issue.photos : []
+  if (photos.length === 0) return null
+  const endedMs = new Date(issue.ended_at).getTime()
+  if (Number.isNaN(endedMs)) return null
+  return new Date(endedMs + THIRTY_DAYS_MS).toISOString()
+}
+
+/**
  * Converts an internal mock issue record into an OpenAPI IssueSummary.
  */
-export function toIssueSummary(issue, user) {
+export function toIssueSummary(issue, user, options = {}) {
   const isBoard = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
   const open = isIssueOpen(issue.status)
   const iReported = issue.reporter_user_id === user.user_id
   const followerIds = Array.isArray(issue.follower_user_ids) ? issue.follower_user_ids : []
   const iFollow = followerIds.includes(user.user_id)
+  const uploadsDisabled = Boolean(options?.uploadsDisabled)
+
+  const rawPhotos = Array.isArray(issue.photos) ? issue.photos : []
+  const photos = rawPhotos
+    .slice()
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    .map((photo) => toIssuePhotoView(photo, issue, user))
 
   return {
     id: issue.id,
@@ -565,6 +618,13 @@ export function toIssueSummary(issue, user) {
     created_at: issue.created_at,
     updated_at: issue.updated_at,
     ended_at: issue.ended_at ?? null,
+    photos,
+    can_add_photo:
+      !uploadsDisabled &&
+      open &&
+      (isBoard || iReported) &&
+      photos.length < MAX_ISSUE_PHOTOS,
+    photos_delete_at: computePhotosDeleteAt(issue),
   }
 }
 
@@ -575,8 +635,8 @@ export function toIssueSummary(issue, user) {
  *   and `URGENT_CLEARED` entries are omitted for residents.
  * - Board and Chairman see `reporter` (`{ badge, apartment_id }`) and full action log (`action`, `changed_by`).
  */
-export function toIssueView(issue, user) {
-  const summary = toIssueSummary(issue, user)
+export function toIssueView(issue, user, options = {}) {
+  const summary = toIssueSummary(issue, user, options)
   const isBoard = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
 
   const reporter = isBoard && issue.reporter_badge
@@ -616,7 +676,7 @@ export function readSettingFromStore(settingsStore, key, fallbackValue) {
 /**
  * Filters and sorts issues for GET /api/v1/issues.
  */
-export function queryIssuesStore(issuesStore, user, query = {}, nowMs = Date.now()) {
+export function queryIssuesStore(issuesStore, user, query = {}, nowMs = Date.now(), options = {}) {
   const statusFilter = query.status ? String(query.status) : null
   const categoryFilter = query.category ? String(query.category) : null
   const rawEntrance = query.entrance
@@ -684,7 +744,7 @@ export function queryIssuesStore(issuesStore, user, query = {}, nowMs = Date.now
   })
 
   filtered.sort(compareIssuesOrder)
-  const items = filtered.slice(offset, offset + limit).map((i) => toIssueSummary(i, user))
+  const items = filtered.slice(offset, offset + limit).map((i) => toIssueSummary(i, user, options))
   return { ok: true, items }
 }
 
@@ -751,14 +811,14 @@ export function createIssueInStore({
   let place = null
   if (body?.place !== undefined && body?.place !== null) {
     const trimmedPlace = String(body.place).trim()
-    if (trimmedPlace.length > 80) {
+    if (trimmedPlace.length > 200) {
       return {
         ok: false,
         status: 422,
         errorCode: 'VALIDATION_ERROR',
-        message: 'Place must be at most 80 characters.',
+        message: 'Place must be at most 200 characters.',
         extra: {
-          errors: [{ loc: ['body', 'place'], msg: 'Place must be at most 80 characters.', type: 'value_error' }],
+          errors: [{ loc: ['body', 'place'], msg: 'Place must be at most 200 characters.', type: 'value_error' }],
         },
       }
     }
@@ -766,14 +826,14 @@ export function createIssueInStore({
   }
 
   const title = typeof body?.title === 'string' ? body.title.trim() : ''
-  if (title.length < 1 || title.length > 140) {
+  if (title.length < 1 || title.length > 120) {
     return {
       ok: false,
       status: 422,
       errorCode: 'VALIDATION_ERROR',
-      message: 'Title must be between 1 and 140 characters.',
+      message: 'Title must be between 1 and 120 characters.',
       extra: {
-        errors: [{ loc: ['body', 'title'], msg: 'Title must be 1..140 characters.', type: 'value_error' }],
+        errors: [{ loc: ['body', 'title'], msg: 'Title must be 1..120 characters.', type: 'value_error' }],
       },
     }
   }
@@ -914,6 +974,7 @@ export function createIssueInStore({
     },
     follower_user_ids: [user.user_id],
     duplicate_of: null,
+    photos: [],
     created_at: nowIso,
     updated_at: nowIso,
     ended_at: null,
@@ -1011,12 +1072,12 @@ export function editIssueInStore({
       nextPlace = null
     } else {
       const trimmedPlace = String(body.place).trim()
-      if (trimmedPlace.length > 80) {
+      if (trimmedPlace.length > 200) {
         return {
           ok: false,
           status: 422,
           errorCode: 'VALIDATION_ERROR',
-          message: 'Place must be at most 80 characters.',
+          message: 'Place must be at most 200 characters.',
         }
       }
       nextPlace = trimmedPlace.length > 0 ? trimmedPlace : null
@@ -1026,12 +1087,12 @@ export function editIssueInStore({
   let nextTitle = issue.title
   if (Object.prototype.hasOwnProperty.call(body, 'title') && body.title !== null) {
     const trimmedTitle = String(body.title).trim()
-    if (trimmedTitle.length < 1 || trimmedTitle.length > 140) {
+    if (trimmedTitle.length < 1 || trimmedTitle.length > 120) {
       return {
         ok: false,
         status: 422,
         errorCode: 'VALIDATION_ERROR',
-        message: 'Title must be between 1 and 140 characters.',
+        message: 'Title must be between 1 and 120 characters.',
       }
     }
     nextTitle = trimmedTitle
@@ -1086,6 +1147,7 @@ export function withdrawIssueInStore({ issue, user, nowMs = Date.now() }) {
   const nowIso = new Date(nowMs).toISOString()
   issue.status = 'WITHDRAWN'
   issue.urgent = false
+  issue.photos = []
   issue.updated_at = nowIso
   issue.ended_at = nowIso
   issue.timeline.push({
@@ -1299,6 +1361,7 @@ export function changeIssueStatusInStore({
 
     issue.status = 'DUPLICATE'
     issue.duplicate_of = original.id
+    issue.photos = []
     issue.ended_at = nowIso
     issue.updated_at = nowIso
     if (!Array.isArray(issue.timeline)) {
@@ -1316,6 +1379,9 @@ export function changeIssueStatusInStore({
 
   issue.status = nextStatus
   issue.duplicate_of = null
+  if (nextStatus === 'DECLINED') {
+    issue.photos = []
+  }
   issue.updated_at = nowIso
   issue.ended_at = isIssueOpen(nextStatus) ? null : nowIso
   if (!Array.isArray(issue.timeline)) {
@@ -1432,3 +1498,548 @@ export function clearIssueUrgentInStore({
 
   return { ok: true, issue: toIssueView(issue, user) }
 }
+
+/**
+ * Scales natural dimensions to the display cap (at most 1920 px on long edge).
+ */
+function toDisplayDimensions(width, height) {
+  const maxEdge = 1920
+  const longEdge = Math.max(width, height)
+  if (longEdge <= maxEdge) return { width, height }
+  const ratio = maxEdge / longEdge
+  return {
+    width: Math.max(1, Math.round(width * ratio)),
+    height: Math.max(1, Math.round(height * ratio)),
+  }
+}
+
+/**
+ * Runs pre-body validation & limit checks for POST /api/v1/issues/{issue_id}/photos (#020, #025).
+ * @param {Object} opts
+ * @param {any} opts.issue
+ * @param {any} opts.user
+ * @param {string} [opts.contentType]
+ * @param {number | null | undefined} [opts.contentLength]
+ * @param {string} [opts.idempotencyKey]
+ * @param {Map<string, any> | null} [opts.idempotencyStore]
+ * @param {Array<{ userId: string, bytes: number, atMs: number }> | null} [opts.dailyUploadsStore]
+ * @param {number} [opts.dailyUserLimitBytes]
+ * @param {number} [opts.nowMs]
+ * @param {boolean} [opts.uploadsDisabled]
+ * @param {'QUOTA' | 'DELETIONS_PENDING' | ''} [opts.quotaExceededReason]
+ * @param {boolean} [opts.lowDisk]
+ * @param {{ photosUsedBytes?: number, photosLimitBytes?: number, pendingDeletionBytes?: number, quotaBytes?: number } | null} [opts.storageStats]
+ * @param {number | undefined} [opts.byteLengthFallback]
+ * @returns {any}
+ */
+export function checkIssuePhotoUploadPreflight({
+  issue,
+  user,
+  contentType = 'image/jpeg',
+  contentLength = undefined,
+  idempotencyKey = '',
+  idempotencyStore = null,
+  dailyUploadsStore = null,
+  dailyUserLimitBytes = FILES_USER_BYTES_PER_DAY,
+  nowMs = Date.now(),
+  uploadsDisabled = false,
+  quotaExceededReason = '',
+  lowDisk = false,
+  storageStats = null,
+  byteLengthFallback = undefined,
+}) {
+  const isBoard = ['CHAIRMAN', 'BOARD'].includes(user?.building_role)
+  const iReporter = issue?.reporter_user_id === user?.user_id
+  if (!(isBoard || iReporter)) {
+    return {
+      ok: false,
+      status: 403,
+      errorCode: 'FORBIDDEN',
+      message: 'Only the reporter and the board can add photos to this issue.',
+    }
+  }
+
+  const rawKey = idempotencyKey == null ? '' : String(idempotencyKey)
+  if (rawKey.length > 0 && !IDEMPOTENCY_KEY_RE.test(rawKey)) {
+    return {
+      ok: false,
+      status: 422,
+      errorCode: 'VALIDATION_ERROR',
+      message: 'Malformed Idempotency-Key header.',
+    }
+  }
+
+  const resolvedLength =
+    contentLength === undefined
+      ? Number(byteLengthFallback ?? NaN)
+      : contentLength === null
+        ? NaN
+        : Number(contentLength)
+
+  const normalizedMime = String(contentType || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase()
+  const canonicalMime = ['image/jpeg', 'image/jpg', 'image/pjpeg'].includes(normalizedMime)
+    ? 'image/jpeg'
+    : normalizedMime
+
+  const scopedKey = rawKey ? `${user?.user_id || 'anon'}:${rawKey}` : ''
+  if (scopedKey && idempotencyStore instanceof Map && idempotencyStore.has(scopedKey)) {
+    const entry = idempotencyStore.get(scopedKey)
+    if (entry.issueId !== issue.id) {
+      return {
+        ok: false,
+        status: 409,
+        errorCode: 'IDEMPOTENCY_KEY_REUSED',
+        message: 'This Idempotency-Key was already used for another upload.',
+      }
+    }
+    if (
+      entry.contentLength !== undefined &&
+      Number.isFinite(resolvedLength) &&
+      resolvedLength !== entry.contentLength
+    ) {
+      return {
+        ok: false,
+        status: 409,
+        errorCode: 'IDEMPOTENCY_KEY_REUSED',
+        message: 'This Idempotency-Key was already used for another file.',
+      }
+    }
+    if (entry.contentType && canonicalMime && canonicalMime !== entry.contentType) {
+      return {
+        ok: false,
+        status: 409,
+        errorCode: 'IDEMPOTENCY_KEY_REUSED',
+        message: 'This Idempotency-Key was already used for another file.',
+      }
+    }
+    const existing = (issue.photos || []).find((p) => p.id === entry.photoId)
+    if (existing) {
+      return {
+        ok: true,
+        status: 200,
+        replay: true,
+        idempotencyDigest: entry.contentDigest || '',
+        photo: toIssuePhotoView(existing, issue, user),
+        issue: toIssueView(issue, user, { uploadsDisabled }),
+      }
+    }
+    return {
+      ok: false,
+      status: 409,
+      errorCode: 'UPLOAD_REMOVED',
+      message: 'This photo was removed.',
+    }
+  }
+
+  if (!isIssueOpen(issue.status)) {
+    return {
+      ok: false,
+      status: 409,
+      errorCode: 'ISSUE_ENDED',
+      message: 'This issue is closed.',
+    }
+  }
+
+  const photosList = Array.isArray(issue.photos) ? issue.photos : []
+  if (photosList.length >= MAX_ISSUE_PHOTOS) {
+    return {
+      ok: false,
+      status: 409,
+      errorCode: 'PHOTO_LIMIT_REACHED',
+      message: 'At most 3 photos.',
+    }
+  }
+
+  if (!['image/jpeg', 'image/jpg', 'image/pjpeg'].includes(normalizedMime)) {
+    return {
+      ok: false,
+      status: 415,
+      errorCode: 'UNSUPPORTED_MEDIA_TYPE',
+      message: 'Only JPEG photos are accepted.',
+    }
+  }
+
+  if (!Number.isFinite(resolvedLength) || resolvedLength < 0) {
+    return {
+      ok: false,
+      status: 411,
+      errorCode: 'LENGTH_REQUIRED',
+      message: 'Content-Length header is required.',
+    }
+  }
+
+  if (resolvedLength > MAX_ISSUE_PHOTO_BYTES) {
+    return {
+      ok: false,
+      status: 413,
+      errorCode: 'FILE_TOO_LARGE',
+      message: 'Photo exceeds the 4 MB limit.',
+      extra: { max_bytes: MAX_ISSUE_PHOTO_BYTES },
+    }
+  }
+
+  if (uploadsDisabled) {
+    return {
+      ok: false,
+      status: 403,
+      errorCode: 'UPLOADS_DISABLED',
+      message: 'Photos are switched off in this demo.',
+    }
+  }
+
+  if (lowDisk) {
+    return {
+      ok: false,
+      status: 507,
+      errorCode: 'STORAGE_LOW_DISK',
+      message: 'Server disk is nearly full.',
+    }
+  }
+
+  if (quotaExceededReason === 'DELETIONS_PENDING') {
+    return {
+      ok: false,
+      status: 507,
+      errorCode: 'STORAGE_QUOTA_EXCEEDED',
+      message: 'Deleted files waiting to be erased.',
+      extra: { reason: 'DELETIONS_PENDING' },
+    }
+  }
+  if (quotaExceededReason === 'QUOTA') {
+    return {
+      ok: false,
+      status: 507,
+      errorCode: 'STORAGE_QUOTA_EXCEEDED',
+      message: 'Photo storage quota exceeded.',
+      extra: { reason: 'QUOTA', category: 'photos' },
+    }
+  }
+  if (storageStats) {
+    const usedPhotos = Number(storageStats.photosUsedBytes || 0)
+    const limitPhotos = Number(storageStats.photosLimitBytes || Infinity)
+    const pendingDel = Number(storageStats.pendingDeletionBytes || 0)
+    const totalQuota = Number(storageStats.quotaBytes || Infinity)
+    if (pendingDel + resolvedLength > totalQuota) {
+      return {
+        ok: false,
+        status: 507,
+        errorCode: 'STORAGE_QUOTA_EXCEEDED',
+        message: 'Deleted files waiting to be erased.',
+        extra: { reason: 'DELETIONS_PENDING' },
+      }
+    }
+    if (usedPhotos + resolvedLength > limitPhotos) {
+      return {
+        ok: false,
+        status: 507,
+        errorCode: 'STORAGE_QUOTA_EXCEEDED',
+        message: 'Photo storage quota exceeded.',
+        extra: { reason: 'QUOTA', category: 'photos' },
+      }
+    }
+  }
+
+  if (!isBoard && Array.isArray(dailyUploadsStore)) {
+    const cutoff = nowMs - ONE_DAY_MS
+    let usedToday = 0
+    let oldestAtMs = Infinity
+    for (let i = dailyUploadsStore.length - 1; i >= 0; i -= 1) {
+      const rec = dailyUploadsStore[i]
+      if (!rec || rec.atMs <= cutoff) {
+        dailyUploadsStore.splice(i, 1)
+        continue
+      }
+      if (rec.userId === user.user_id) {
+        usedToday += Number(rec.bytes || 0)
+        if (rec.atMs < oldestAtMs) {
+          oldestAtMs = rec.atMs
+        }
+      }
+    }
+    if (usedToday + resolvedLength > dailyUserLimitBytes) {
+      const retryAfterSeconds = Number.isFinite(oldestAtMs)
+        ? Math.max(1, Math.ceil((oldestAtMs + ONE_DAY_MS - nowMs) / 1000))
+        : 86400
+      return {
+        ok: false,
+        status: 429,
+        errorCode: 'RATE_LIMITED',
+        message: 'You have stored the photos allowed for today.',
+        extra: {
+          reason: 'DAILY_LIMIT',
+          retry_after_seconds: retryAfterSeconds,
+        },
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    preflightOnly: true,
+    resolvedLength,
+    scopedKey,
+    normalizedMime: canonicalMime,
+  }
+}
+
+function computeByteDigest(byteArr) {
+  let h1 = 0x811c9dc5
+  let h2 = 0x9e3779b1
+  for (let i = 0; i < byteArr.byteLength; i += 1) {
+    const b = byteArr[i]
+    h1 ^= b
+    h1 = Math.imul(h1, 0x01000193) >>> 0
+    h2 ^= (b + (i & 0xff)) & 0xff
+    h2 = Math.imul(h2, 0x85ebca6b) >>> 0
+  }
+  return `${byteArr.byteLength}:${h1.toString(16)}:${h2.toString(16)}`
+}
+
+/**
+ * Applies POST /api/v1/issues/{issue_id}/photos (#020, updated for #025).
+ * Enforces permission, open status, uploadsDisabled simulation, idempotency
+ * (including 409 UPLOAD_REMOVED for deleted or discarded uploads and 409 IDEMPOTENCY_KEY_REUSED for key collisions),
+ * 3-photo cap, Content-Length / 4 MB cap, quota / pending deletions, 24h per-user daily limit,
+ * JPEG Content-Type & magic bytes, valid SOF dimensions, and 2560 px hard edge cap.
+ * @param {Object} opts
+ * @param {any} opts.issue
+ * @param {any} opts.user
+ * @param {any} opts.bytes
+ * @param {string} [opts.contentType]
+ * @param {number | null | undefined} [opts.contentLength]
+ * @param {string} [opts.idempotencyKey]
+ * @param {Map<string, any> | null} [opts.idempotencyStore]
+ * @param {Array<{ userId: string, bytes: number, atMs: number }> | null} [opts.dailyUploadsStore]
+ * @param {number} [opts.dailyUserLimitBytes]
+ * @param {number} [opts.nowMs]
+ * @param {boolean} [opts.uploadsDisabled]
+ * @param {'QUOTA' | 'DELETIONS_PENDING' | ''} [opts.quotaExceededReason]
+ * @param {boolean} [opts.lowDisk]
+ * @param {{ photosUsedBytes?: number, photosLimitBytes?: number, pendingDeletionBytes?: number, quotaBytes?: number } | null} [opts.storageStats]
+ * @returns {any}
+ */
+export function addIssuePhotoInStore({
+  issue,
+  user,
+  bytes,
+  contentType = 'image/jpeg',
+  contentLength = undefined,
+  idempotencyKey = '',
+  idempotencyStore = null,
+  dailyUploadsStore = null,
+  dailyUserLimitBytes = FILES_USER_BYTES_PER_DAY,
+  nowMs = Date.now(),
+  uploadsDisabled = false,
+  quotaExceededReason = '',
+  lowDisk = false,
+  storageStats = null,
+}) {
+  const byteArr =
+    bytes instanceof Uint8Array
+      ? bytes
+      : bytes instanceof ArrayBuffer
+        ? new Uint8Array(bytes)
+        : ArrayBuffer.isView(bytes)
+          ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+          : new Uint8Array(0)
+
+  const preflight = checkIssuePhotoUploadPreflight({
+    issue,
+    user,
+    contentType,
+    contentLength,
+    idempotencyKey,
+    idempotencyStore,
+    dailyUploadsStore,
+    dailyUserLimitBytes,
+    nowMs,
+    uploadsDisabled,
+    quotaExceededReason,
+    lowDisk,
+    storageStats,
+    byteLengthFallback: byteArr.byteLength,
+  })
+  if (!preflight.ok) {
+    return preflight
+  }
+  if (preflight.replay) {
+    if (
+      byteArr.byteLength > 0 &&
+      preflight.idempotencyDigest &&
+      computeByteDigest(byteArr) !== preflight.idempotencyDigest
+    ) {
+      return {
+        ok: false,
+        status: 409,
+        errorCode: 'IDEMPOTENCY_KEY_REUSED',
+        message: 'This Idempotency-Key was already used for another file.',
+      }
+    }
+    return preflight
+  }
+
+  const { resolvedLength, scopedKey, normalizedMime } = preflight
+  if (!Array.isArray(issue.photos)) {
+    issue.photos = []
+  }
+  if (byteArr.byteLength > MAX_ISSUE_PHOTO_BYTES || byteArr.byteLength > resolvedLength) {
+    return {
+      ok: false,
+      status: 413,
+      errorCode: 'FILE_TOO_LARGE',
+      message: 'Photo exceeds the 4 MB limit.',
+      extra: { max_bytes: MAX_ISSUE_PHOTO_BYTES },
+    }
+  }
+  if (byteArr.byteLength < resolvedLength) {
+    return {
+      ok: false,
+      status: 400,
+      errorCode: 'UPLOAD_INTERRUPTED',
+      message: 'Upload interrupted; please retry.',
+    }
+  }
+
+  if (byteArr.byteLength < 4 || byteArr[0] !== 0xff || byteArr[1] !== 0xd8) {
+    return {
+      ok: false,
+      status: 415,
+      errorCode: 'UNSUPPORTED_MEDIA_TYPE',
+      message: 'Uploaded bytes are not a JPEG image.',
+    }
+  }
+
+  const dims = parseJpegDimensions(byteArr)
+  if (!dims || dims.width < 1 || dims.height < 1) {
+    return {
+      ok: false,
+      status: 422,
+      errorCode: 'INVALID_IMAGE',
+      message: 'This photo cannot be used.',
+    }
+  }
+
+  if (dims.width > HARD_PHOTO_MAX_EDGE || dims.height > HARD_PHOTO_MAX_EDGE) {
+    return {
+      ok: false,
+      status: 422,
+      errorCode: 'IMAGE_TOO_LARGE',
+      message: 'Image exceeds 2560 px limit.',
+      extra: { max_edge_px: HARD_PHOTO_MAX_EDGE },
+    }
+  }
+
+  const displayDims = toDisplayDimensions(dims.width, dims.height)
+  const photoId =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `018f0000-0000-7000-9000-${Math.floor(100000000000 + Math.random() * 899999999999)}`
+
+  const newPhoto = {
+    id: photoId,
+    width: displayDims.width,
+    height: displayDims.height,
+    created_at: new Date(nowMs).toISOString(),
+    uploader_user_id: user.user_id,
+    bytes: byteArr,
+    mime: 'image/jpeg',
+    size_bytes: byteArr.byteLength,
+  }
+
+  issue.photos.push(newPhoto)
+  if (Array.isArray(dailyUploadsStore)) {
+    dailyUploadsStore.push({
+      userId: user.user_id,
+      bytes: byteArr.byteLength,
+      atMs: nowMs,
+    })
+  }
+  if (scopedKey && idempotencyStore instanceof Map) {
+    idempotencyStore.set(scopedKey, {
+      issueId: issue.id,
+      photoId,
+      deletedByUser: false,
+      contentLength: resolvedLength,
+      contentType: normalizedMime,
+      contentDigest: computeByteDigest(byteArr),
+    })
+  }
+
+  return {
+    ok: true,
+    status: 201,
+    photo: toIssuePhotoView(newPhoto, issue, user),
+    issue: toIssueView(issue, user, { uploadsDisabled }),
+  }
+}
+
+/**
+ * Resolves GET /api/v1/issues/{issue_id}/photos/{photo_id}?variant=display|thumb (#020).
+ */
+export function getIssuePhotoFromStore({ issue, photoId, variant = 'display' }) {
+  const normalizedVariant = variant === 'thumb' ? 'thumb' : 'display'
+  const photo = (issue?.photos || []).find((p) => p.id === photoId)
+  if (!photo) {
+    return {
+      ok: false,
+      status: 404,
+      errorCode: 'PHOTO_NOT_FOUND',
+      message: 'Photo not found.',
+    }
+  }
+  return {
+    ok: true,
+    variant: normalizedVariant,
+    bytes: photo.bytes || DEFAULT_SAMPLE_WEBP_BYTES,
+    mime: photo.mime || 'image/webp',
+    photo,
+  }
+}
+
+/**
+ * Applies DELETE /api/v1/issues/{issue_id}/photos/{photo_id} (#020).
+ * @param {Object} opts
+ * @param {any} opts.issue
+ * @param {any} opts.user
+ * @param {string} opts.photoId
+ * @param {Map<string, any> | null} [opts.idempotencyStore]
+ */
+export function deleteIssuePhotoInStore({ issue, user, photoId, idempotencyStore = null }) {
+  const photos = Array.isArray(issue?.photos) ? issue.photos : []
+  const idx = photos.findIndex((p) => p.id === photoId)
+  if (idx === -1) {
+    return {
+      ok: false,
+      status: 404,
+      errorCode: 'PHOTO_NOT_FOUND',
+      message: 'Photo not found.',
+    }
+  }
+
+  const photo = photos[idx]
+  const isBoard = ['CHAIRMAN', 'BOARD'].includes(user?.building_role)
+  const isMineOpen = photo.uploader_user_id === user?.user_id && isIssueOpen(issue.status)
+  if (!(isBoard || isMineOpen)) {
+    return {
+      ok: false,
+      status: 403,
+      errorCode: 'FORBIDDEN',
+      message: 'You cannot delete this photo.',
+    }
+  }
+
+  photos.splice(idx, 1)
+  if (idempotencyStore instanceof Map) {
+    for (const entry of idempotencyStore.values()) {
+      if (entry.photoId === photoId) {
+        entry.deletedByUser = true
+      }
+    }
+  }
+
+  return { ok: true, status: 204 }
+}
+

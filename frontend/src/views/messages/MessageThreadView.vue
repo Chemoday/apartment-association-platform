@@ -203,7 +203,7 @@ watch(
         </h1>
 
         <p class="text-sm sm:text-base text-on-surface leading-relaxed whitespace-pre-line">
-          {{ post.body }}
+          {{ post.body ?? '' }}
         </p>
 
         <div class="pt-4 border-t border-surface-container flex flex-wrap items-center justify-between gap-2">
@@ -225,7 +225,7 @@ watch(
       <!-- Replies & Always-Enabled Comment Form (without author_apartment_id) -->
       <section class="bg-surface-container-lowest border border-surface-container rounded-2xl p-space-md sm:p-space-lg space-y-5">
         <h2 class="text-xs font-label-lg font-bold uppercase tracking-wider text-on-surface-variant">
-          {{ session.t('messages.repliesHeading') }} ({{ post.comments?.length ?? 0 }})
+          {{ session.t('messages.repliesHeading') }} ({{ post.comments_count ?? post.comments?.length ?? 0 }})
         </h2>
 
         <CommentList :comments="post.comments || []" />

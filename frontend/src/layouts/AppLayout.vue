@@ -34,7 +34,7 @@ onMounted(() => {
     <AppHeader />
     <AppEmergencyBanner />
     <AppSidebar />
-    <main id="main" class="flex-1 w-full">
+    <main id="main" class="flex-1 w-full pb-20 md:pb-0">
       <slot v-if="hasRoleAccess" />
       <div
         v-else

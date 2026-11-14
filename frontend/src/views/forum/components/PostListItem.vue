@@ -6,6 +6,7 @@ import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import BaseChip from '@/components/base/BaseChip.vue'
 import { formatDateTime } from '@/utils/dates.js'
+import { isPostHidden, isPostHideable } from '@/utils/communication.js'
 
 const props = defineProps({
   post: {
@@ -16,13 +17,23 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  moderating: {
+    type: Boolean,
+    default: false,
+  },
+  moderationDisabled: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['select', 'open-detail', 'delete-post'])
+const emit = defineEmits(['select', 'open-detail', 'delete-post', 'hide-post', 'unhide-post'])
 const session = useSessionStore()
-const { canDeleteForumTopic } = useRole()
+const { canDeleteForumTopic, canModerateForum } = useRole()
 
 const isPinnedNotice = computed(() => props.post.post_type === 'OFFICIAL_NOTICE')
+const hidden = computed(() => isPostHidden(props.post))
+const hideable = computed(() => canModerateForum.value && isPostHideable(props.post))
 
 const categoryLabel = computed(() => {
   if (props.post.post_type === 'OFFICIAL_NOTICE') {
@@ -69,6 +80,10 @@ const displayTimestamp = computed(() => {
           <span v-if="isPinnedNotice" class="material-symbols-outlined text-[13px] mr-0.5">campaign</span>
           <span>{{ categoryLabel }}</span>
         </BaseChip>
+        <BaseChip v-if="post.hidden_at" tone="warning">
+          <span class="material-symbols-outlined text-[13px] mr-0.5" aria-hidden="true">visibility_off</span>
+          <span>{{ session.t('forum.hiddenTopicBadge') }}</span>
+        </BaseChip>
         <PostOriginBadge
           :origin="post.origin"
           :post-type="post.post_type"
@@ -79,12 +94,39 @@ const displayTimestamp = computed(() => {
         <span class="text-[11px] font-mono text-on-surface-variant">
           {{ displayTimestamp }}
         </span>
+        <span
+          v-if="post.edited_at"
+          class="text-[11px] text-on-surface-variant italic underline decoration-dotted cursor-help"
+          :title="
+            session.t('forum.editedAtTooltip', {
+              time: formatDateTime(post.edited_at, session.lang),
+            })
+          "
+        >
+          {{ session.t('forum.editedLabel') }}
+        </span>
+
+        <button
+          v-if="hideable"
+          type="button"
+          :disabled="moderating || moderationDisabled"
+          class="p-1 rounded text-on-surface-variant hover:text-warning hover:bg-warning-container/30 transition-colors disabled:opacity-50"
+          :title="hidden ? session.t('forum.unhideBtn') : session.t('forum.hideBtn')"
+          :aria-label="hidden ? session.t('forum.unhideBtn') : session.t('forum.hideBtn')"
+          @click.stop="emit(hidden ? 'unhide-post' : 'hide-post', post)"
+        >
+          <span class="material-symbols-outlined text-[15px]" aria-hidden="true">
+            {{ hidden ? 'visibility' : 'visibility_off' }}
+          </span>
+        </button>
 
         <button
           v-if="canDeleteForumTopic && post.post_type === 'FORUM_TOPIC'"
           type="button"
-          class="p-1 rounded text-on-surface-variant hover:text-error hover:bg-error-container/30 transition-colors"
+          :disabled="moderationDisabled"
+          class="p-1 rounded text-on-surface-variant hover:text-error hover:bg-error-container/30 transition-colors disabled:opacity-50"
           :title="session.t('common.delete')"
+          :aria-label="session.t('common.delete')"
           @click.stop="emit('delete-post', post)"
         >
           <span class="material-symbols-outlined text-[15px]">delete</span>
@@ -94,6 +136,7 @@ const displayTimestamp = computed(() => {
           type="button"
           class="p-1 rounded text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
           :title="session.t('forum.fullThreadBtn')"
+          :aria-label="session.t('forum.fullThreadBtn')"
           @click.stop="emit('open-detail', post)"
         >
           <span class="material-symbols-outlined text-[15px]">open_in_new</span>
@@ -109,7 +152,7 @@ const displayTimestamp = computed(() => {
     </h3>
 
     <p class="text-xs text-on-surface-variant leading-relaxed mb-2.5 line-clamp-2 whitespace-pre-line">
-      {{ post.body }}
+      {{ post.body ?? '' }}
     </p>
 
     <div class="flex items-center justify-between gap-2 pt-2 border-t border-surface-container-high/80 text-xs">

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { listIssues, getIssueForm, followIssue } from '@/api/endpoints/issues.js'
@@ -8,6 +8,7 @@ import {
   ALL_ISSUE_STATUSES,
   isIssueOpen,
 } from '@/utils/issues.js'
+import { formatDate as formatTallinnDate } from '@/utils/dates.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 import IssueFormModal from './components/IssueFormModal.vue'
 
@@ -92,7 +93,22 @@ async function fetchFormMetadata() {
   }
 }
 
+let issuesLoadSeq = 0
+let issuesAbortController = null
+
 async function loadIssues() {
+  const seq = ++issuesLoadSeq
+  if (issuesAbortController) {
+    try {
+      issuesAbortController.abort()
+    } catch {
+      /* ignore */
+    }
+  }
+  issuesAbortController = new AbortController()
+  const signal = issuesAbortController.signal
+  const startActingUserId = session.actingUserId
+
   isLoading.value = true
   loadError.value = null
   try {
@@ -109,12 +125,16 @@ async function loadIssues() {
     if (isBoardOrChairman.value && includeOld.value) {
       params.include_old = true
     }
-    const data = await listIssues(params)
+    const data = await listIssues(params, { signal })
+    if (seq !== issuesLoadSeq || session.actingUserId !== startActingUserId) return
     issues.value = Array.isArray(data) ? data : []
   } catch (err) {
+    if (seq !== issuesLoadSeq || err?.errorCode === 'REQUEST_ABORTED') return
     loadError.value = err
   } finally {
-    isLoading.value = false
+    if (seq === issuesLoadSeq) {
+      isLoading.value = false
+    }
   }
 }
 
@@ -151,15 +171,7 @@ function formatLocation(issue) {
 
 function formatDate(isoStr) {
   if (!isoStr) return ''
-  try {
-    return new Intl.DateTimeFormat(session.lang || 'en', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    }).format(new Date(isoStr))
-  } catch {
-    return isoStr.slice(0, 10)
-  }
+  return formatTallinnDate(isoStr, session.lang || 'en')
 }
 
 async function handleQuickFollow(issue, event) {
@@ -240,6 +252,16 @@ watch(
     }
   },
 )
+onBeforeUnmount(() => {
+  if (issuesAbortController) {
+    try {
+      issuesAbortController.abort()
+    } catch {
+      /* ignore */
+    }
+    issuesAbortController = null
+  }
+})
 </script>
 
 <template>
@@ -627,10 +649,24 @@ watch(
                   </div>
                 </div>
 
-                <!-- Right column: followers & quick +1 -->
+                <!-- Right column: photos, followers & quick +1 -->
                 <div
                   class="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-surface-container"
                 >
+                  <div
+                    v-if="(issue.photos?.length || 0) > 0"
+                    :data-testid="`issue-photos-badge-${issue.id}`"
+                    class="inline-flex items-center gap-1 rounded-lg bg-surface-container px-2.5 py-1 text-xs font-semibold text-on-surface-variant"
+                    :title="
+                      issue.photos.length === 1
+                        ? session.t('issues.photoCountOne')
+                        : session.t('issues.photoCount', { count: issue.photos.length })
+                    "
+                  >
+                    <span class="material-symbols-outlined text-[15px]">photo_camera</span>
+                    <span>{{ issue.photos.length }}</span>
+                  </div>
+
                   <div
                     class="inline-flex items-center gap-1.5 rounded-lg bg-surface-container px-2.5 py-1 text-xs font-semibold text-on-surface"
                     :title="session.t('issues.followersCount', { count: issue.followers })"
@@ -737,6 +773,20 @@ watch(
                 </div>
 
                 <div class="flex items-center justify-end gap-2 shrink-0">
+                  <div
+                    v-if="(issue.photos?.length || 0) > 0"
+                    :data-testid="`issue-photos-badge-${issue.id}`"
+                    class="inline-flex items-center gap-1 rounded-lg bg-surface-container px-2.5 py-1 text-xs font-semibold text-on-surface-variant"
+                    :title="
+                      issue.photos.length === 1
+                        ? session.t('issues.photoCountOne')
+                        : session.t('issues.photoCount', { count: issue.photos.length })
+                    "
+                  >
+                    <span class="material-symbols-outlined text-[15px]">photo_camera</span>
+                    <span>{{ issue.photos.length }}</span>
+                  </div>
+
                   <div
                     class="inline-flex items-center gap-1.5 rounded-lg bg-surface-container px-2.5 py-1 text-xs font-semibold text-on-surface-variant"
                   >

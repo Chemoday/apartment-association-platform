@@ -17,9 +17,17 @@ defineProps({
     type: Boolean,
     default: false,
   },
+  moderatingPostId: {
+    type: String,
+    default: null,
+  },
+  moderationDisabled: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['select', 'open-detail', 'delete-post'])
+const emit = defineEmits(['select', 'open-detail', 'delete-post', 'hide-post', 'unhide-post'])
 const session = useSessionStore()
 </script>
 
@@ -41,9 +49,13 @@ const session = useSessionStore()
         :key="post.id"
         :post="post"
         :selected="post.id === selectedPostId"
+        :moderating="moderatingPostId === post.id"
+        :moderation-disabled="moderationDisabled"
         @select="emit('select', $event)"
         @open-detail="emit('open-detail', $event)"
         @delete-post="emit('delete-post', $event)"
+        @hide-post="emit('hide-post', $event)"
+        @unhide-post="emit('unhide-post', $event)"
       />
     </div>
   </div>

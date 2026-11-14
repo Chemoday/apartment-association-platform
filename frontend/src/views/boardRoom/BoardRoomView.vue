@@ -345,11 +345,22 @@ watch(
               <span class="hidden md:inline font-mono text-[11px] opacity-75">
                 ({{ formatDateTime(topic.last_activity_at || topic.created_at, session.lang) }})
               </span>
+              <span
+                v-if="topic.edited_at"
+                class="text-[11px] italic underline decoration-dotted cursor-help"
+                :title="
+                  session.t('forum.editedAtTooltip', {
+                    time: formatDateTime(topic.edited_at, session.lang),
+                  })
+                "
+              >
+                {{ session.t('forum.editedLabel') }}
+              </span>
             </div>
           </div>
 
           <p class="text-xs sm:text-sm text-on-surface-variant line-clamp-2 mb-3">
-            {{ topic.body }}
+            {{ topic.body ?? '' }}
           </p>
 
           <div class="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-surface-container">
