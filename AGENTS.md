@@ -12,6 +12,7 @@ All AI coding, testing, and on-call agents operating in this repository MUST fol
 - [Implementation Task Backlog](docs/TASKS.md)
 - [Product Backlog: known problems after the MVP](docs/BACKLOG.md)
 - [Epics after the MVP (design pages)](docs/epics/README.md) and [planning session records](docs/cli_planning/)
+- [External data providers by country (epic E12)](docs/external_providers/README.md)
 - [Deployment, CD & Rollback](docs/DEPLOYMENT.md)
 - [Observability, Alerting & On-Call Agent](docs/OBSERVABILITY.md)
 
