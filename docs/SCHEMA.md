@@ -87,6 +87,8 @@ the chairman accepted (docs/API.md section 1, "Building register facts"). One ro
 | `accepted` | `JSONB` | `NULLABLE` | The block residents see as `registry_facts` |
 | `accepted_at` | `TIMESTAMPTZ` | `NULLABLE` | |
 | `accepted_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who accepted it (never returned) |
+| `certificate_reminded_for` | `DATE` | `NULLABLE` | The `valid_until` of the energy certificate the last reminder was about (migration 029) |
+| `certificate_reminded_threshold` | `INTEGER` | `NULLABLE, CHECK IN (180, 30, 0)` | The last threshold sent for that certificate; a new `valid_until` starts again |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 
 - The blocks hold register data about the building only (the plugin DTOs have no field for a
@@ -94,6 +96,19 @@ the chairman accepted (docs/API.md section 1, "Building register facts"). One ro
   validated again when read; a block that no longer fits its model (an incompatible `schema`)
   is treated as `null` and logged without its content.
 - A row without `proposal` and `accepted` is deleted.
+
+### Table: `property_registry_calls` (epic E12, S-10; migration 028)
+The daily quota of register calls of the installation (docs/API.md section 1).
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `day` | `DATE` | `PK` | The UTC day |
+| `calls` | `INTEGER` | `NOT NULL, CHECK >= 1` | Register calls made that day |
+
+- Counted by one `INSERT ... ON CONFLICT DO UPDATE ... WHERE calls < limit`; rows older than 7
+  days are deleted on the way.
+- Migration 029 adds the two `certificate_*` columns above, `ENERGY_CERTIFICATE_EXPIRING` to the `event_type` checks of
+  `notif_preferences` and `notif_deliveries`, and `building` to `subject_type` (section 5).
 
 ## 3. Module: `meters` (Devices, Periods, Readings & Audit History)
 
@@ -307,10 +322,10 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `channel` | `VARCHAR(16)` | `NOT NULL` | Enum `channel` |
 | `binding_id` | `UUID` | `FK(notif_channel_bindings.id), NULLABLE` | Set exactly for `telegram` and `webpush` |
 | `event_type` | `VARCHAR(32)` | `NOT NULL` | Enum `event_type` |
-| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}`, `issue_reported:{issue_id}`, `issue_status:{change_id}` (the timeline entry of a status change or a merge), `maintenance_due:{occurrence_id}:{due_date}:{reminder_number}` (a moved occurrence is published again under its new date), `notice_published:{post_id}` |
-| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue', 'maintenance_task')` | What the notification is about (`poll` since migration 016, `issue` since 019, `maintenance_task` since 021) |
-| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id`, `gov_polls.id`, `iss_issues.id` or `maint_tasks.id` (no FK: other modules' tables) |
-| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at`; for an issue `category`, `entrance`, and for a status notice `status`, `merged`; for a maintenance reminder `occurrence_id`, `due_date`, `overdue`, `reminder_number` |
+| `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}`, `issue_reported:{issue_id}`, `issue_status:{change_id}` (the timeline entry of a status change or a merge), `maintenance_due:{occurrence_id}:{due_date}:{reminder_number}` (a moved occurrence is published again under its new date), `notice_published:{post_id}`, `storage_alert:{event_id}`, `energy_certificate:{building_id}:{valid_until}:{threshold}` |
+| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue', 'maintenance_task', 'storage', 'building')` | What the notification is about (`poll` since migration 016, `issue` since 019, `maintenance_task` since 021, `storage` since 024, `building` since 029) |
+| `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id`, `gov_polls.id`, `iss_issues.id`, `maint_tasks.id`, or `property_buildings.id` for `storage` and `building` (no FK: other modules' tables) |
+| `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at`; for an issue `category`, `entrance`, and for a status notice `status`, `merged`; for a maintenance reminder `occurrence_id`, `due_date`, `overdue`, `reminder_number`; for a storage alert `threshold`, `used_percent`; for an energy certificate `valid_until`, `days_left`, `threshold` |
 | `locale` | `VARCHAR(5)` | `NOT NULL, CHECK IN ('et', 'ru', 'en')` | Language for the external text, resolved at insert time (`core_users.locale` or `DEFAULT_LOCALE`) |
 | `priority` | `SMALLINT` | `NOT NULL` | `0` for `EMERGENCY_PUBLISHED` only, `1` for everything else; lower is sent first |
 | `status` | `VARCHAR(16)` | `NOT NULL` | Enum delivery `status` |

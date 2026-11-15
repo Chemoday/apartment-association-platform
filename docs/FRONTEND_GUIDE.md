@@ -741,5 +741,11 @@ Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
 - The board sees the same block read-only (`GET .../registry`).
 - `404 REGISTRY_NOT_ENABLED`: hide the block. `503 REGISTRY_UNAVAILABLE`: "The register does not
   answer right now; try again later". `404 REGISTRY_BUILDING_NOT_FOUND`: "The register does not
-  know this building".
+  know this building". `429 RATE_LIMITED` (`DAILY_LIMIT`): "The register may be asked only a few
+  times a day; try again tomorrow" (the daily quota of the installation).
+- **The notification** `ENERGY_CERTIFICATE_EXPIRING` (`subject_type` `building`, open
+  `/building`): "The building's energy certificate expires on {valid_until} (in {days_left}
+  days)", with `days_left` 0 "... is valid only until today", below 0 "... expired on
+  {valid_until}". To the chairman and the board only; the preferences matrix now has **56** rows
+  (it had 52).
 

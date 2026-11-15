@@ -497,7 +497,8 @@ Design: docs/epics/E12_EXTERNAL_BUILDING_DATA.md. Table: docs/SCHEMA.md section 
 
 - **Contract:** `BuildingRegistryProvider` in `src/plugins/registry.py`: `country_code`,
   `schema`, `valid_code(code)` (the form of a building id, checked before any request),
-  `search(query) -> list[RegistryCandidate]` and `fetch(code) -> <country block>`.
+  `search(query) -> list[RegistryCandidate]`, `fetch(code) -> <country block>` and
+  `certificate_valid_until(block) -> date | None` (pure, no request).
   A country plugin (`src/plugins/countries/<iso>/building_registry.py`, enabled as
   `countries.<iso>.building_registry`) registers one provider per country. The block is a typed
   pydantic model of the country (`src/plugins/countries/<iso>/facts.py`); `registry.py` exposes
@@ -517,4 +518,13 @@ Design: docs/epics/E12_EXTERNAL_BUILDING_DATA.md. Table: docs/SCHEMA.md section 
   fields of the register while mapping (Estonia: docs/external_providers/ee/building_facts.md).
 - **The chairman decides:** a lookup is always started by the chairman, never by a timer (X5 adds
   the refresh); residents see a block only after it is accepted.
+- **Daily quota (S-10):** `REGISTRY_CALLS_PER_DAY` calls per installation and UTC day, counted
+  in `property_registry_calls` and **committed before the outbound call**, so a failing call
+  still counts and no transaction stays open while the register answers.
+- **Certificate reminder (X2b, #148):** the provider tells the core the validity of a block's
+  energy certificate (`certificate_valid_until(block)`); the loop `property/registry_watch.py`
+  (`REGISTRY_WATCH_ENABLED`, every 6 hours, under `pg_try_advisory_xact_lock`) reads the accepted
+  blocks, never the register, and publishes the durable event `EnergyCertificateExpiring` at 180
+  and 30 days before and on the day; `notifications` turns it into
+  `ENERGY_CERTIFICATE_EXPIRING` for the chairman and the board.
 
