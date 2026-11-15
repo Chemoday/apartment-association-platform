@@ -50,6 +50,7 @@ from src.modules.meters.events import (
     ReadingPeriodStatusChanged,
 )
 from src.modules.meters.schemas import PeriodStatus, ReadingSource
+from src.modules.property.events import EnergyCertificateExpiring
 from src.modules.property.models import Building
 
 
@@ -104,6 +105,9 @@ def _samples() -> dict[str, DomainEvent]:
             published_by_user_id=user,
         ),
         "StorageUsageHigh": StorageUsageHigh(building_id=building, threshold=80, used_percent=81),
+        "EnergyCertificateExpiring": EnergyCertificateExpiring(
+            building_id=building, valid_until=date(2027, 6, 30), days_left=30, threshold=30
+        ),
         "MaintenanceTaskDue": MaintenanceTaskDue(
             task_id=post,
             occurrence_id=uuid.uuid4(),

@@ -48,6 +48,9 @@ class FakeRegister:
             RegistryCandidate(code="100000001", address="Näidise tn 1", kind_label="EHITISHOONE")
         ]
 
+    def certificate_valid_until(self, block: EEBuildingFacts):
+        return None
+
     async def fetch(self, code: str) -> EEBuildingFacts:
         if self.failing:
             raise RegistryUnavailable()
@@ -383,3 +386,26 @@ async def test_the_quota_starts_again_the_next_day(
     ).status_code == 200
     days = set(await db_session.scalars(select(RegistryCallDay.day)))
     assert (today - timedelta(days=9)).date() not in days, "old days are removed"
+
+
+async def test_refused_requests_never_use_the_quota(
+    api_client: AsyncClient, db_session: AsyncSession, world: IssueWorld, fake: FakeRegister, quota
+) -> None:
+    quota(1)
+    chairman = as_user(world.chairman)
+    bad = await api_client.post(f"{REGISTRY}/proposal", json={"code": "abc"}, headers=chairman)
+    assert bad.status_code == 422
+    await db_session.execute(
+        update(Building).where(Building.id == world.building.id).values(country_code="LV")
+    )
+    await db_session.flush()
+    assert (
+        await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    ).status_code == 404
+    await db_session.execute(
+        update(Building).where(Building.id == world.building.id).values(country_code="EE")
+    )
+    await db_session.flush()
+    assert (
+        await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    ).status_code == 200

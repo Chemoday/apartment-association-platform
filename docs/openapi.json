@@ -15541,7 +15541,8 @@
           "ISSUE_STATUS_CHANGED",
           "MAINTENANCE_DUE",
           "NOTICE_PUBLISHED",
-          "STORAGE_ALMOST_FULL"
+          "STORAGE_ALMOST_FULL",
+          "ENERGY_CERTIFICATE_EXPIRING"
         ],
         "title": "NotificationEventType"
       },
@@ -16984,7 +16985,7 @@
               "$ref": "#/components/schemas/PreferenceChange"
             },
             "type": "array",
-            "maxItems": 52,
+            "maxItems": 56,
             "title": "Preferences"
           }
         },
@@ -18329,7 +18330,8 @@
           "poll",
           "issue",
           "maintenance_task",
-          "storage"
+          "storage",
+          "building"
         ],
         "title": "SubjectType"
       },

@@ -45,6 +45,7 @@ from src.modules.notifications.policies import (
     CHANNEL_PLUGINS,
     DEFAULT_PREFERENCES,
     apartment_message_key,
+    certificate_reminder_key,
     channel_unavailable_reason,
     emergency_key,
     emergency_resolved_key,
@@ -77,6 +78,7 @@ from src.modules.notifications.schemas import (
     UnreadCountResponse,
     UnsubscribeResponse,
 )
+from src.modules.property.events import EnergyCertificateExpiring
 from src.modules.property.schemas import (
     BuildingRole,
     CurrentUserDTO,
@@ -431,6 +433,7 @@ class NotificationsSubscriber:
         bus.subscribe(MaintenanceTaskDue, self.on_maintenance_due)
         bus.subscribe(OfficialNoticePublished, self.on_notice_published)
         bus.subscribe(StorageUsageHigh, self.on_storage_usage_high)
+        bus.subscribe(EnergyCertificateExpiring, self.on_energy_certificate_expiring)
         bus.subscribe(UserAccountClosed, self.on_account_closed)
 
     async def on_account_closed(self, event: UserAccountClosed) -> None:
@@ -731,6 +734,27 @@ class NotificationsSubscriber:
                 dedup_key=storage_alert_key(event.event_id),
                 subject=(SubjectType.STORAGE, event.building_id),
                 params={"threshold": event.threshold, "used_percent": event.used_percent},
+            )
+            await session.commit()
+
+    async def on_energy_certificate_expiring(self, event: EnergyCertificateExpiring) -> None:
+        """The building passport's energy certificate reached a threshold: the chairman and the
+        board."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            await self.notify(
+                session,
+                await properties.users_with_roles(event.building_id, _MAINTENANCE_ROLES),
+                event_type=NotificationEventType.ENERGY_CERTIFICATE_EXPIRING,
+                dedup_key=certificate_reminder_key(
+                    event.building_id, event.valid_until, event.threshold
+                ),
+                subject=(SubjectType.BUILDING, event.building_id),
+                params={
+                    "valid_until": event.valid_until.isoformat(),
+                    "days_left": event.days_left,
+                    "threshold": event.threshold,
+                },
             )
             await session.commit()
 
