@@ -474,16 +474,18 @@ test('offlineDemoData supports GET and PUT /settings with role checks and all-or
     method: 'GET',
     actingUserId: '018f0000-0000-7000-8000-000000000105', // BOARD
   })
-  assert.equal(boardGet.settings.length, 4)
+  assert.equal(boardGet.settings.length, 5)
   assert.deepEqual(
     boardGet.settings.map((s: any) => s.key),
     [
+      'chat.enabled',
       'issues.reports_per_apartment_per_day',
       'issues.urgent_enabled',
       'issues.urgent_per_apartment_per_day',
       'maintenance.overdue_reminder_days',
     ],
   )
+  assert.equal(boardGet.settings.find((s: any) => s.key === 'chat.enabled').value, false)
 
   await assert.rejects(
     () =>
@@ -530,17 +532,28 @@ test('offlineDemoData supports GET and PUT /settings with role checks and all-or
     false,
   )
 
-  // 4. Chairman updates and then resets a setting with null
+  // 4. Chairman updates and then resets a setting with null (including chat.enabled #032)
   const updated = await resolveOfflineDemoRequest('/settings', {
     method: 'PUT',
     actingUserId: '018f0000-0000-7000-8000-000000000101',
     body: {
       values: {
+        'chat.enabled': true,
         'issues.urgent_enabled': true,
         'issues.reports_per_apartment_per_day': 5,
       },
     },
   })
+  const chatSetting = updated.settings.find((s: any) => s.key === 'chat.enabled')
+  assert.equal(chatSetting.value, true)
+  assert.equal(chatSetting.is_default, false)
+
+  const boardReadBack = await resolveOfflineDemoRequest('/settings', {
+    method: 'GET',
+    actingUserId: '018f0000-0000-7000-8000-000000000105',
+  })
+  assert.equal(boardReadBack.settings.find((s: any) => s.key === 'chat.enabled').value, true)
+
   const urgentSetting = updated.settings.find((s: any) => s.key === 'issues.urgent_enabled')
   assert.equal(urgentSetting.value, true)
   assert.equal(urgentSetting.is_default, false)
@@ -551,10 +564,12 @@ test('offlineDemoData supports GET and PUT /settings with role checks and all-or
     actingUserId: '018f0000-0000-7000-8000-000000000101',
     body: {
       values: {
+        'chat.enabled': false,
         'issues.urgent_enabled': null,
       },
     },
   })
+  assert.equal(afterReset.settings.find((s: any) => s.key === 'chat.enabled').value, false)
   const resetUrgent = afterReset.settings.find((s: any) => s.key === 'issues.urgent_enabled')
   assert.equal(resetUrgent.value, false)
   disableOfflineDemo()
@@ -3184,6 +3199,251 @@ test('offlineDemoData building consumption: role gating, master meter exclusion,
 
   disableOfflineDemo()
 })
+
+test('offlineDemoData supports #032 chat.enabled toggle, null reset, RBAC, and 422 validation', async () => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const boardId = '018f0000-0000-7000-8000-000000000105'
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+
+  const initial = await resolveOfflineDemoRequest('/settings', {
+    method: 'GET',
+    actingUserId: boardId,
+  })
+  const chatInitial = initial.settings.find((s: any) => s.key === 'chat.enabled')
+  assert.equal(chatInitial.value, false)
+  assert.equal(chatInitial.is_default, true)
+
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/settings', {
+        method: 'GET',
+        actingUserId: residentId,
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/settings', {
+        method: 'PUT',
+        actingUserId: boardId,
+        body: { values: { 'chat.enabled': true } },
+      }),
+    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+  )
+
+  const enabledRes = await resolveOfflineDemoRequest('/settings', {
+    method: 'PUT',
+    actingUserId: chairmanId,
+    body: { values: { 'chat.enabled': true } },
+  })
+  const chatEnabled = enabledRes.settings.find((s: any) => s.key === 'chat.enabled')
+  assert.equal(chatEnabled.value, true)
+  assert.equal(chatEnabled.is_default, false)
+  assert.ok(chatEnabled.updated_at)
+
+  const resetRes = await resolveOfflineDemoRequest('/settings', {
+    method: 'PUT',
+    actingUserId: chairmanId,
+    body: { values: { 'chat.enabled': null } },
+  })
+  const chatReset = resetRes.settings.find((s: any) => s.key === 'chat.enabled')
+  assert.equal(chatReset.value, false)
+  assert.equal(chatReset.is_default, true)
+  assert.equal(chatReset.updated_at, null)
+
+  await assert.rejects(
+    () =>
+      resolveOfflineDemoRequest('/settings', {
+        method: 'PUT',
+        actingUserId: chairmanId,
+        body: { values: { 'chat.enabled': 'yes' } },
+      }),
+    (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+  )
+
+  disableOfflineDemo()
+})
+
+test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate limit, and expiry', async (t) => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const boardId = '018f0000-0000-7000-8000-000000000105'
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+  const accountantId = '018f0000-0000-7000-8000-000000000103'
+
+  try {
+    const offState = await resolveOfflineDemoRequest('/chat', {
+      method: 'GET',
+      actingUserId: residentId,
+    })
+    assert.equal(offState.enabled, false)
+    assert.equal(offState.can_take_part, true)
+
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/chat/messages', {
+          method: 'GET',
+          actingUserId: accountantId,
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/chat/messages', {
+          method: 'GET',
+          actingUserId: residentId,
+        }),
+      (err: any) => err?.status === 409 && err?.errorCode === 'CHAT_DISABLED',
+    )
+
+    await resolveOfflineDemoRequest('/settings', {
+      method: 'PUT',
+      actingUserId: chairmanId,
+      body: { values: { 'chat.enabled': true } },
+    })
+
+    const t0 = Date.parse('2026-11-15T14:00:00Z')
+    t.mock.timers.enable({ apis: ['Date'] })
+    t.mock.timers.setTime(t0)
+
+    const posted = await resolveOfflineDemoRequest('/chat/messages', {
+      method: 'POST',
+      actingUserId: residentId,
+      body: {
+        body: 'Offline chat hello',
+        author_apartment_id: '018f0000-0000-7000-8000-000000000314',
+      },
+    })
+    assert.equal(posted.is_own, true)
+    assert.match(posted.author_badge.display_label, /14/)
+
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/chat/messages', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: {
+            body: 'Forbidden apt',
+            author_apartment_id: '018f0000-0000-7000-8000-000000000309',
+          },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'INVALID_AUTHOR_APARTMENT',
+    )
+
+    const stateActive = await resolveOfflineDemoRequest('/chat', {
+      method: 'GET',
+      actingUserId: boardId,
+    })
+    assert.equal(stateActive.enabled, true)
+    assert.equal(stateActive.recent_count, 1)
+
+    const boardPage = await resolveOfflineDemoRequest('/chat/messages', {
+      method: 'GET',
+      actingUserId: boardId,
+    })
+    assert.equal(boardPage.messages.length, 1)
+    assert.equal(boardPage.messages[0].is_own, false)
+
+    // 10/min rate limit enforced in offline demo
+    for (let i = 0; i < 10; i += 1) {
+      await resolveOfflineDemoRequest('/chat/messages', {
+        method: 'POST',
+        actingUserId: boardId,
+        body: { body: `Msg ${i}` },
+      })
+    }
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/chat/messages', {
+          method: 'POST',
+          actingUserId: boardId,
+          body: { body: 'Msg 11' },
+        }),
+      (err: any) =>
+        err?.status === 429 &&
+        err?.errorCode === 'RATE_LIMITED' &&
+        err?.payload?.retry_after_seconds >= 1,
+    )
+
+    // Turn off clears messages
+    await resolveOfflineDemoRequest('/settings', {
+      method: 'PUT',
+      actingUserId: chairmanId,
+      body: { values: { 'chat.enabled': false } },
+    })
+    await resolveOfflineDemoRequest('/settings', {
+      method: 'PUT',
+      actingUserId: chairmanId,
+      body: { values: { 'chat.enabled': true } },
+    })
+    const emptyAfterReset = await resolveOfflineDemoRequest('/chat/messages', {
+      method: 'GET',
+      actingUserId: residentId,
+    })
+    assert.equal(emptyAfterReset.messages.length, 0)
+
+    // 422 on control char and whitespace-only body
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/chat/messages', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: { body: 'Bad\u0007bell' },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/chat/messages', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: { body: '   ' },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+    )
+
+    // 60/hour limit + has_more pagination with ?after & ?limit=1
+    let offlineNow = Date.parse('2026-11-15T18:00:00Z')
+    const postedIds: number[] = []
+    for (let batch = 0; batch < 6; batch += 1) {
+      t.mock.timers.setTime(offlineNow + batch * 70_000)
+      for (let i = 0; i < 10; i += 1) {
+        const res = await resolveOfflineDemoRequest('/chat/messages', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: { body: `Offline batch ${batch}-${i}` },
+        })
+        postedIds.push(res.id)
+      }
+    }
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/chat/messages', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: { body: 'Offline 61st in hour' },
+        }),
+      (err: any) =>
+        err?.status === 429 &&
+        err?.errorCode === 'RATE_LIMITED' &&
+        err?.payload?.reason === 'HOUR_LIMIT',
+    )
+
+    const paged = await resolveOfflineDemoRequest(
+      `/chat/messages?after=${postedIds[0]}&limit=1`,
+      { method: 'GET', actingUserId: boardId },
+    )
+    assert.equal(paged.has_more, true)
+    assert.equal(paged.messages.length, 1)
+    assert.equal(paged.messages[0].id, postedIds[1])
+  } finally {
+    disableOfflineDemo()
+  }
+})
+
 
 
 

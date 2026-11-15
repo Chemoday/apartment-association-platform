@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
   open: {
@@ -21,10 +21,74 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close'])
+const dialogPanelRef = ref(null)
+let previousFocusedElement = null
+
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+function getFocusableElements() {
+  const panel = dialogPanelRef.value
+  if (!panel || typeof panel.querySelectorAll !== 'function') return []
+  return Array.from(panel.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+    (el) => !el.hasAttribute?.('hidden') && el.offsetParent !== null,
+  )
+}
+
+function restorePreviousFocus() {
+  const prev = previousFocusedElement
+  previousFocusedElement = null
+  if (prev && typeof prev.focus === 'function') {
+    prev.focus()
+  }
+}
+
+watch(
+  () => props.open,
+  async (isOpen, wasOpen) => {
+    if (isOpen && !wasOpen) {
+      if (typeof document !== 'undefined' && document.activeElement) {
+        previousFocusedElement = document.activeElement
+      }
+      await nextTick()
+      const focusables = getFocusableElements()
+      if (focusables.length > 0 && typeof focusables[0].focus === 'function') {
+        focusables[0].focus()
+      } else if (typeof dialogPanelRef.value?.focus === 'function') {
+        dialogPanelRef.value.focus()
+      }
+    } else if (!isOpen && wasOpen) {
+      restorePreviousFocus()
+    }
+  },
+  { immediate: true },
+)
 
 function handleKeydown(event) {
-  if (event.key === 'Escape' && props.open) {
+  if (!props.open) return
+  if (event.key === 'Escape') {
     emit('close')
+    return
+  }
+  if (event.key === 'Tab') {
+    const focusables = getFocusableElements()
+    if (focusables.length === 0) {
+      event.preventDefault?.()
+      dialogPanelRef.value?.focus?.()
+      return
+    }
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    const active = typeof document !== 'undefined' ? document.activeElement : null
+    if (event.shiftKey) {
+      if (active === first || !dialogPanelRef.value?.contains?.(active)) {
+        event.preventDefault?.()
+        last.focus?.()
+      }
+    } else if (active === last || !dialogPanelRef.value?.contains?.(active)) {
+      event.preventDefault?.()
+      first.focus?.()
+    }
   }
 }
 
@@ -34,6 +98,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  if (props.open) {
+    restorePreviousFocus()
+  }
 })
 </script>
 
@@ -48,7 +115,9 @@ onUnmounted(() => {
       @click.self="$emit('close')"
     >
       <div
-        class="w-full rounded-xl bg-surface-container-lowest shadow-2xl border border-surface-container overflow-hidden flex flex-col max-h-[90vh]"
+        ref="dialogPanelRef"
+        tabindex="-1"
+        class="w-full rounded-xl bg-surface-container-lowest shadow-2xl border border-surface-container overflow-hidden flex flex-col max-h-[90vh] focus:outline-none"
         :class="maxWidth"
       >
         <div class="px-space-lg py-space-md bg-surface-container-low flex items-center justify-between gap-space-sm border-b border-surface-container">

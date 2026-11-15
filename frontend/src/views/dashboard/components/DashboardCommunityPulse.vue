@@ -1,6 +1,7 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
+import { useChatState } from '@/composables/useChatState.js'
 import { formatDateTime, formatRelativeTime } from '@/utils/dates.js'
 import BaseChip from '@/components/base/BaseChip.vue'
 
@@ -13,6 +14,7 @@ defineProps({
 
 const router = useRouter()
 const session = useSessionStore()
+const { canShowChat, recentCount, recentMinutes } = useChatState()
 </script>
 
 <template>
@@ -56,6 +58,34 @@ const session = useSessionStore()
         </button>
       </div>
     </div>
+
+    <!-- Building Chat Indicator Line (shared state, zero extra poll) -->
+    <button
+      v-if="canShowChat"
+      type="button"
+      data-testid="community-pulse-chat-line"
+      class="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-low hover:bg-surface-container border border-surface-container flex items-center justify-between gap-2 text-left transition-colors cursor-pointer"
+      @click="router.push('/chat')"
+    >
+      <div class="flex items-center gap-2.5 min-w-0">
+        <span
+          class="w-2.5 h-2.5 rounded-full shrink-0"
+          :class="recentCount > 0 ? 'bg-secondary animate-pulse' : 'bg-outline-variant'"
+          aria-hidden="true"
+        />
+        <span class="text-xs font-semibold text-on-surface truncate">
+          {{
+            recentCount > 0
+              ? session.t('chat.dashboardActiveLine', { count: recentCount, minutes: recentMinutes })
+              : session.t('chat.dashboardOpenLine')
+          }}
+        </span>
+      </div>
+      <span class="inline-flex items-center gap-1 text-xs font-semibold text-primary shrink-0">
+        <span>{{ session.t('chat.openChatBtn') }}</span>
+        <span class="material-symbols-outlined text-[15px]" aria-hidden="true">arrow_forward</span>
+      </span>
+    </button>
 
     <!-- Topics List -->
     <div v-if="topics.length > 0" class="divide-y divide-surface-container">

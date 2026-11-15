@@ -4,8 +4,10 @@ import { apiRequest } from '../client.js'
  * Fetch all declared association settings ordered by key (CHAIRMAN and BOARD).
  * @returns {Promise<import('../schema').SettingsView>}
  */
-export function getSettings() {
-  return apiRequest('/settings')
+export function getSettings(options = {}) {
+  return apiRequest('/settings', {
+    ...(options?.signal ? { signal: options.signal } : {}),
+  })
 }
 
 /**
@@ -14,9 +16,10 @@ export function getSettings() {
  * @param {import('../schema').SettingsUpdate} payload
  * @returns {Promise<import('../schema').SettingsView>}
  */
-export function updateSettings(payload) {
+export function updateSettings(payload, options = {}) {
   return apiRequest('/settings', {
     method: 'PUT',
     body: payload,
+    ...(options?.signal ? { signal: options.signal } : {}),
   })
 }

@@ -4,17 +4,22 @@ import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { unread } from '@/composables/useUnreadCount.js'
+import { useChatState } from '@/composables/useChatState.js'
 import { APP_ROUTES, NAV_GROUPS } from '@/router/routes.js'
 
 const route = useRoute()
 const session = useSessionStore()
 const { buildingRole } = useRole()
+const { canShowChat, recentCount: chatRecentCount } = useChatState()
 
 const activeSheetGroupId = ref(null)
 
 const visibleNavRoutes = computed(() =>
   APP_ROUTES.filter((r) => {
     if (!r.meta?.navKey) return false
+    if (r.meta?.requiresChatEnabled && !canShowChat.value) {
+      return false
+    }
     if (r.meta?.requiresApartmentOrBoard) {
       const isBoardOrChairman = ['CHAIRMAN', 'BOARD'].includes(buildingRole.value)
       const hasApartments = (session.memberships?.length || 0) > 0
@@ -155,6 +160,13 @@ onBeforeUnmount(() => {
                 {{ unread }}
               </span>
               <span
+                v-else-if="item.meta.navKey === 'chat' && chatRecentCount > 0"
+                data-testid="mobile-nav-chat-activity-count"
+                class="inline-flex items-center px-1.5 py-0.5 rounded-full bg-secondary text-on-secondary font-label-md text-[10px] font-bold"
+              >
+                {{ chatRecentCount > 99 ? '99+' : chatRecentCount }}
+              </span>
+              <span
                 v-else-if="item.meta.navKey === 'accounting'"
                 class="inline-flex items-center px-1.5 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed font-label-md text-[10px] uppercase font-bold"
               >
@@ -212,8 +224,9 @@ onBeforeUnmount(() => {
         @click="toggleSheet(group.id)"
       >
         <span
-          v-if="group.id === 'community' && unread > 0"
-          class="absolute top-1 right-4 w-2 h-2 rounded-full bg-error"
+          v-if="group.id === 'community' && (unread > 0 || (canShowChat && chatRecentCount > 0))"
+          class="absolute top-1 right-4 w-2 h-2 rounded-full"
+          :class="unread > 0 ? 'bg-error' : 'bg-secondary'"
         />
         <span class="material-symbols-outlined text-[20px]" aria-hidden="true">
           {{ group.icon }}

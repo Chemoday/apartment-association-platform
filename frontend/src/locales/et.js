@@ -33,6 +33,7 @@ export default {
     readings: 'Näidud ja kommunaalid',
     forum: 'Arutelud ja foorum',
     messages: 'Sõnumid',
+    chat: 'Maja vestlus',
     polls: 'Küsitlused',
     issues: 'Probleemid',
     documents: 'Dokumendid',
@@ -65,6 +66,7 @@ export default {
     polls: 'Hääleta ühistu otsuste poolt ja vaata tulemusi',
     forum: 'Naabrite arutelud, teated ja algatused',
     messages: 'Otsesuhtlus juhatuse ja korteri vahel',
+    chat: 'Elanike ja juhatuse kiirvestlus (2 tundi)',
     boardRoom: 'Juhatuse liikmete sisemised arutelud',
     accounting: 'Peaarvestid, näitude maatriks ja kulude jaotus',
     apartments: 'Korterite register, omanikud ja arvestite ajalugu',
@@ -777,6 +779,7 @@ export default {
     TASK_ARCHIVED: 'See hooldustöö on arhiveeritud ega ole enam muudetav.',
     INVALID_TASK_TRANSITION: 'Töö on juba selles olekus.',
     OCCURRENCE_CLOSED: 'Keegi teine sulges vahepeal selle tähtaja. Leht on uuesti laaditud.',
+    CHAT_DISABLED: 'Maja vestlus on praegu välja lülitatud.',
     DEFAULT: 'Päring ebaõnnestus.{trace_suffix}',
   },
   auth: {
@@ -1642,6 +1645,7 @@ export default {
       'Seadistage korteriühistu üldised piirangud ja reeglid. Muudatused jõustuvad koheselt.',
     readOnlyNotice:
       'Juhatuse liikmed näevad ühistu seadeid kirjutuskaitstud vaates. Seadeid saab muuta ja salvestada ainult juhatuse esimees.',
+    forbiddenDesc: 'Ühistu seadeid näevad ainult juhatuse esimees ja juhatuse liikmed.',
     loading: 'Ühistu seadete laadimine…',
     empty: 'Serveris ei ole ühtegi ühistu seadet määratud.',
     defaultBadge: 'Vaikimisi',
@@ -1663,11 +1667,26 @@ export default {
     fieldInvalidBoolean: 'Valige sobiv olek.',
     fieldInvalidGeneric: 'Sobimatu väärtus.',
     groups: {
+      chat: 'Maja vestlus',
       issues: 'Probleemiteated',
       maintenance: 'Hoolduskalender',
       general: 'Üldine',
     },
+    chatDisableConfirm: {
+      title: 'Kas lülitada maja vestlus välja?',
+      body: 'Kõik sõnumid kustutatakse.',
+      hint: 'Väljalülitamine peidab olemasolevad sõnumid kohe ja kustutab need jäädavalt. Hiljem uuesti sisse lülitades algab vestlus tühjana.',
+      pendingInlineWarning: 'Muudatuse salvestamisel kustutatakse kõik sõnumid.',
+      cancelBtn: 'Tühista',
+      confirmBtn: 'Lülita vestlus välja',
+    },
     items: {
+      chat: {
+        enabled: {
+          label: 'Maja vestlus',
+          help: 'Elanike vestlus; sõnumid kaovad 2 tunni pärast; keegi seda ei modereeri. Väljalülitamine kustutab kõik sõnumid.',
+        },
+      },
       issues: {
         reports_per_apartment_per_day: {
           label: 'Probleemiteateid korteri kohta päevas',
@@ -2185,6 +2204,34 @@ export default {
     tableAriaLabel: 'Kuupõhine tabel ressursile {resource}',
     staffOnlyAccess: 'Ainult esimehele, juhatusele ja raamatupidajale',
     openConsumptionLink: 'Hoone tarbimine',
+  },
+  chat: {
+    kicker: 'Kogukond',
+    title: 'Maja vestlus',
+    subtitle: 'Kiire suhtlus naabrite ja juhatusega, kui majas midagi toimub.',
+    disclaimer: 'Sõnumid kaovad 2 tunni pärast. Teised saavad siiski ekraanipilte teha.',
+    forbiddenTitle: 'Vestlus on ainult elanikele ja juhatusele',
+    forbiddenBody: 'Ilma korteriseose või juhatuse rollita kontod ei saa maja vestluses osaleda.',
+    disabledTitle: 'Maja vestlus on välja lülitatud',
+    disabledBody: 'Juhatuse esimees on maja vestluse praegu välja lülitanud.',
+    openSettingsBtn: 'Ühistu seaded',
+    backToDashboard: 'Tagasi avalehele',
+    loading: 'Vestluse sõnumite laadimine…',
+    empty: 'Viimase 2 tunni jooksul pole aktiivseid sõnumeid. Alustage vestlust allpool.',
+    apartmentSelectLabel: 'Kirjuta korteri alt',
+    composerPlaceholder: 'Kirjutage lühisõnum naabritele ja juhatusele…',
+    charCounter: '{used} / {max}',
+    sendBtn: 'Saada',
+    sendingBtn: 'Saatmine…',
+    sendCooldownBtn: 'Oodake {seconds} s',
+    rateLimitNotice: 'Saatsite liiga palju sõnumeid. Palun oodake {seconds} sekundit enne järgmist sõnumit.',
+    validationEmpty: 'Palun sisestage sõnum (1–{max} tähemärki).',
+    sendHint: 'Saatmine: Enter, uus rida: Shift+Enter',
+    indicatorTitle: 'Maja vestlus',
+    indicatorActiveTooltip: 'Vestlus aktiivne: {count} sõnumit {minutes} min jooksul',
+    dashboardActiveLine: 'Vestlus aktiivne: {count} sõnumit {minutes} min jooksul',
+    dashboardOpenLine: 'Maja vestlus on avatud',
+    openChatBtn: 'Ava vestlus',
   },
 }
 

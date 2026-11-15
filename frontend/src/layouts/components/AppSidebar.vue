@@ -4,10 +4,12 @@ import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { APP_ROUTES, NAV_GROUPS } from '@/router/routes.js'
+import { useChatState } from '@/composables/useChatState.js'
 
 const route = useRoute()
 const session = useSessionStore()
 const { buildingRole } = useRole()
+const { canShowChat } = useChatState()
 
 const openGroupId = ref(null)
 const navRef = ref(null)
@@ -15,6 +17,9 @@ const navRef = ref(null)
 const visibleNavRoutes = computed(() =>
   APP_ROUTES.filter((r) => {
     if (!r.meta?.navKey) return false
+    if (r.meta?.requiresChatEnabled && !canShowChat.value) {
+      return false
+    }
     if (r.meta?.requiresApartmentOrBoard) {
       const isBoardOrChairman = ['CHAIRMAN', 'BOARD'].includes(buildingRole.value)
       const hasApartments = (session.memberships?.length || 0) > 0

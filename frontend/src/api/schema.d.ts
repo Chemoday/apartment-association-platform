@@ -1355,5 +1355,37 @@ export interface FileUsage {
   categories: CategoryUsage[]
 }
 
+export interface ChatMessageCreate {
+  body: string
+  author_apartment_id?: string | null
+}
+
+export interface ChatMessageView {
+  id: number
+  body: string
+  author_badge: AuthorBadgeDTO
+  created_at: string
+  expires_at: string
+  is_own: boolean
+}
+
+export interface ChatPage {
+  messages: ChatMessageView[]
+  cursor: number | null
+  has_more: boolean
+  turned_on_at: string | null
+}
+
+export interface ChatState {
+  enabled: boolean
+  turned_on_at: string | null
+  can_take_part: boolean
+  recent_count: number
+  recent_minutes: number
+  last_message_at: string | null
+  history_hours: number
+  max_length: number
+}
+
 
 

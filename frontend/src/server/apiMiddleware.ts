@@ -26,6 +26,7 @@ import type {
 } from '../api/schema';
 import {
   cloneDefaultAssociationSettings,
+  compareSettingKeys,
   validateAndApplySettingsUpdate,
 } from '../utils/associationSettings.js';
 import {
@@ -102,6 +103,17 @@ import {
   buildBuildingConsumptionResponse,
   parseConsumptionMonths,
 } from '../utils/consumption.js';
+import {
+  CHAT_HISTORY_MS,
+  CHAT_MAX_LENGTH,
+  buildMockChatPage,
+  buildMockChatState,
+  canUserParticipateInChat,
+  evaluateChatRateLimit,
+  validateChatAfterParam,
+  validateChatLimitParam,
+  validateChatMessageInput,
+} from '../utils/chat.js';
 
 const BUILDING_ID = '018f0000-0000-7000-8000-000000000001';
 
@@ -6740,7 +6752,7 @@ export function createApiMiddleware() {
       if (!isBoard) {
         return sendError(res, 403, 'FORBIDDEN', 'Only board members and the chairman can view association settings.');
       }
-      const ordered = [...associationSettingsStore].sort((a, b) => a.key.localeCompare(b.key));
+      const ordered = [...associationSettingsStore].sort(compareSettingKeys);
       return sendJson(res, 200, { settings: ordered });
     }
 
@@ -6748,6 +6760,9 @@ export function createApiMiddleware() {
       if (user.building_role !== 'CHAIRMAN') {
         return sendError(res, 403, 'FORBIDDEN', 'Only the chairman can update association settings.');
       }
+      const prevChatEnabled = Boolean(
+        readSettingFromStore(associationSettingsStore, 'chat.enabled', false)
+      );
       const body = await readBody(req);
       const outcome = validateAndApplySettingsUpdate(associationSettingsStore, body);
       if (!outcome.ok) {
@@ -6756,6 +6771,16 @@ export function createApiMiddleware() {
         });
       }
       associationSettingsStore = outcome.settings;
+      const nextChatEnabled = Boolean(
+        readSettingFromStore(associationSettingsStore, 'chat.enabled', false)
+      );
+      if (!prevChatEnabled && nextChatEnabled) {
+        chatTurnedOnAt = new Date().toISOString();
+        chatMessagesStore = [];
+      } else if (prevChatEnabled && !nextChatEnabled) {
+        chatTurnedOnAt = null;
+        chatMessagesStore = [];
+      }
       return sendJson(res, 200, { settings: associationSettingsStore });
     }
 
@@ -7874,6 +7899,145 @@ export function createApiMiddleware() {
       return res.end(Buffer.from(outcome.csv || '', 'utf8'));
     }
 
+    // =========================================================================
+    // Building Chat (/api/v1/chat) - #033
+    // =========================================================================
+    if (pathname === '/api/v1/chat' && method === 'GET') {
+      const enabled = Boolean(
+        readSettingFromStore(associationSettingsStore, 'chat.enabled', false)
+      );
+      const userMems = membershipsByUser[user.user_id] || [];
+      const canTakePart = canUserParticipateInChat(user, userMems);
+      return sendJson(
+        res,
+        200,
+        buildMockChatState({
+          enabled,
+          turnedOnAt: chatTurnedOnAt,
+          canTakePart,
+          messages: chatMessagesStore,
+          nowMs: Date.now(),
+        })
+      );
+    }
+
+    if (pathname === '/api/v1/chat/messages' && method === 'GET') {
+      const userMems = membershipsByUser[user.user_id] || [];
+      if (!canUserParticipateInChat(user, userMems)) {
+        return sendError(
+          res,
+          403,
+          'FORBIDDEN',
+          'Only building apartment members and board members can participate in the building chat.'
+        );
+      }
+      const enabled = Boolean(
+        readSettingFromStore(associationSettingsStore, 'chat.enabled', false)
+      );
+      if (!enabled) {
+        return sendError(res, 409, 'CHAT_DISABLED', 'Building chat is currently turned off.');
+      }
+      const afterOutcome = validateChatAfterParam(urlObj.searchParams.get('after'));
+      if (!afterOutcome.ok) {
+        return sendError(res, 422, 'VALIDATION_ERROR', afterOutcome.error.message, {
+          errors: [afterOutcome.error],
+        });
+      }
+      const limitOutcome = validateChatLimitParam(urlObj.searchParams.get('limit'));
+      if (!limitOutcome.ok) {
+        return sendError(res, 422, 'VALIDATION_ERROR', limitOutcome.error.message, {
+          errors: [limitOutcome.error],
+        });
+      }
+      const nowMs = Date.now();
+      chatMessagesStore = chatMessagesStore.filter((m) => Date.parse(m.expires_at) > nowMs);
+      return sendJson(
+        res,
+        200,
+        buildMockChatPage({
+          messages: chatMessagesStore,
+          turnedOnAt: chatTurnedOnAt,
+          afterCursor: afterOutcome.value,
+          limit: limitOutcome.value,
+          callerUserId: user.user_id,
+          nowMs,
+        })
+      );
+    }
+
+    if (pathname === '/api/v1/chat/messages' && method === 'POST') {
+      const userMems = membershipsByUser[user.user_id] || [];
+      if (!canUserParticipateInChat(user, userMems)) {
+        return sendError(
+          res,
+          403,
+          'FORBIDDEN',
+          'Only building apartment members and board members can participate in the building chat.'
+        );
+      }
+      const enabled = Boolean(
+        readSettingFromStore(associationSettingsStore, 'chat.enabled', false)
+      );
+      if (!enabled) {
+        return sendError(res, 409, 'CHAT_DISABLED', 'Building chat is currently turned off.');
+      }
+      const body = await readBody(req);
+      const inputOutcome = validateChatMessageInput({
+        payload: body,
+        user,
+        memberships: userMems,
+        maxLength: CHAT_MAX_LENGTH,
+      });
+      if (!inputOutcome.ok) {
+        return sendError(
+          res,
+          inputOutcome.status,
+          inputOutcome.errorCode,
+          inputOutcome.message,
+          inputOutcome.errors ? { errors: inputOutcome.errors } : {}
+        );
+      }
+      const nowMs = Date.now();
+      const rateOutcome = evaluateChatRateLimit(
+        chatPostTimestampsByUser[user.user_id],
+        nowMs
+      );
+      if (!rateOutcome.ok) {
+        chatPostTimestampsByUser[user.user_id] = rateOutcome.pruned;
+        return sendError(
+          res,
+          429,
+          'RATE_LIMITED',
+          'Too many messages sent. Please wait before sending again.',
+          {
+            retry_after_seconds: rateOutcome.retryAfterSeconds,
+            reason: rateOutcome.reason,
+          }
+        );
+      }
+      chatPostTimestampsByUser[user.user_id] = [...rateOutcome.pruned, nowMs];
+      chatMessagesStore = chatMessagesStore.filter((m) => Date.parse(m.expires_at) > nowMs);
+      const createdAtIso = new Date(nowMs).toISOString();
+      const expiresAtIso = new Date(nowMs + CHAT_HISTORY_MS).toISOString();
+      const storedMsg = {
+        id: chatNextId++,
+        body: inputOutcome.body,
+        author_badge: inputOutcome.badge,
+        author_user_id: user.user_id,
+        created_at: createdAtIso,
+        expires_at: expiresAtIso,
+      };
+      chatMessagesStore.push(storedMsg);
+      return sendJson(res, 201, {
+        id: storedMsg.id,
+        body: storedMsg.body,
+        author_badge: storedMsg.author_badge,
+        created_at: storedMsg.created_at,
+        expires_at: storedMsg.expires_at,
+        is_own: true,
+      });
+    }
+
     return sendError(res, 404, 'NOT_FOUND', `Endpoint ${method} ${pathname} not found.`);
   };
 }
@@ -7890,6 +8054,10 @@ let maintenanceStore: any[] = createDefaultMaintenanceSeed();
 let maintenanceLogStore: any[] = createDefaultMaintenanceLogSeed();
 let serverExtraPendingDeletionBytes = 0;
 let serverStorageAlertState = { armed70: true, armed90: true };
+let chatTurnedOnAt: string | null = null;
+let chatMessagesStore: any[] = [];
+let chatNextId = 1;
+let chatPostTimestampsByUser: Record<string, number[]> = {};
 
 export function resetApiMiddlewareStateForTest() {
   postsStore.splice(0, postsStore.length, ...createDefaultServerPosts());
@@ -7909,4 +8077,8 @@ export function resetApiMiddlewareStateForTest() {
   Object.assign(masterMetersByPeriod, JSON.parse(INITIAL_MASTER_METERS_BY_PERIOD_SNAPSHOT));
   serverExtraPendingDeletionBytes = 0;
   serverStorageAlertState = { armed70: true, armed90: true };
+  chatTurnedOnAt = null;
+  chatMessagesStore = [];
+  chatNextId = 1;
+  chatPostTimestampsByUser = {};
 }

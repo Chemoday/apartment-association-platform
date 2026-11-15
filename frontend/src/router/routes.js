@@ -104,6 +104,19 @@ export const APP_ROUTES = [
     },
   },
   {
+    path: '/chat',
+    name: 'chat',
+    component: () => import('@/views/chat/ChatView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
+      requiresChatEnabled: true,
+      navKey: 'chat',
+      navGroup: 'community',
+      icon: 'chat',
+    },
+  },
+  {
     path: '/polls',
     name: 'polls',
     component: () => import('@/views/polls/PollsView.vue'),
