@@ -2731,6 +2731,16 @@
               }
             }
           },
+          "429": {
+            "description": "Too many requests (see retry_after_seconds and the Retry-After header). error_code: `RATE_LIMITED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Service unavailable. error_code: `REGISTRY_UNAVAILABLE`",
             "content": {
@@ -2823,6 +2833,16 @@
           },
           "422": {
             "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see retry_after_seconds and the Retry-After header). error_code: `RATE_LIMITED`",
             "content": {
               "application/json": {
                 "schema": {
@@ -15521,7 +15541,8 @@
           "ISSUE_STATUS_CHANGED",
           "MAINTENANCE_DUE",
           "NOTICE_PUBLISHED",
-          "STORAGE_ALMOST_FULL"
+          "STORAGE_ALMOST_FULL",
+          "ENERGY_CERTIFICATE_EXPIRING"
         ],
         "title": "NotificationEventType"
       },
@@ -16964,7 +16985,7 @@
               "$ref": "#/components/schemas/PreferenceChange"
             },
             "type": "array",
-            "maxItems": 52,
+            "maxItems": 56,
             "title": "Preferences"
           }
         },
@@ -18309,7 +18330,8 @@
           "poll",
           "issue",
           "maintenance_task",
-          "storage"
+          "storage",
+          "building"
         ],
         "title": "SubjectType"
       },

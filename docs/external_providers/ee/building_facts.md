@@ -114,4 +114,5 @@ From `ehitiseKatastriyksused.ehitiseKatastriyksus[].katastritunnus`.
 
 ## For the core (plugin methods, epic E12 section 2a)
 - **Apartment list for the setup wizard (X3):** `units` with `kind == APARTMENT`: number and area.
-- **Certificate reminder (X2):** the newest valid certificate's `valid_until`.
+- **Certificate reminder (X2b):** the latest `valid_until` among the certificates whose `state` is
+  `DO_DOKUSEIS_KEHTIV`; none without one (an annulled certificate is never reported).

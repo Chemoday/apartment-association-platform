@@ -48,6 +48,8 @@ class NotificationEventType(StrEnum):
     NOTICE_PUBLISHED = "NOTICE_PUBLISHED"
     # The association's files reached 80% or 95% of its quota (epic E11, task F4).
     STORAGE_ALMOST_FULL = "STORAGE_ALMOST_FULL"
+    # The energy certificate of the building passport expires (epic E12 X2b).
+    ENERGY_CERTIFICATE_EXPIRING = "ENERGY_CERTIFICATE_EXPIRING"
 
 
 class DeliveryStatus(StrEnum):
@@ -65,6 +67,7 @@ class SubjectType(StrEnum):
     ISSUE = "issue"
     MAINTENANCE_TASK = "maintenance_task"
     STORAGE = "storage"  # the subject is the building
+    BUILDING = "building"  # the building passport (epic E12); the subject is the building
 
 
 class UnavailableReason(StrEnum):

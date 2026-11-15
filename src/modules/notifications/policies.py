@@ -79,6 +79,11 @@ DEFAULT_PREFERENCES: Mapping[tuple[NotificationEventType, Channel], bool] = {
     (_E.STORAGE_ALMOST_FULL, _C.EMAIL): True,
     (_E.STORAGE_ALMOST_FULL, _C.TELEGRAM): False,
     (_E.STORAGE_ALMOST_FULL, _C.WEBPUSH): False,
+    # Rare and operational too: months ahead, so in the app and by e-mail (E12 X2b).
+    (_E.ENERGY_CERTIFICATE_EXPIRING, _C.IN_APP): True,
+    (_E.ENERGY_CERTIFICATE_EXPIRING, _C.EMAIL): True,
+    (_E.ENERGY_CERTIFICATE_EXPIRING, _C.TELEGRAM): False,
+    (_E.ENERGY_CERTIFICATE_EXPIRING, _C.WEBPUSH): False,
 }
 
 ISSUE_REPORT_EVENTS = frozenset(
@@ -229,6 +234,11 @@ def maintenance_due_key(occurrence_id: uuid.UUID, due_date: date, reminder_numbe
 
 def notice_published_key(post_id: uuid.UUID) -> str:
     return f"notice_published:{post_id}"
+
+
+def certificate_reminder_key(building_id: uuid.UUID, valid_until: date, threshold: int) -> str:
+    """One per building, certificate and threshold (a redelivered event adds nothing)."""
+    return f"energy_certificate:{building_id}:{valid_until.isoformat()}:{threshold}"
 
 
 def storage_alert_key(event_id: uuid.UUID) -> str:

@@ -12,7 +12,7 @@ import re
 import uuid
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -178,6 +178,11 @@ class BuildingRegistryProvider(Protocol):
 
     async def fetch(self, code: str) -> RegistryFacts:
         """The block of one building; raises RegistryBuildingNotFound or RegistryUnavailable."""
+        ...
+
+    def certificate_valid_until(self, block: RegistryFacts) -> date | None:
+        """Until when the building's energy certificate in `block` is valid; None without one.
+        Pure: reads the block, never the register (the reminder of epic E12 X2b)."""
         ...
 
 

@@ -54,6 +54,7 @@ from src.modules.notifications.router import router as notifications_router
 from src.modules.notifications.router import webhook_router as notifications_webhook_router
 from src.modules.notifications.scheduler import Scheduler, run_scheduler_loop
 from src.modules.notifications.service import NotificationsSubscriber
+from src.modules.property.registry_watch import RegistryWatch, run_watch_loop
 from src.modules.property.router import router as property_router
 from src.plugins.registry import build_plugin_registry
 
@@ -114,6 +115,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 run_cleanup_loop(lambda: app.state.auth_session_factory), name="auth-cleanup"
             )
         )
+    if settings.REGISTRY_WATCH_ENABLED:
+        loops.append(
+            asyncio.create_task(run_watch_loop(app.state.registry_watch), name="registry-watch")
+        )
     if settings.CHAT_PURGE_ENABLED:
         loops.append(
             asyncio.create_task(
@@ -147,6 +152,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Read on every tick, so tests can swap the factory after create_app.
     app.state.auth_session_factory = async_session_factory
     app.state.chat_session_factory = async_session_factory  # the chat purge; tests swap it
+    # The energy certificate reminder (epic E12 X2b); tests swap the session factory.
+    app.state.property_session_factory = async_session_factory
+    app.state.registry_watch = RegistryWatch(
+        lambda: app.state.property_session_factory,
+        lambda: app.state.event_bus,
+        lambda: app.state.plugin_registry,
+        settings.INSTANCE_TIMEZONE,
+    )
     app.include_router(property_router)
     app.include_router(meters_router)
     app.include_router(communication_router)

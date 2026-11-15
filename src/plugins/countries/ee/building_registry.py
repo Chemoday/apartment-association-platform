@@ -43,6 +43,7 @@ BUILDING_URL = "https://livekluster.ehr.ee/api/building/v2/buildingData"
 ALLOWED_HOSTS = frozenset({"inaadress.maaamet.ee", "livekluster.ehr.ee"})
 MAX_CANDIDATES = 10
 BUILDING_KIND = "EHITISHOONE"  # In-ADS object type of a building
+VALID_CERTIFICATE = "DO_DOKUSEIS_KEHTIV"  # the register's state of a valid certificate
 _CODE = re.compile(r"[0-9]{6,12}")
 _WHOLE = re.compile(r"[0-9]{1,9}")
 _DECIMAL = re.compile(r"[0-9]{1,12}(\.[0-9]{1,6})?")
@@ -90,6 +91,18 @@ class EEBuildingRegistry:
             raise RegistryUnavailable()
         mapper = _Mapper()
         return mapper.facts(code, building)
+
+    def certificate_valid_until(self, block: EEBuildingFacts) -> date | None:
+        """The latest validity among the certificates the register marks valid; None without one
+        (an annulled certificate is never reported as expiring)."""
+        dates = [
+            c.valid_until
+            for c in block.energy_certificates
+            if c.valid_until is not None
+            and c.state is not None
+            and c.state.code == VALID_CERTIFICATE
+        ]
+        return max(dates) if dates else None
 
     async def _get(self, url: str, params: dict[str, str]) -> tuple[int, Any]:
         try:

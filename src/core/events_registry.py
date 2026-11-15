@@ -29,6 +29,7 @@ _MODULE_EVENT_MODULES = (
     "src.modules.issues.events",
     "src.modules.maintenance.events",
     "src.modules.meters.events",
+    "src.modules.property.events",
 )
 
 # Stored on the row itself, not in the payload.

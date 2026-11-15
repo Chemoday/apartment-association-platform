@@ -142,6 +142,18 @@ def compose(
         text = catalog.render(
             "text.STORAGE_ALMOST_FULL", locale, used_percent=params["used_percent"]
         )
+    elif event_type == E.ENERGY_CERTIFICATE_EXPIRING:
+        values = {"valid_until": _short_date(params["valid_until"])}
+        subject = catalog.render(subject_key, locale, **values)
+        days_left = int(params["days_left"])
+        if days_left < 0:
+            text = catalog.render("text.ENERGY_CERTIFICATE_EXPIRING.EXPIRED", locale, **values)
+        elif days_left == 0:
+            text = catalog.render("text.ENERGY_CERTIFICATE_EXPIRING.TODAY", locale, **values)
+        else:
+            text = catalog.render(
+                "text.ENERGY_CERTIFICATE_EXPIRING", locale, days_left=params["days_left"], **values
+            )
     elif event_type == E.NOTICE_PUBLISHED:  # only that there is a notice, never its text
         subject = catalog.render(subject_key, locale)
         text = catalog.render("text.NOTICE_PUBLISHED", locale)

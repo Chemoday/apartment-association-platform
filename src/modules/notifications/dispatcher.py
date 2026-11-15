@@ -185,6 +185,7 @@ _DAYTIME_EVENTS = frozenset(
         NotificationEventType.MAINTENANCE_DUE,
         NotificationEventType.NOTICE_PUBLISHED,
         NotificationEventType.STORAGE_ALMOST_FULL,
+        NotificationEventType.ENERGY_CERTIFICATE_EXPIRING,
     }
 )
 
@@ -386,7 +387,10 @@ class Dispatcher:
             communication = CommunicationService(session, properties)
             if user is None or not await communication.can_read_post(user, row.subject_id):
                 return skip("SUBJECT_NOT_FOUND")
-        elif row.event_type == NotificationEventType.STORAGE_ALMOST_FULL:
+        elif row.event_type in (
+            NotificationEventType.STORAGE_ALMOST_FULL,
+            NotificationEventType.ENERGY_CERTIFICATE_EXPIRING,
+        ):
             # Only the board is told; someone who left the board meanwhile is skipped.
             user = await properties.get_current_user(row.user_id)
             if user is None or user.building_role not in _BOARD_ROLES:

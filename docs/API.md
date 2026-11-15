@@ -136,6 +136,12 @@ register says and accepts it; only then do residents see it as `registry_facts`.
 docs/epics/E12_EXTERNAL_BUILDING_DATA.md; the fields of a country's block:
 docs/external_providers/{country}/building_facts.md (Estonia: `ee/1`).
 
+**Daily quota (S-10, owner decision 2026-11-15):** the register is called rarely, so an
+installation makes at most `REGISTRY_CALLS_PER_DAY` calls a day (a server setting, default 10),
+search and proposal together, reset at midnight UTC. When it is used up: `429 RATE_LIMITED` with
+`reason` `DAILY_LIMIT`, `retry_after_seconds` (until midnight UTC) and a `Retry-After` header; no
+call is made. A call counts once it is made, also when the register then fails.
+
 Every endpoint except `DELETE` needs a register provider for the building's `country_code`
 (plugin, e.g. `countries.ee.building_registry`), else `404 REGISTRY_NOT_ENABLED`; while there is
 none, `registry_facts` is `null` even if a block was accepted earlier. A register that does not
@@ -196,6 +202,7 @@ codes it knows and shows `label_et` otherwise.
 | 404 | `REGISTRY_NOT_ENABLED`, `REGISTRY_BUILDING_NOT_FOUND` |
 | 409 | `NO_REGISTRY_PROPOSAL` |
 | 422 | `VALIDATION_ERROR` |
+| 429 | `RATE_LIMITED` (search and proposal) |
 | 503 | `REGISTRY_UNAVAILABLE` |
 
 ### Apartment cards (epic E8, task P1)
@@ -929,6 +936,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `MAINTENANCE_DUE` | the maintenance calendar published a task or reminded of an overdue one (section 11): the chairman and the board members | no |
 | `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target and the chairman and the board members (also without an apartment), once each, never its author | no |
 | `STORAGE_ALMOST_FULL` | the association's files filled 70% or 90% of the room for files (section 12, epic E11 task F4): the chairman and the board members, once per threshold until the usage falls well below it again | no |
+| `ENERGY_CERTIFICATE_EXPIRING` | the valid energy certificate in the accepted building passport (section 1, epic E12) expires in 180 days, in 30 days, or today (or has expired); an annulled certificate is never reported: the chairman and the board members, once per threshold and certificate; a block accepted late sends only the nearest threshold | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -1004,6 +1012,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `MAINTENANCE_DUE` | on | off | off | off |
 | `NOTICE_PUBLISHED` | on | on | on | on |
 | `STORAGE_ALMOST_FULL` | on | on | off | off |
+| `ENERGY_CERTIFICATE_EXPIRING` | on | on | off | off |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
@@ -1028,7 +1037,8 @@ reports, but not for urgent ones (epic E9).
   `GET /api/v1/governance/polls/{subject_id}`; `issue` links to
   `GET /api/v1/issues/{subject_id}` (for a merge notice, the original); `maintenance_task` links
   to `GET /api/v1/maintenance/tasks/{subject_id}`; `storage` (the subject is the building) links
-  to `GET /api/v1/files/usage`.
+  to `GET /api/v1/files/usage`; `building` (the subject is the building) links to the building
+  passport (`registry_facts` of `GET /api/v1/property/building`).
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
@@ -1041,7 +1051,9 @@ reports, but not for urgent ones (epic E9).
   `due_date`, `overdue` and `reminder_number` (0 for the publication; the title is loaded with
   the task); `NOTICE_PUBLISHED` none (the subject is the notice, `post`); `STORAGE_ALMOST_FULL`
   `threshold` (70 or 90, percent of the room for files), `used_percent` (an integer, percent of
-  the whole quota, as `GET /api/v1/files/usage` shows it).
+  the whole quota, as `GET /api/v1/files/usage` shows it); `ENERGY_CERTIFICATE_EXPIRING`
+  `valid_until` (a date), `days_left` (an integer, 0 or less when it has expired) and `threshold`
+  (180, 30 or 0).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -1080,7 +1092,7 @@ The full matrix with defaults filled in, plus which channels can reach the calle
 ```
 - `reason` when not available, first match wins: `DEMO_MODE`, `CHANNEL_NOT_ENABLED`, then `NO_EMAIL`
   (e-mail) or `NOT_LINKED` (Telegram, WebPush, mobile push).
-- `preferences` always has all 52 combinations of `event_type` and `channel` (65 once
+- `preferences` always has all 56 combinations of `event_type` and `channel` (70 once
   `mobile_push` exists, N7).
 
 ### `PUT /api/v1/notifications/preferences`
@@ -1097,7 +1109,8 @@ Only the listed combinations change. Response: the same body as the `GET`.
 ### Unsubscribing from e-mail (N8)
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
 `PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
-`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`, `STORAGE_ALMOST_FULL`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`, `STORAGE_ALMOST_FULL`,
+`ENERGY_CERTIFICATE_EXPIRING`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
