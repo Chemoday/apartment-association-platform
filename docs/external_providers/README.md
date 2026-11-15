@@ -16,7 +16,7 @@ docs/external_providers/
 
 | Country | Pages | State |
 | :--- | :--- | :--- |
-| EE Estonia | [ee/sources.md](ee/sources.md) | partly verified (2026-11-14) |
+| EE Estonia | [ee/sources.md](ee/sources.md), [ee/building_facts.md](ee/building_facts.md) | partly verified (2026-11-14; residential building parts 2026-11-15) |
 | FI Finland | [fi/sources.md](fi/sources.md) | not verified |
 | LV Latvia | [lv/sources.md](lv/sources.md) | not verified |
 | LT Lithuania | [lt/sources.md](lt/sources.md) | not verified |
@@ -33,7 +33,9 @@ docs/external_providers/
 - *Not verified* is everything else, including desk research by people or agents. A provider is
   never built on a fact that is not verified.
 - Live checks use anonymous public endpoints and a public address (for example a government
-  building), never a private home, and never credentials or personal data.
+  building), or a residential building whose owner or resident agreed to the check; the address
+  and the register codes of such a building are never recorded (not in the docs, tests or
+  commits). Never credentials or personal data.
 - No product names of competing association software on these pages.
 
 ## Template of `sources.md`
