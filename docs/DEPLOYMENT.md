@@ -227,12 +227,15 @@ seconds. Then add a line to `deploy/HOST_CHANGELOG.md`.
   the image or on the VPS, and environments share nothing. When e-mail goes live (after a real
   login, docs/BACKLOG.md B-7), each environment gets its own `SMTP_*` values, `SMTP_FROM`,
   `PUBLIC_BASE_URL`, `NOTIFICATIONS_HASH_SECRET` (at least 32 bytes; it signs the unsubscribe
-  links since N8, and the backend refuses to start without it) and `common.email_smtp` in
-  `ENABLED_PLUGINS` in its `.env` (docs/epics/E1_NOTIFICATIONS.md 6.1). The provider must sign
+  links since N8, and the backend refuses to start without it) and `common.email_smtp` added to
+  that environment's `ENABLED_PLUGINS` in `deploy.sh` (not in `.env`: the backend reads
+  `ENABLED_PLUGINS` only from what `deploy.sh` exports; docs/epics/E1_NOTIFICATIONS.md 6.1). The provider must sign
   the mail with DKIM, or large mail services ignore the one-click unsubscribe headers.
 - **Building register (epic E12):** an Estonian association gets its building passport with
-  `countries.ee.building_registry` in `ENABLED_PLUGINS` of its `.env`. The plugin calls only the
-  public In-ADS address service (`inaadress.maaamet.ee`) and the building register
+  `countries.ee.building_registry` in `ENABLED_PLUGINS`. `ENABLED_PLUGINS` is not a secret, so
+  `deploy.sh` sets it per environment (dev: `common.csv_export,countries.ee.building_registry`
+  since 2026-11-15; prod: `common.csv_export`) and the compose file passes it on. The plugin calls
+  only the public In-ADS address service (`inaadress.maaamet.ee`) and the building register
   (`livekluster.ehr.ee`) over HTTPS, without a key; the host needs outbound HTTPS to them.
 - **Login secrets (epic E7):** the backend refuses to start without `JWT_SECRET_KEY` and
   `AUTH_HASH_SECRET` (at least 32 bytes each), and `docker-compose.deploy.yml` refuses to start
