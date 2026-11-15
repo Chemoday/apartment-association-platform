@@ -141,6 +141,11 @@ the check. Its address and codes are deliberately not recorded anywhere.
 - No person data besides the certificate fields of the 2026-11-14 check (absent here); `nimi`
   occurs only as the entrance point label.
 
+- **Unknown building code:** `buildingData?ehr_code=000000000` answered `400` with
+  `{"message": "Building Not Found!"}`; a code that is not a number (`abc`) answered `400` with
+  `{"error": "Validation failed", ...}`. The provider maps only the first to "not found".
+- **In-ADS without a match:** `200` with a body without `addresses` (`{"host": "..."}`).
+
 ## Not verified
 
 - Licenses and attribution texts of every source (desk research says CC BY 4.0 with

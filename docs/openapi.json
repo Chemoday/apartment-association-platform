@@ -2531,6 +2531,407 @@
         }
       }
     },
+    "/api/v1/property/building/registry": {
+      "get": {
+        "tags": [
+          "property"
+        ],
+        "summary": "Registry State",
+        "description": "The accepted block and the proposal waiting for the chairman.",
+        "operationId": "registry_state_api_v1_property_building_registry_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `REGISTRY_NOT_ENABLED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "property"
+        ],
+        "summary": "Registry Clear",
+        "description": "Remove the accepted block and the proposal.",
+        "operationId": "registry_clear_api_v1_property_building_registry_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/property/building/registry/search": {
+      "post": {
+        "tags": [
+          "property"
+        ],
+        "summary": "Registry Search",
+        "description": "Buildings of the register that match an address (the building's own by default).\n\nA POST with a body, not a query string: the address must not reach URLs in traces.",
+        "operationId": "registry_search_api_v1_property_building_registry_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrySearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrySearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `REGISTRY_NOT_ENABLED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable. error_code: `REGISTRY_UNAVAILABLE`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/property/building/registry/proposal": {
+      "post": {
+        "tags": [
+          "property"
+        ],
+        "summary": "Registry Propose",
+        "description": "Fetch one building from the register as the proposal.",
+        "operationId": "registry_propose_api_v1_property_building_registry_proposal_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryProposalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `REGISTRY_NOT_ENABLED`, `REGISTRY_BUILDING_NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable. error_code: `REGISTRY_UNAVAILABLE`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/property/building/registry/accept": {
+      "post": {
+        "tags": [
+          "property"
+        ],
+        "summary": "Registry Accept",
+        "description": "Make the proposal what residents see as registry_facts.",
+        "operationId": "registry_accept_api_v1_property_building_registry_accept_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `REGISTRY_NOT_ENABLED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state. error_code: `NO_REGISTRY_PROPOSAL`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/api/v1/meters/my-dashboard": {
       "get": {
         "tags": [
@@ -11785,6 +12186,16 @@
             "examples": [
               "329.20"
             ]
+          },
+          "registry_facts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EEBuildingFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -12068,6 +12479,40 @@
           "max_length"
         ],
         "title": "ChatState"
+      },
+      "Classified": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "label_et": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label Et"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "label_et"
+        ],
+        "title": "Classified",
+        "description": "A classified value of the register: its code and the register's Estonian text."
       },
       "ClosedOccurrence": {
         "properties": {
@@ -12726,6 +13171,576 @@
           "done_on"
         ],
         "title": "DoneRequest"
+      },
+      "EEBuilding": {
+        "properties": {
+          "first_use_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Use Year"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Classified"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Classified"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ownership": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Classified"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "construction_started_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Construction Started On"
+          },
+          "floors_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Floors Max"
+          },
+          "floors_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Floors Min"
+          },
+          "lifts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifts"
+          },
+          "rooms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rooms"
+          },
+          "non_residential_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Non Residential Units"
+          },
+          "closed_net_area_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed Net Area M2"
+          },
+          "heated_area_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heated Area M2"
+          },
+          "common_area_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Common Area M2"
+          },
+          "auxiliary_area_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auxiliary Area M2"
+          },
+          "footprint_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footprint M2"
+          },
+          "volume_m3": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume M3"
+          },
+          "height_m": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height M"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "first_use_year",
+          "purpose",
+          "state",
+          "ownership",
+          "construction_started_on",
+          "floors_max",
+          "floors_min",
+          "lifts",
+          "rooms",
+          "non_residential_units",
+          "closed_net_area_m2",
+          "heated_area_m2",
+          "common_area_m2",
+          "auxiliary_area_m2",
+          "footprint_m2",
+          "volume_m3",
+          "height_m"
+        ],
+        "title": "EEBuilding"
+      },
+      "EEBuildingFacts": {
+        "properties": {
+          "country_code": {
+            "type": "string",
+            "const": "EE",
+            "title": "Country Code",
+            "default": "EE"
+          },
+          "schema": {
+            "type": "string",
+            "const": "ee/1",
+            "title": "Schema",
+            "default": "ee/1"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EESource"
+          },
+          "building": {
+            "$ref": "#/components/schemas/EEBuilding"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/EEUnit"
+            },
+            "type": "array",
+            "title": "Units",
+            "default": []
+          },
+          "energy_certificates": {
+            "items": {
+              "$ref": "#/components/schemas/EEEnergyCertificate"
+            },
+            "type": "array",
+            "title": "Energy Certificates",
+            "default": []
+          },
+          "technical": {
+            "items": {
+              "$ref": "#/components/schemas/EETechnical"
+            },
+            "type": "array",
+            "title": "Technical",
+            "default": []
+          },
+          "cadastral_units": {
+            "items": {
+              "$ref": "#/components/schemas/EECadastralUnit"
+            },
+            "type": "array",
+            "title": "Cadastral Units",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "country_code",
+          "schema",
+          "source",
+          "building",
+          "units",
+          "energy_certificates",
+          "technical",
+          "cadastral_units"
+        ],
+        "title": "EEBuildingFacts",
+        "description": "`registry_facts` of a building in Estonia. Serialise with `by_alias=True` (`schema`)."
+      },
+      "EECadastralUnit": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "EECadastralUnit"
+      },
+      "EEEnergyCertificate": {
+        "properties": {
+          "energy_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Energy Class"
+          },
+          "document_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Number"
+          },
+          "document_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Classified"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Classified"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issued_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issued On"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "value_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "energy_class",
+          "document_number",
+          "document_kind",
+          "state",
+          "issued_on",
+          "valid_until",
+          "value",
+          "value_type"
+        ],
+        "title": "EEEnergyCertificate"
+      },
+      "EESource": {
+        "properties": {
+          "register": {
+            "type": "string",
+            "const": "EHR",
+            "title": "Register",
+            "default": "EHR"
+          },
+          "building_code": {
+            "type": "string",
+            "title": "Building Code"
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fetched At"
+          },
+          "attribution": {
+            "type": "string",
+            "title": "Attribution",
+            "default": "Ehitisregister"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "register",
+          "building_code",
+          "fetched_at",
+          "attribution"
+        ],
+        "title": "EESource"
+      },
+      "EETechnical": {
+        "properties": {
+          "group": {
+            "$ref": "#/components/schemas/Classified"
+          },
+          "value": {
+            "$ref": "#/components/schemas/Classified"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "group",
+          "value"
+        ],
+        "title": "EETechnical"
+      },
+      "EEUnit": {
+        "properties": {
+          "number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/UnitKind",
+            "default": "OTHER"
+          },
+          "area_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
+          },
+          "heated_area_m2": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "examples": [
+                  "10792.2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heated Area M2"
+          },
+          "rooms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rooms"
+          },
+          "toilets": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toilets"
+          },
+          "entrance_floor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entrance Floor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "number",
+          "kind",
+          "area_m2",
+          "heated_area_m2",
+          "rooms",
+          "toilets",
+          "entrance_floor"
+        ],
+        "title": "EEUnit"
       },
       "Eligibility": {
         "type": "string",
@@ -16525,6 +17540,143 @@
         ],
         "title": "RegistrationRequest"
       },
+      "RegistryCandidateView": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "address": {
+            "type": "string",
+            "title": "Address"
+          },
+          "kind_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "address",
+          "kind_label"
+        ],
+        "title": "RegistryCandidateView"
+      },
+      "RegistryProposalRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "RegistryProposalRequest"
+      },
+      "RegistrySearchRequest": {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RegistrySearchRequest"
+      },
+      "RegistrySearchResponse": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryCandidateView"
+            },
+            "type": "array",
+            "title": "Candidates"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidates"
+        ],
+        "title": "RegistrySearchResponse"
+      },
+      "RegistryState": {
+        "properties": {
+          "accepted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EEBuildingFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "accepted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EEBuildingFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposal_fetched_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Fetched At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "accepted",
+          "accepted_at",
+          "proposal",
+          "proposal_fetched_at"
+        ],
+        "title": "RegistryState"
+      },
       "RelationType": {
         "type": "string",
         "enum": [
@@ -17602,6 +18754,16 @@
           "NOT_LINKED"
         ],
         "title": "UnavailableReason"
+      },
+      "UnitKind": {
+        "type": "string",
+        "enum": [
+          "APARTMENT",
+          "NON_RESIDENTIAL",
+          "COMMON",
+          "OTHER"
+        ],
+        "title": "UnitKind"
       },
       "UnreadCountResponse": {
         "properties": {

@@ -17,6 +17,7 @@ from src.modules.property.models import (
     Apartment,
     ApartmentMembership,
     Building,
+    BuildingRegistryRecord,
     User,
 )
 from src.modules.property.policies import (
@@ -25,6 +26,7 @@ from src.modules.property.policies import (
     format_named_badge,
     most_private_display_mode,
 )
+from src.modules.property.registry import load_block
 from src.modules.property.schemas import (
     ApartmentCard,
     ApartmentDTO,
@@ -384,6 +386,13 @@ class PropertyService:
             apartment_count=apartment_count,
             entrance_count=entrance_count,
             heated_area_m2=Decimal(area),
+            registry_facts=load_block(
+                await self.session.scalar(
+                    select(BuildingRegistryRecord.accepted).where(
+                        BuildingRegistryRecord.building_id == building.id
+                    )
+                )
+            ),
         )
 
     # --- Apartment cards for the board (epic E8) ------------------------------------------------

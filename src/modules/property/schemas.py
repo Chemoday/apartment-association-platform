@@ -13,7 +13,17 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, PlainSerializer, WithJsonSchema
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    WithJsonSchema,
+)
+
+from src.core.validation import clean_text
+from src.plugins.registry import RegistryFacts
 
 
 class BuildingRole(StrEnum):
@@ -201,6 +211,8 @@ class BuildingResponse(BaseModel):
     apartment_count: int
     entrance_count: int
     heated_area_m2: AreaAmount
+    # The building passport the chairman accepted (epic E12); null without one.
+    registry_facts: RegistryFacts | None = None
 
 
 class ApartmentSummary(BaseModel):
@@ -298,3 +310,50 @@ class PersonDTO(BaseModel):
     building_role: BuildingRole
     display_label: str
     memberships: tuple[PersonMembershipDTO, ...]
+
+
+# --- Building register facts (epic E12, docs/API.md section 1) ----------------------------------
+
+REGISTRY_QUERY_MIN, REGISTRY_QUERY_MAX = 3, 200
+
+
+def _clean_query(value: str | None) -> str | None:
+    """No control characters, spaces collapsed, at least 3 characters besides spaces."""
+    if value is None:
+        return None
+    value = " ".join(clean_text(value).split())
+    if len(value) < REGISTRY_QUERY_MIN:
+        raise ValueError(f"at least {REGISTRY_QUERY_MIN} characters besides spaces")
+    return value
+
+
+class RegistryCandidateView(BaseModel):
+    code: str
+    address: str
+    kind_label: str | None
+
+
+class RegistrySearchResponse(BaseModel):
+    candidates: list[RegistryCandidateView]
+
+
+class RegistrySearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Trimmed; omitted or null: the building's own address.
+    query: Annotated[str | None, AfterValidator(_clean_query)] = Field(
+        default=None, max_length=REGISTRY_QUERY_MAX
+    )
+
+
+class RegistryProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=32)
+
+
+class RegistryState(BaseModel):
+    accepted: RegistryFacts | None
+    accepted_at: datetime | None
+    proposal: RegistryFacts | None
+    proposal_fetched_at: datetime | None

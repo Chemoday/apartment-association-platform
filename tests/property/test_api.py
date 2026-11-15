@@ -476,6 +476,7 @@ async def test_building_details_for_any_user_of_the_building(
         "apartment_count": 2,
         "entrance_count": 2,
         "heated_area_m2": "108.60",  # 2 x 54.30
+        "registry_facts": None,  # no register provider in the tests (epic E12)
     }
     assert_no_raw_pii(response.text, demo)
 

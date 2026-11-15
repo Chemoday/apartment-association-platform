@@ -74,6 +74,27 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 
 ---
 
+### Table: `property_building_registry` (epic E12, tasks X1 and X2; migration 027)
+The building passport from a public register: the proposal the chairman fetched and the block
+the chairman accepted (docs/API.md section 1, "Building register facts"). One row per building.
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `building_id` | `UUID` | `PK, FK(property_buildings.id) ON DELETE CASCADE` | |
+| `proposal` | `JSONB` | `NULLABLE` | The country block as fetched, not yet accepted |
+| `proposal_fetched_at` | `TIMESTAMPTZ` | `NULLABLE` | |
+| `proposal_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who fetched it (never returned) |
+| `accepted` | `JSONB` | `NULLABLE` | The block residents see as `registry_facts` |
+| `accepted_at` | `TIMESTAMPTZ` | `NULLABLE` | |
+| `accepted_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who accepted it (never returned) |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+- The blocks hold register data about the building only (the plugin DTOs have no field for a
+  person). Each is stored as its country DTO serialised to JSON (decimals as strings) and
+  validated again when read; a block that no longer fits its model (an incompatible `schema`)
+  is treated as `null` and logged without its content.
+- A row without `proposal` and `accepted` is deleted.
+
 ## 3. Module: `meters` (Devices, Periods, Readings & Audit History)
 
 ### Table: `meters_devices`
