@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     FILES_JANITOR_ENABLED: bool = True
     # The building chat: deleting messages older than 2 hours, every minute (tests call its tick).
     CHAT_PURGE_ENABLED: bool = True
+    # The public building register (epic E12): calls per installation and UTC day (S-10), and the
+    # loop that reminds the board of an expiring energy certificate (tests call its tick).
+    REGISTRY_CALLS_PER_DAY: int = Field(default=10, ge=1)
+    REGISTRY_WATCH_ENABLED: bool = True
 
     OTEL_SERVICE_NAME: str = "apartment-platform-backend"
     # OTLP/HTTP collector base URL, e.g. "http://otel-collector:4318". Empty disables export.

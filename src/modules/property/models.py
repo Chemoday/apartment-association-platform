@@ -5,11 +5,13 @@ only through DTOs from core.security or PropertyService.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -165,3 +167,13 @@ class BuildingRegistryRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
+
+
+class RegistryCallDay(Base):
+    """Register calls of the installation per UTC day (the daily quota, S-10)."""
+
+    __tablename__ = "property_registry_calls"
+    __table_args__ = (CheckConstraint("calls >= 1", name="ck_property_registry_calls_positive"),)
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False)

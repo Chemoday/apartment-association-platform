@@ -42,6 +42,7 @@ from src.modules.property.models import (  # noqa: F401
     ApartmentMembership,
     Building,
     BuildingRegistryRecord,
+    RegistryCallDay,
     User,
 )
 

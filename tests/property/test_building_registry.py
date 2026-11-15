@@ -1,16 +1,17 @@
 """The building passport from a register through the API (epic E12 X1), with a fake provider."""
 
-from collections.abc import Iterator
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.security import DEMO_USER_HEADER
-from src.modules.property.models import Building, BuildingRegistryRecord, User
+from src.modules.property import registry as registry_module
+from src.modules.property.models import Building, BuildingRegistryRecord, RegistryCallDay, User
 from src.plugins.countries.ee.facts import EEBuilding, EEBuildingFacts, EESource, EEUnit, UnitKind
 from src.plugins.registry import (
     RegistryBuildingNotFound,
@@ -312,3 +313,73 @@ async def test_the_search_text_never_reaches_a_trace_or_a_log(
     for span in span_exporter.get_finished_spans():
         assert all(secret not in str(value) for value in (span.attributes or {}).values())
     assert secret not in log_capture.raw
+
+
+@pytest.fixture
+def quota(db_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None]:
+    def set_limit(limit: int) -> None:
+        monkeypatch.setattr(db_app.state.plugin_registry.settings, "REGISTRY_CALLS_PER_DAY", limit)
+
+    return set_limit
+
+
+async def test_the_daily_quota_counts_search_and_proposal_together(
+    api_client: AsyncClient, world: IssueWorld, fake: FakeRegister, quota
+) -> None:
+    quota(3)
+    chairman = as_user(world.chairman)
+    assert (
+        await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    ).status_code == 200
+    fake.failing = True  # a call that fails still reached the register
+    assert (
+        await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    ).status_code == 503
+    fake.failing = False
+    proposed = await api_client.post(
+        f"{REGISTRY}/proposal", json={"code": "100000001"}, headers=chairman
+    )
+    assert proposed.status_code == 200
+
+    used = await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    assert used.status_code == 429
+    body = used.json()
+    assert body["error_code"] == "RATE_LIMITED" and body["reason"] == "DAILY_LIMIT"
+    assert 1 <= body["retry_after_seconds"] <= 86_400
+    assert used.headers["Retry-After"] == str(body["retry_after_seconds"])
+    assert len(fake.queries) == 2, "no call once the quota is used"
+    again = await api_client.post(
+        f"{REGISTRY}/proposal", json={"code": "100000001"}, headers=chairman
+    )
+    assert again.status_code == 429
+    # Accepting and reading never call the register.
+    assert (await api_client.post(f"{REGISTRY}/accept", headers=chairman)).status_code == 200
+    assert (await api_client.get(REGISTRY, headers=chairman)).status_code == 200
+
+
+async def test_the_quota_starts_again_the_next_day(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    world: IssueWorld,
+    fake: FakeRegister,
+    quota,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quota(1)
+    chairman = as_user(world.chairman)
+    assert (
+        await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    ).status_code == 200
+    assert (
+        await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    ).status_code == 429
+
+    today = datetime.now(UTC)
+    db_session.add(RegistryCallDay(day=(today - timedelta(days=9)).date(), calls=4))
+    await db_session.flush()
+    monkeypatch.setattr(registry_module, "_now", lambda: today + timedelta(days=1))
+    assert (
+        await api_client.post(f"{REGISTRY}/search", json={}, headers=chairman)
+    ).status_code == 200
+    days = set(await db_session.scalars(select(RegistryCallDay.day)))
+    assert (today - timedelta(days=9)).date() not in days, "old days are removed"

@@ -5,20 +5,21 @@ it; residents see the accepted block as `registry_facts`. The register is reache
 the country's provider plugin (src/plugins/registry.py); this module stores the blocks.
 """
 
+import math
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 import structlog
 from fastapi import Depends
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import DbSession
 from src.core.exceptions import DomainError
-from src.modules.property.models import Building, BuildingRegistryRecord
+from src.modules.property.models import Building, BuildingRegistryRecord, RegistryCallDay
 from src.modules.property.schemas import (
     CurrentUserDTO,
     RegistryCandidateView,
@@ -116,6 +117,7 @@ class BuildingRegistryService:
         if query is None:
             building = await self.session.get_one(Building, user.building_id)
             query = building.address
+        await self._use_quota()
         try:
             candidates = await provider.search(query)
         except RegistryUnavailable:
@@ -132,6 +134,7 @@ class BuildingRegistryService:
         code = code.strip()
         if not provider.valid_code(code):
             raise _invalid_code()
+        await self._use_quota()
         try:
             block = await provider.fetch(code)
         except RegistryBuildingNotFound:
@@ -194,6 +197,39 @@ class BuildingRegistryService:
         if provider is None:
             raise _not_enabled()
         return provider
+
+    async def _use_quota(self) -> None:
+        """Count one register call of the installation today, or refuse when the daily quota is
+        used up. Committed at once: a call that then fails still counted (it reached the
+        register), and no transaction stays open while the register answers."""
+        now = _now()
+        today = now.date()
+        limit = self.plugins.settings.REGISTRY_CALLS_PER_DAY
+        await self.session.execute(
+            delete(RegistryCallDay).where(RegistryCallDay.day < today - timedelta(days=7))
+        )
+        counted = await self.session.scalar(
+            pg_insert(RegistryCallDay)
+            .values(day=today, calls=1)
+            .on_conflict_do_update(
+                index_elements=["day"],
+                set_={"calls": RegistryCallDay.calls + 1},
+                where=RegistryCallDay.calls < limit,
+            )
+            .returning(RegistryCallDay.calls)
+        )
+        if counted is None:
+            midnight = datetime.combine(today + timedelta(days=1), time.min, tzinfo=UTC)
+            wait = max(1, math.ceil((midnight - now).total_seconds()))
+            logger.warning("registry_quota_used", limit=limit)
+            raise DomainError(
+                status_code=429,
+                error_code="RATE_LIMITED",
+                message="The register may be asked only a few times a day; try again tomorrow.",
+                extra={"retry_after_seconds": wait, "reason": "DAILY_LIMIT"},
+                headers={"Retry-After": str(wait)},
+            )
+        await self.session.commit()
 
     async def _lock_building(self, building_id: uuid.UUID) -> None:
         """One change of a building's register blocks at a time (the row may not exist yet)."""
