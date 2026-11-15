@@ -230,6 +230,10 @@ seconds. Then add a line to `deploy/HOST_CHANGELOG.md`.
   links since N8, and the backend refuses to start without it) and `common.email_smtp` in
   `ENABLED_PLUGINS` in its `.env` (docs/epics/E1_NOTIFICATIONS.md 6.1). The provider must sign
   the mail with DKIM, or large mail services ignore the one-click unsubscribe headers.
+- **Building register (epic E12):** an Estonian association gets its building passport with
+  `countries.ee.building_registry` in `ENABLED_PLUGINS` of its `.env`. The plugin calls only the
+  public In-ADS address service (`inaadress.maaamet.ee`) and the building register
+  (`livekluster.ehr.ee`) over HTTPS, without a key; the host needs outbound HTTPS to them.
 - **Login secrets (epic E7):** the backend refuses to start without `JWT_SECRET_KEY` and
   `AUTH_HASH_SECRET` (at least 32 bytes each), and `docker-compose.deploy.yml` refuses to start
   without them in `/opt/aap/<env>/.env`. A deploy without them fails its health check and rolls

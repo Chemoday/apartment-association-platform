@@ -50,6 +50,8 @@ Section 7 adds `INVALID_CREDENTIALS`, `SESSION_EXPIRED` (401), `CSRF_CHECK_FAILE
 
 Section 14 (the building chat) adds `CHAT_DISABLED` (409) and reuses `FORBIDDEN` (403), `INVALID_AUTHOR_APARTMENT` (422) and `RATE_LIMITED` (429).
 
+Section 1 ("Building register facts", epic E12) adds `REGISTRY_NOT_ENABLED`, `REGISTRY_BUILDING_NOT_FOUND` (404), `NO_REGISTRY_PROPOSAL` (409) and `REGISTRY_UNAVAILABLE` (503).
+
 ### Author badge rules (`property.policies.format_author_badge`)
 | `privacy_display_mode` | With apartment | Without apartment context |
 | :--- | :--- | :--- |
@@ -113,12 +115,88 @@ The association and its building, for the app header and the dashboard. Any user
   "reading_deadline_day": 4,
   "apartment_count": 6,
   "entrance_count": 2,
-  "heated_area_m2": "329.20"
+  "heated_area_m2": "329.20",
+  "registry_facts": null
 }
 ```
 - `registry_code` is the association's code in the commercial register, `null` until it is entered.
 - `apartment_count`, `entrance_count` and `heated_area_m2` are computed from the apartments. `heated_area_m2` is the sum of the apartments' `area_m2`, a decimal string with 2 places (`"0.00"` without apartments); common areas are not included.
 - No people in the payload: no chairman name, no contact details.
+- `registry_facts`: the building passport from a public register, as the chairman accepted it
+  (see "Building register facts" below); `null` while there is none or no register provider is
+  enabled. It is the block of the building's country, told apart by `country_code` and `schema`.
+  Register data about the building, never about people: its `units` are the register's
+  apartments with their areas and are shown to every user of the building on purpose; they are
+  never joined with memberships, residents or the app's own apartments (whose list with areas,
+  `GET /api/v1/property/apartments`, stays with the chairman and the board).
+
+### Building register facts (epic E12, tasks X1 and X2)
+The chairman finds the building in the public register of its country, looks at what the
+register says and accepts it; only then do residents see it as `registry_facts`. Design:
+docs/epics/E12_EXTERNAL_BUILDING_DATA.md; the fields of a country's block:
+docs/external_providers/{country}/building_facts.md (Estonia: `ee/1`).
+
+Every endpoint except `DELETE` needs a register provider for the building's `country_code`
+(plugin, e.g. `countries.ee.building_registry`), else `404 REGISTRY_NOT_ENABLED`; while there is
+none, `registry_facts` is `null` even if a block was accepted earlier. A register that does not
+answer in time, or answers something unexpected, gives `503 REGISTRY_UNAVAILABLE`; nothing is
+changed then and the client may try again later.
+
+#### `POST /api/v1/property/building/registry/search` (chairman)
+`{"query": "Sõpruse pst 12, Tallinn"}` (a body, so the address never appears in a URL or a
+trace). Buildings of the register that match: `{"candidates": [{"code": "100000001",
+"address": "Harju maakond, Tallinn, ..., Sõpruse pst 12", "kind_label": "EHITISHOONE"}]}`, at
+most 10, in the register's order.
+- `query`: at most 200 characters, spaces collapsed, then at least 3; omitted or `null`: the
+  building's own `address`.
+- `code`: the register's id of the building (Estonia: the building register code), passed to the
+  proposal below. `kind_label` is the register's own text.
+- No match: an empty list.
+
+#### `POST /api/v1/property/building/registry/proposal` (chairman)
+`{"code": "100000001"}`: fetches that building from the register and keeps it as the proposal
+(replacing an earlier one). Returns the `RegistryState` below.
+- `code` that the register does not know: `404 REGISTRY_BUILDING_NOT_FOUND`; a code of the wrong
+  form (Estonia: 6-12 digits): `422 VALIDATION_ERROR`.
+
+#### `GET /api/v1/property/building/registry` (chairman and board)
+The `RegistryState`:
+```json
+{
+  "accepted": null,
+  "accepted_at": null,
+  "proposal": {"country_code": "EE", "schema": "ee/1", "...": "..."},
+  "proposal_fetched_at": "2026-11-15T10:00:00Z"
+}
+```
+- `accepted`: what residents see as `registry_facts`; `proposal`: fetched, not accepted yet.
+  Both are the country's block. Never in a payload: who fetched or accepted.
+
+#### `POST /api/v1/property/building/registry/accept` (chairman)
+Makes the proposal the accepted block (the earlier accepted one is replaced) and returns the
+`RegistryState`. Without a proposal (or with one that no longer fits its model):
+`409 NO_REGISTRY_PROPOSAL`.
+
+#### `DELETE /api/v1/property/building/registry` (chairman)
+Removes the accepted block and the proposal (e.g. the wrong building was accepted). `204`. Also
+works without a provider, so a block left by a removed plugin can be removed.
+
+#### The Estonian block `ee/1`
+As docs/external_providers/ee/building_facts.md: `source` (`register` `EHR`, `building_code`,
+`fetched_at`, `attribution`), `building`, `units`, `energy_certificates`, `technical`,
+`cadastral_units`. Areas, volumes and heights are decimal strings as the register gives them;
+counts are integers; every field may be `null` and every list may be empty. Classified values
+are `{"code": ..., "label_et": ...}` with the register's Estonian text: the client translates the
+codes it knows and shows `label_et` otherwise.
+
+#### Error codes of this part
+| Status | `error_code` |
+| :--- | :--- |
+| 403 | `FORBIDDEN` |
+| 404 | `REGISTRY_NOT_ENABLED`, `REGISTRY_BUILDING_NOT_FOUND` |
+| 409 | `NO_REGISTRY_PROPOSAL` |
+| 422 | `VALIDATION_ERROR` |
+| 503 | `REGISTRY_UNAVAILABLE` |
 
 ### Apartment cards (epic E8, task P1)
 (Requires role: `CHAIRMAN` or `BOARD`.) The board looks after an apartment without seeing who

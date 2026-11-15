@@ -489,3 +489,32 @@ Table: docs/SCHEMA.md section 14. API: docs/API.md section 14.
   writes no `http_request` line (`core.telemetry.quiet_when_ok`), so polling never pushes the
   other logs out of the rotated container log; errors and every other route are logged as
   before.
+
+## 13. Building register providers (epic E12, tasks X1 and X2)
+
+Design: docs/epics/E12_EXTERNAL_BUILDING_DATA.md. Table: docs/SCHEMA.md section 2
+(`property_building_registry`). API: docs/API.md section 1 ("Building register facts").
+
+- **Contract:** `BuildingRegistryProvider` in `src/plugins/registry.py`: `country_code`,
+  `schema`, `valid_code(code)` (the form of a building id, checked before any request),
+  `search(query) -> list[RegistryCandidate]` and `fetch(code) -> <country block>`.
+  A country plugin (`src/plugins/countries/<iso>/building_registry.py`, enabled as
+  `countries.<iso>.building_registry`) registers one provider per country. The block is a typed
+  pydantic model of the country (`src/plugins/countries/<iso>/facts.py`); `registry.py` exposes
+  the union of all blocks (`RegistryFacts`), so the OpenAPI contract is the same whichever
+  plugins are enabled. Errors are `RegistryUnavailable` and `RegistryBuildingNotFound`, without
+  provider text. With a second country, `RegistryFacts` becomes a discriminated union by
+  `country_code` (the import of the Estonian model in `registry.py` is the one-country form).
+- **Storage is the core's:** module `property` stores the proposal and the accepted block
+  (`property/registry.py`); the plugin has no database access.
+- **Outbound requests** (`src/plugins/outbound.py`): only the hosts the provider declares, https
+  only, no redirects, one 10 s deadline for the whole exchange, `Accept-Encoding: identity` and a
+  response cap of 5 MB counted on the raw stream, a generic User-Agent
+  (`apartment-association-platform`) without data of the association or the user, and no
+  query strings in logs (httpx request logs are silenced in `src/core/telemetry.py`). Tests swap in
+  an `httpx.MockTransport`; no test reaches the network.
+- **Never personal data:** the country block has no field for a person; the provider drops such
+  fields of the register while mapping (Estonia: docs/external_providers/ee/building_facts.md).
+- **The chairman decides:** a lookup is always started by the chairman, never by a timer (X5 adds
+  the refresh); residents see a block only after it is accepted.
+

@@ -722,3 +722,24 @@ Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
   button for `retry_after_seconds`. Show own messages by `is_own`; the author is always
   `author_badge.display_label`, never anything else.
 - **Say it in the chat:** "Messages disappear after 2 hours. Others can still take screenshots."
+
+## 21. Building passport from the register (epic E12, docs/API.md section 1)
+
+- **Residents:** show `registry_facts` of `GET /api/v1/property/building` on a "Building" page
+  when it is not `null`, with a view per `country_code` / `schema` (Estonia: `ee/1`). Translate
+  the classified values by `code` where the app knows them and show `label_et` otherwise; show
+  the source line "Source: {attribution}, {fetched_at}". An unknown `schema`: show nothing and
+  do not fail.
+- **Units:** the register's apartments with their areas. Never mix them with residents or the
+  app's own apartment cards.
+- **The chairman:** a block "Building register" on the association settings page:
+  1. "Find the building": `POST .../registry/search` with `{}` (the building's address) or
+     `{"query": "..."}` from a search field, a list of candidates;
+  2. picking one fetches the proposal (`POST .../registry/proposal`) and shows it;
+  3. "Accept" (`POST .../registry/accept`) makes it visible to residents; "Remove"
+     (`DELETE .../registry`) takes it away.
+- The board sees the same block read-only (`GET .../registry`).
+- `404 REGISTRY_NOT_ENABLED`: hide the block. `503 REGISTRY_UNAVAILABLE`: "The register does not
+  answer right now; try again later". `404 REGISTRY_BUILDING_NOT_FOUND`: "The register does not
+  know this building".
+
