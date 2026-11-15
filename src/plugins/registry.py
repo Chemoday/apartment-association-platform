@@ -19,6 +19,7 @@ from typing import Protocol
 from fastapi import Request
 
 from src.core.config import Settings
+from src.plugins.countries.ee.facts import EEBuildingFacts
 
 _PLUGIN_NAME = re.compile(r"[a-z0-9_]+(\.[a-z0-9_]+)*")
 
@@ -138,6 +139,48 @@ class InboundChannel(Protocol):
         ...
 
 
+# --- Building register providers (docs/ARCHITECTURE.md 13, epic E12) -----------------------------
+
+# The block of every country, told apart by country_code. One country so far; with a second one
+# this becomes Annotated[EEBuildingFacts | XXBuildingFacts, Field(discriminator="country_code")].
+RegistryFacts = EEBuildingFacts
+
+
+@dataclass(frozen=True)
+class RegistryCandidate:
+    """A building of the register that matches a search (no people: an address and an id)."""
+
+    code: str
+    address: str
+    kind_label: str | None = None
+
+
+class RegistryUnavailable(Exception):
+    """The register did not answer usably (timeout, network, unexpected answer); no provider
+    text is kept."""
+
+
+class RegistryBuildingNotFound(Exception):
+    """The register does not know the requested building."""
+
+
+class BuildingRegistryProvider(Protocol):
+    country_code: str  # ISO 3166-1 alpha-2, e.g. "EE"
+    schema: str  # the block's schema, e.g. "ee/1"
+
+    def valid_code(self, code: str) -> bool:
+        """Whether `code` has the form of a building id of this register."""
+        ...
+
+    async def search(self, query: str) -> list[RegistryCandidate]:
+        """Buildings matching an address, at most 10; raises RegistryUnavailable."""
+        ...
+
+    async def fetch(self, code: str) -> RegistryFacts:
+        """The block of one building; raises RegistryBuildingNotFound or RegistryUnavailable."""
+        ...
+
+
 class PluginRegistry:
     def __init__(self, settings: Settings | None = None) -> None:
         # Plugins read their own settings from here in register(); incomplete ones raise there,
@@ -145,6 +188,7 @@ class PluginRegistry:
         self.settings = settings or Settings()
         self._exporters: dict[str, ReadingExporter] = {}
         self._channels: dict[str, NotificationChannel] = {}
+        self._building_registries: dict[str, BuildingRegistryProvider] = {}
         self._loaded: set[str] = set()
 
     def register_exporter(self, exporter: ReadingExporter) -> None:
@@ -169,6 +213,16 @@ class PluginRegistry:
 
     def channels(self) -> list[NotificationChannel]:
         return list(self._channels.values())
+
+    def register_building_registry(self, provider: BuildingRegistryProvider) -> None:
+        country = provider.country_code.upper()
+        if country in self._building_registries:
+            raise ValueError(f"a building register for {country!r} is already registered")
+        self._building_registries[country] = provider
+
+    def building_registry(self, country_code: str) -> BuildingRegistryProvider | None:
+        """The register provider of a country, or None when no plugin provides one."""
+        return self._building_registries.get(country_code.upper())
 
     def is_enabled(self, plugin_name: str) -> bool:
         """Whether a plugin (e.g. "common.email_smtp") is loaded in this app."""

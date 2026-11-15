@@ -19,7 +19,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base, uuid_pk, varchar_enum
@@ -135,3 +135,33 @@ class ApartmentMembership(Base):
     # Set when the membership ends; every membership query filters `ended_at IS NULL`
     # (docs/ARCHITECTURE.md 4.3). An ended membership is reopened, never duplicated.
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BuildingRegistryRecord(Base):
+    """The building passport from a public register (epic E12; docs/SCHEMA.md section 2).
+
+    `proposal` and `accepted` are country blocks serialised by their DTOs (no people in them).
+    """
+
+    __tablename__ = "property_building_registry"
+
+    building_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("property_buildings.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    proposal: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    proposal_fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    proposal_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("core_users.id", ondelete="SET NULL"), nullable=True
+    )
+    accepted: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("core_users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )

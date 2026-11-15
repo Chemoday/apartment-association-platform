@@ -41,6 +41,7 @@ from src.modules.property.models import (  # noqa: F401
     Apartment,
     ApartmentMembership,
     Building,
+    BuildingRegistryRecord,
     User,
 )
 
