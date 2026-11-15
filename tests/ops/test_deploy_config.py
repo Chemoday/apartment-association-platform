@@ -63,6 +63,20 @@ def test_backend_keeps_uploaded_files_in_the_host_directory_of_its_environment()
     assert 'if [[ "$ENV_NAME" == dev ]]; then export FILES_IN_DEMO=true' in deploy_script
 
 
+def test_the_building_register_plugin_runs_on_dev_only() -> None:
+    """Epic E12: countries.ee.building_registry on dev; prod keeps the default plugins."""
+    backend = _compose("docker-compose.deploy.yml")["services"]["backend"]
+    assert backend["environment"]["ENABLED_PLUGINS"] == "${ENABLED_PLUGINS:-common.csv_export}"
+    deploy_script = (DEPLOY / "deploy.sh").read_text()
+    assert (
+        'if [[ "$ENV_NAME" == dev ]]; then\n'
+        "    export ENABLED_PLUGINS=common.csv_export,countries.ee.building_registry\n"
+        "else\n"
+        "    export ENABLED_PLUGINS=common.csv_export\n"
+        "fi\n"
+    ) in deploy_script, "the plugin on dev only, in the dev branch"
+
+
 def test_database_caps_its_write_ahead_log_and_temp_files() -> None:
     db = _compose("docker-compose.deploy.yml")["services"]["db"]
 

@@ -25,6 +25,14 @@ export APP_ENV="$ENV_NAME"
 export AAP_ROOT
 # Uploads in demo mode (epic E11): dev only, so the client can be tried there (owner decision).
 if [[ "$ENV_NAME" == dev ]]; then export FILES_IN_DEMO=true; else export FILES_IN_DEMO=false; fi
+# Plugins per environment (not secrets, so here and not in .env). The Estonian building register
+# (epic E12) on dev only, to try it with the demo building; prod keeps the default until promoted
+# on the owner's request (owner, 2026-11-15).
+if [[ "$ENV_NAME" == dev ]]; then
+    export ENABLED_PLUGINS=common.csv_export,countries.ee.building_registry
+else
+    export ENABLED_PLUGINS=common.csv_export
+fi
 
 compose() {
     docker compose -p "aap-$ENV_NAME" \

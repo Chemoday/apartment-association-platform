@@ -1,5 +1,6 @@
 # One environment (dev or prod) on the VPS. Started by deploy.sh as Compose project "aap-<env>":
-#   IMAGE_REF, APP_ENV come from deploy.sh; POSTGRES_PASSWORD from /opt/aap/<env>/.env.
+#   IMAGE_REF, APP_ENV, FILES_IN_DEMO, ENABLED_PLUGINS come from deploy.sh; POSTGRES_PASSWORD from
+#   /opt/aap/<env>/.env.
 # No host ports are published: Caddy (deploy/edge) reaches the backend over the "aap-edge" network.
 #
 # Limits (docs/DEPLOYMENT.md "Resource limits"): several instances and unrelated services share
@@ -63,6 +64,8 @@ services:
       AUTH_HASH_SECRET: ${AUTH_HASH_SECRET:?set in /opt/aap/<env>/.env}
       # The demo building, seeded once into an empty database (src/core/seed.py).
       SEED_DEMO_DATA: "true"
+      # Plugins per environment, set by deploy.sh (dev: + the Estonian building register, E12).
+      ENABLED_PLUGINS: ${ENABLED_PLUGINS:-common.csv_export}
       LOG_LEVEL: INFO
       # Uploaded files (epic E11): /opt/aap/<env>/files, created by bootstrap.sh. Uploads in demo
       # mode only where deploy.sh allows them (dev).
