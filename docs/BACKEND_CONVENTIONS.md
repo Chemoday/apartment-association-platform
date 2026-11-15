@@ -8,7 +8,8 @@ Every backend agent MUST strictly follow these code patterns. Do NOT invent alte
 - **Python:** `3.12+`
 - **Web Framework:** `fastapi >= 0.115.0`, `pydantic >= 2.9.0`, `pydantic-settings >= 2.5.0`
 - **Database:** `sqlalchemy[asyncio] >= 2.0.35`, `asyncpg >= 0.30.0`, `alembic >= 1.13.0`
-- **Testing:** `pytest >= 8.3.0`, `pytest-asyncio >= 0.24.0`, `httpx >= 0.27.0`
+- **HTTP client:** `httpx >= 0.27.0`, a runtime dependency (outbound calls of plugins) and the test client
+- **Testing:** `pytest >= 8.3.0`, `pytest-asyncio >= 0.24.0`
 - **Observability:** `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-instrumentation-fastapi`, `structlog`
 
 ---
