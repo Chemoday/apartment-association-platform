@@ -48,6 +48,34 @@ country later reopens it.
   provider and its pages.
 - **Open:** who holds the access to a register that needs a contract (section 7).
 
+## 2a. Owner decisions (2026-11-15)
+
+- **A country block, no common layer yet.** `registry_facts` is the block of the building's
+  country: `{"country_code": "EE", "schema": "ee/1", ...}`, an OpenAPI `oneOf` by country. The
+  client knows the building's country and renders the block with a view made for that country,
+  with its own translations. Fields shared by every country are extracted only once two or three
+  countries are verified, from what they really return, not from desk research.
+- **The core takes only what a core feature needs,** through small optional methods of the
+  provider, added together with the feature: the apartment list for the setup wizard (X3), the
+  validity of an energy certificate for a reminder (X2). A country without the data answers
+  "none". The DTOs of these methods are the only cross-country shape.
+- **Typed per country.** Each country block (`ee/1`) is a typed DTO that its provider returns
+  and the core stores and serialises; it is defined with the plugin contracts
+  (`src/plugins/registry.py`, or a per-country schema module the registry exposes), so the
+  plugin-DTO rule of docs/ARCHITECTURE.md holds and the OpenAPI `oneOf` has a model per
+  country.
+- **No research of every country in advance.** A country is checked live when it is taken up
+  (the rules of docs/external_providers/README.md).
+- **Everyone in the building sees the building passport** once the chairman has accepted it,
+  the register's apartments and their areas included: public register data about the building,
+  without people. This is on purpose different from the app's own apartment list with areas
+  (`GET /api/v1/property/apartments`, chairman and board only, docs/API.md section 1): the
+  register's `units` are never joined with memberships, residents or the app's apartments in
+  this payload. The contract commit of X1/X2 repeats this next to "no people in the payload" in
+  docs/API.md.
+- The `schema` value (`ee/1`) changes with an incompatible change of a block, so a client can
+  tell versions apart.
+
 ## 3. Principles
 
 - **Optional and non-blocking.** A provider is a plugin enabled by configuration
@@ -84,8 +112,8 @@ country later reopens it.
 | Task | What | Notes |
 | :--- | :--- | :--- |
 | X0 ([#139](https://github.com/Chemoday/apartment-association-platform/issues/139)) | This page and the country pages | documentation only |
-| X1 | **Provider framework.** The provider protocol and DTOs, outbound request rules, stored facts with source, fetch time and attribution, the chairman starts a lookup, `registry_facts` in `GET /api/v1/property/building` (`null` without a provider) | a fake provider for tests and the demo |
-| X2 | **Building passport.** Address -> the register's building id -> facts: year of first use, floors, lifts, areas, heating and ventilation, the energy certificate (class, date, validity) | the chairman confirms; a reminder before the certificate expires can follow through E1 |
+| X1 | **Provider framework.** The provider protocol, outbound request rules, stored blocks with source, fetch time and attribution, the chairman starts a lookup, `registry_facts` (the country block, section 2a) in `GET /api/v1/property/building` (`null` without a provider) | a fake provider for tests and the demo |
+| X2 | **Building passport.** Address -> the register's building id -> the country block (Estonia: [ee/building_facts.md](../external_providers/ee/building_facts.md)) | the chairman confirms; a reminder before an energy certificate expires through E1, with the provider's certificate method |
 | X3 | **Apartment list proposal** for the setup wizard: apartment numbers and areas from the register | never overwrites apartments entered by hand; depends on the setup wizard |
 | X4 | **Legal calendar.** A core entity with manual entry for every country (board members' roles and mandate dates, the representation rule, the annual report deadline), pre-filled from a register where one exists | works where no register exists (section 5); names visible to the board only; reminders through E1 |
 | X5 | **Refresh and discrepancies.** A periodic refresh, a hint when the register differs from the app ("register: 48 apartments, app: 47"), the state of each source | an unavailable source is shown, never fatal |
@@ -97,7 +125,7 @@ X2 and can move earlier.
 
 | Country | Building passport | Legal calendar | State of the research | Pages |
 | :--- | :--- | :--- | :--- | :--- |
-| EE Estonia | address service and building register reachable without a key (checked live); license and terms not verified | business register: open data files without a contract; an API with a contract (terms not verified) | address service and building register **verified** on 2026-11-14; the rest from desk research | [ee/](../external_providers/ee/sources.md) |
+| EE Estonia | address service and building register reachable without a key (checked live); license and terms not verified | business register: open data files without a contract; an API with a contract (terms not verified) | address service and building register **verified** on 2026-11-14, residential building parts on 2026-11-15; the rest from desk research | [ee/](../external_providers/ee/sources.md) |
 | FI Finland | cadastre open with a free key; building data behind a data permit | business register open, the board not in the open API | not verified | [fi/](../external_providers/fi/sources.md) |
 | LV Latvia | address, cadastre and building data reported as open data | enterprise register reported as open, board included | not verified | [lv/](../external_providers/lv/sources.md) |
 | LT Lithuania | address data and energy certificates open; building data under a paid contract | legal entities open, the board not | not verified | [lt/](../external_providers/lt/sources.md) |
