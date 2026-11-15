@@ -833,3 +833,28 @@ the document's id; this table holds what the document is and who may see it.*
 - A document whose file is gone (deleted, or expired in demo mode) is hidden like a deleted one.
 - Seeding writes no documents.
 
+## 14. Module: `chat` (the building chat, issue #142)
+
+*API: docs/API.md section 14. Migration 026. Rows live at most 2 hours.*
+
+### Table: `chat_messages`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` | `PK, GENERATED ALWAYS AS IDENTITY` | The cursor of the API; taken under a lock per building, so it grows in the order messages are accepted |
+| `building_id` | `UUID` | `FK(property_buildings.id) ON DELETE CASCADE, NOT NULL` | |
+| `author_user_id` | `UUID` | `FK(core_users.id) ON DELETE CASCADE, NOT NULL` | Never returned; the API shows the privacy badge |
+| `author_apartment_id` | `UUID` | `FK(property_apartments.id) ON DELETE CASCADE, NULLABLE` | The apartment whose privacy mode decides the badge |
+| `body` | `VARCHAR(500)` | `NOT NULL, CHECK btrim <> ''` | Never logged |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | When the app accepted it (the app's clock, taken after the building's lock) |
+
+- `ix_chat_messages_building_id`: `(building_id, id)` for the cursor; `ix_chat_messages_author_created`:
+  `(author_user_id, created_at)` for the rate limits; `ix_chat_messages_created`: `(created_at)`
+  for the purge.
+- **The purge** (every minute, `CHAT_PURGE_ENABLED`) deletes every message older than 2 hours,
+  every message of a building whose `chat.enabled` is not `true`, and every message written
+  before the setting was last turned on (its `core_building_settings.updated_at`). Reads apply
+  the same rule (`BuildingSettings.get_with_time`, and `BuildingSettings.holds_since` in the
+  purge), so a message the purge has not reached yet is never shown.
+- **Not in backups:** database backups (docs/BACKLOG.md B-3) leave out the data of this table
+  (`pg_dump --exclude-table-data=chat_messages`), so a message never outlives its 2 hours there.
+- Seeding writes no messages.

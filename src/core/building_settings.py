@@ -18,7 +18,19 @@ from typing import Annotated, Any, Literal, overload
 import structlog
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
-from sqlalchemy import DateTime, ForeignKey, Index, String, func, select
+from sqlalchemy import (
+    ColumnElement,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    cast,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,7 +42,11 @@ from src.modules.property.schemas import BuildingRole, CurrentUserDTO
 
 logger = structlog.get_logger(__name__)
 
-_MODULE_SETTING_MODULES = ("src.modules.issues.settings", "src.modules.maintenance.settings")
+_MODULE_SETTING_MODULES = (
+    "src.modules.issues.settings",
+    "src.modules.maintenance.settings",
+    "src.modules.chat.settings",
+)
 
 KEY_MAX_LENGTH = 64
 MAX_VALUES_PER_REQUEST = 50
@@ -227,6 +243,41 @@ class BuildingSettings:
         )
         return spec.default if value is None or spec.problem(value) else value
 
+    @staticmethod
+    def holds_since(spec: BoolSetting, building_id: Any, moment: Any) -> ColumnElement[bool]:
+        """SQL: the setting of `building_id` is true and has been since `moment` or earlier (both
+        column expressions). The same rule as `get_with_time`, for a bulk statement such as the
+        chat's purge: a stored `true` counts from its `updated_at`; with a default of `true`, a
+        building without a row counts as true from always."""
+        row = select(BuildingSettingRecord.building_id).where(
+            BuildingSettingRecord.building_id == building_id,
+            BuildingSettingRecord.key == spec.key,
+        )
+        true_since = exists(
+            row.where(
+                BuildingSettingRecord.value == cast(literal("true"), JSONB),
+                BuildingSettingRecord.updated_at <= moment,
+            )
+        )
+        return or_(true_since, ~exists(row)) if spec.default else true_since
+
+    async def get_with_time(
+        self, building_id: uuid.UUID, spec: BoolSetting
+    ) -> tuple[bool, datetime | None]:
+        """The value and since when it holds: the time of the chairman's last change, or `None`
+        while it is the default (e.g. the chat counts its messages only from being turned on)."""
+        row = (
+            await self.session.execute(
+                select(BuildingSettingRecord.value, BuildingSettingRecord.updated_at).where(
+                    BuildingSettingRecord.building_id == building_id,
+                    BuildingSettingRecord.key == spec.key,
+                )
+            )
+        ).first()
+        if row is None or spec.problem(row.value):
+            return spec.default, None
+        return row.value, row.updated_at
+
     async def view(self, user: CurrentUserDTO) -> SettingsView:
         if user.building_role not in _READERS:
             raise _forbidden()
@@ -275,7 +326,10 @@ class BuildingSettings:
             if _same(None if old is None else old.value, value) or (
                 old is None and _same(specs[key].default, value)
             ):
-                continue  # the current value (a missing row is the default)
+                # The current value (a missing row is the default). Never touch updated_at then:
+                # it is "since when the value holds" (get_with_time); the chat counts its
+                # messages from it, so re-saving `true` must not empty the chat.
+                continue
             if old is not None and value is None:
                 await self.session.delete(old)
             elif value is not None:

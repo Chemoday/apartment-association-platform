@@ -693,3 +693,32 @@ Contract: docs/API.md section 12 (`GET /api/v1/files/usage`) and section 6
   room for files, before uploads are refused. Show it to the chairman and the board only in the
   preferences; the matrix now has **52** rows (it had 48).
 
+## 20. Building chat (docs/API.md section 14)
+
+- **Where:** a "Chat" entry only while `GET /api/v1/chat` says `enabled` and `can_take_part`.
+  The chairman turns it on and off in the settings (`chat.enabled`); describe it there as "A chat
+  of the residents; messages disappear after 2 hours; nobody moderates it".
+- **Indicator, not notifications:** on the home screen ask `GET /api/v1/chat` once a minute while
+  the page is visible and the chat is on, every 5 minutes while it is off (`enabled: false`), and
+  never while the chat screen itself is open. Show "Chat active: {recent_count} messages in 10
+  min" when `recent_count > 0`. There are no push messages, e-mails or bell items for the chat.
+- **Polling the open chat:** first `GET /chat/messages` without `after`, then
+  `GET /chat/messages?after={cursor}`. Keep the load minimal (owner, 2026-11-15):
+  - every 3 s only during the minute after the newest message;
+  - every 15 s otherwise; every 30 s after 5 minutes without a new message and without the user
+    typing;
+  - at once again while `has_more` is `true`; at once after sending (the own message comes back
+    in the answer to `POST`, no extra poll is needed for it);
+  - stop while the tab or the app is hidden (`document.visibilityState`), and ask once on
+    return;
+  - one request at a time: never start a poll while the previous one is still running.
+- **Expiry on the client:** drop a message from the screen when its `expires_at` passes. Never
+  keep messages in `localStorage` or another storage.
+- **`409 CHAT_DISABLED`:** close the chat, clear its messages and hide the entry.
+- **`turned_on_at` changed** (in a page of messages or in `GET /api/v1/chat`): the chairman turned
+  the chat off and on while the client was not looking. Clear the messages on screen and start
+  again without `after`. Turning the chat off is how the chairman removes a bad message.
+- **Sending:** at most 500 characters (show a counter); on `429 RATE_LIMITED` disable the send
+  button for `retry_after_seconds`. Show own messages by `is_own`; the author is always
+  `author_badge.display_label`, never anything else.
+- **Say it in the chat:** "Messages disappear after 2 hours. Others can still take screenshots."

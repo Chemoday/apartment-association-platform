@@ -127,6 +127,8 @@ class Settings(BaseSettings):
     FILES_DEMO_RETENTION_HOURS: int = Field(default=24, ge=1)
     # The hourly clean-up of expired and deleted files (tests call its tick directly).
     FILES_JANITOR_ENABLED: bool = True
+    # The building chat: deleting messages older than 2 hours, every minute (tests call its tick).
+    CHAT_PURGE_ENABLED: bool = True
 
     OTEL_SERVICE_NAME: str = "apartment-platform-backend"
     # OTLP/HTTP collector base URL, e.g. "http://otel-collector:4318". Empty disables export.

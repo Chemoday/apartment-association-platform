@@ -314,6 +314,11 @@ docs/API.md section 9.
 - **Reading:** `await BuildingSettings(session).get(building_id, SPEC)` returns the typed value
   (the stored one if valid, else the default). A module reads its value inside the request that
   needs it; there is no cache, a change applies to the next request.
+- **Since when:** `get_with_time(building_id, SPEC)` also returns when the value took effect (the
+  row's `updated_at`, `None` for the default), and `BuildingSettings.holds_since(SPEC, building_id,
+  moment)` is the same rule as an SQL expression for bulk statements. The chat counts its
+  messages from turning it on (section 12). **Invariant:** `update` never touches `updated_at`
+  when a value is saved again unchanged.
 - **Writing:** only `PUT /api/v1/settings` (the chairman). A module never writes settings.
 - **Logs and spans:** a change logs `building_setting_changed` with the key (and the request's
   usual `user_id` and `trace_id`); the values stay in the database.
@@ -458,3 +463,29 @@ docs/API.md section 13.
   official votes); the daily limit per user applies to photos only (documents are uploaded by
   staff and bounded by the quota).
 
+## 12. Module `chat` (the building chat, issue #142)
+
+Table: docs/SCHEMA.md section 14. API: docs/API.md section 14.
+
+- **Place:** owns `chat_messages` and the setting `chat.enabled` (`chat/settings.py`). Who takes
+  part comes from `CurrentUserDTO` (memberships, building role); badges from
+  `PropertyService.get_masked_author_badges`. No other module imports it; it publishes no events
+  and sends no notifications.
+- **Rules as pure functions** in `chat/policies.py`: who takes part, the visible window, the rate
+  limits.
+- **Order without gaps:** a message is inserted under a transaction-level advisory lock of its
+  building, so ids are assigned and committed in one order and a client polling with `after`
+  never skips a message that commits late. The same lock makes the rate limits exact.
+- **The window is enforced twice:** every read filters by "younger than 2 hours and written
+  since the chat was last turned on", and the purge loop (`chat/purge.py`, every minute under
+  `pg_try_advisory_xact_lock`) deletes the rest. Turning the chat off therefore hides its
+  messages at once, without the settings code knowing about the chat.
+- **No text outside the table:** no log line, span attribute or error message carries a
+  message's body.
+- **No push channel:** clients poll (docs/FRONTEND_GUIDE.md section 20); a poll is the usual
+  authentication, the setting and one indexed query on `(building_id, id)`; badges are resolved
+  only when there are new messages.
+- **Quiet logs:** a successful poll (`GET /api/v1/chat`, `GET /api/v1/chat/messages`, status 200)
+  writes no `http_request` line (`core.telemetry.quiet_when_ok`), so polling never pushes the
+  other logs out of the rotated container log; errors and every other route are logged as
+  before.

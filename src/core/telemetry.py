@@ -374,6 +374,17 @@ def configure_logging(
 
 request_logger = structlog.get_logger("src.core.telemetry.request")
 
+# Routes polled every few seconds (the building chat): a successful answer writes no
+# "http_request" line, so polling never pushes the other logs out of the rotated container log.
+# Errors, 429s and every other status are still logged. Modules register their routes.
+_QUIET_WHEN_OK: set[tuple[str, str]] = set()
+_OK_STATUSES = frozenset({200, 304})
+
+
+def quiet_when_ok(method: str, path: str) -> None:
+    """Write no request log line for a successful `method path` (the route template)."""
+    _QUIET_WHEN_OK.add((method.upper(), path))
+
 
 class RequestTelemetryMiddleware:
     """Adds X-Trace-Id to every response and writes one PII-safe log line per request.
@@ -421,13 +432,18 @@ class RequestTelemetryMiddleware:
             response["status_code"] = 500
             await self._send_internal_error(send, trace_id)
         finally:
-            request_logger.info(
-                "http_request",
-                method=scope["method"],
-                path=self._route_path(scope),
-                status_code=response["status_code"],
-                duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
-            )
+            path = self._route_path(scope)
+            if not (
+                response["status_code"] in _OK_STATUSES
+                and (scope["method"], path) in _QUIET_WHEN_OK
+            ):
+                request_logger.info(
+                    "http_request",
+                    method=scope["method"],
+                    path=path,
+                    status_code=response["status_code"],
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                )
 
     @staticmethod
     def _route_path(scope: Scope) -> str:

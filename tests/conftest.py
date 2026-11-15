@@ -15,6 +15,7 @@ os.environ.setdefault("AUTH_CLEANUP_ENABLED", "false")
 # Uploaded files go to a throwaway directory; the janitor runs only when a test calls its tick.
 os.environ.setdefault("FILES_DIR", tempfile.mkdtemp(prefix="aap-test-files-"))
 os.environ.setdefault("FILES_JANITOR_ENABLED", "false")
+os.environ.setdefault("CHAT_PURGE_ENABLED", "false")  # tests call the chat purge tick directly
 os.environ.setdefault("FILES_IN_DEMO", "true")
 os.environ.setdefault(
     "FILES_MIN_FREE_MB", "0"
@@ -159,6 +160,7 @@ def db_app(app: FastAPI, db_session: AsyncSession) -> Iterator[FastAPI]:
     app.state.maintenance_session_factory = subscriber_session  # the publisher's ticks
     app.state.meters_session_factory = subscriber_session  # the period opener's ticks
     app.state.files_session_factory = subscriber_session  # the files janitor's ticks
+    app.state.chat_session_factory = subscriber_session  # the chat purge's ticks
     yield app
     app.dependency_overrides.pop(get_db_session, None)
 
