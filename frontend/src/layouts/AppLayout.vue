@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { startUnreadPolling } from '@/composables/useUnreadCount.js'
+import { startChatStatePolling, stopChatStatePolling } from '@/composables/useChatState.js'
 import AppHeader from './components/AppHeader.vue'
 import AppEmergencyBanner from './components/AppEmergencyBanner.vue'
 import AppSidebar from './components/AppSidebar.vue'
@@ -26,6 +27,11 @@ const hasRoleAccess = computed(() => {
 
 onMounted(() => {
   startUnreadPolling(session)
+  startChatStatePolling(session, route)
+})
+
+onBeforeUnmount(() => {
+  stopChatStatePolling()
 })
 </script>
 

@@ -8,6 +8,7 @@ import {
 } from '../utils/pollValidation.js'
 import {
   cloneDefaultAssociationSettings,
+  compareSettingKeys,
   validateAndApplySettingsUpdate,
 } from '../utils/associationSettings.js'
 import {
@@ -80,6 +81,17 @@ import {
   buildBuildingConsumptionResponse,
   parseConsumptionMonths,
 } from '../utils/consumption.js'
+import {
+  CHAT_HISTORY_MS,
+  CHAT_MAX_LENGTH,
+  buildMockChatPage,
+  buildMockChatState,
+  canUserParticipateInChat,
+  evaluateChatRateLimit,
+  validateChatAfterParam,
+  validateChatLimitParam,
+  validateChatMessageInput,
+} from '../utils/chat.js'
 
 export const isOfflineDemoMode = ref(false)
 
@@ -98,6 +110,10 @@ let offlineMaintenanceLog = createDefaultMaintenanceLogSeed()
 let offlineApartmentsByPeriod = {}
 let offlineExtraPendingDeletionBytes = 0
 let offlineStorageAlertState = { armed70: true, armed90: true }
+let offlineChatTurnedOnAt = null
+let offlineChatMessages = []
+let offlineChatNextId = 1
+let offlineChatPostTimestampsByUser = {}
 
 export function enableOfflineDemo() {
   isOfflineDemoMode.value = true
@@ -116,6 +132,10 @@ export function enableOfflineDemo() {
   offlineApartmentsByPeriod = {}
   offlineExtraPendingDeletionBytes = 0
   offlineStorageAlertState = { armed70: true, armed90: true }
+  offlineChatTurnedOnAt = null
+  offlineChatMessages = []
+  offlineChatNextId = 1
+  offlineChatPostTimestampsByUser = {}
   OFFLINE_POSTS.splice(0, OFFLINE_POSTS.length, ...createDefaultOfflinePosts())
 }
 
@@ -3354,7 +3374,7 @@ export async function resolveOfflineDemoRequest(
       )
     }
     const ordered = [...offlineSettings]
-      .sort((a, b) => a.key.localeCompare(b.key))
+      .sort(compareSettingKeys)
       .map((s) => ({ ...s }))
     return { settings: ordered }
   }
@@ -3367,6 +3387,7 @@ export async function resolveOfflineDemoRequest(
         'Only the chairman can update association settings.',
       )
     }
+    const prevChatEnabled = Boolean(readSettingFromStore(offlineSettings, 'chat.enabled', false))
     const outcome = validateAndApplySettingsUpdate(offlineSettings, body)
     if (!outcome.ok) {
       throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid association settings update.', {
@@ -3374,6 +3395,14 @@ export async function resolveOfflineDemoRequest(
       })
     }
     offlineSettings = outcome.settings
+    const nextChatEnabled = Boolean(readSettingFromStore(offlineSettings, 'chat.enabled', false))
+    if (!prevChatEnabled && nextChatEnabled) {
+      offlineChatTurnedOnAt = new Date().toISOString()
+      offlineChatMessages = []
+    } else if (prevChatEnabled && !nextChatEnabled) {
+      offlineChatTurnedOnAt = null
+      offlineChatMessages = []
+    }
     return { settings: offlineSettings.map((s) => ({ ...s })) }
   }
 
@@ -4414,6 +4443,127 @@ export async function resolveOfflineDemoRequest(
         'Content-Disposition': `attachment; filename="${outcome.filename}"`,
       },
     })
+  }
+
+  // =========================================================================
+  // Building Chat (/chat) - #033
+  // =========================================================================
+  if (pathname === '/chat' && method === 'GET') {
+    const enabled = Boolean(readSettingFromStore(offlineSettings, 'chat.enabled', false))
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    const canTakePart = canUserParticipateInChat(user, userMems)
+    return buildMockChatState({
+      enabled,
+      turnedOnAt: offlineChatTurnedOnAt,
+      canTakePart,
+      messages: offlineChatMessages,
+      nowMs: Date.now(),
+    })
+  }
+
+  if (pathname === '/chat/messages' && method === 'GET') {
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    if (!canUserParticipateInChat(user, userMems)) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only building apartment members and board members can participate in the building chat.',
+      )
+    }
+    const enabled = Boolean(readSettingFromStore(offlineSettings, 'chat.enabled', false))
+    if (!enabled) {
+      throw makeOfflineError(409, 'CHAT_DISABLED', 'Building chat is currently turned off.')
+    }
+    const afterOutcome = validateChatAfterParam(urlObj.searchParams.get('after'))
+    if (!afterOutcome.ok) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', afterOutcome.error.message, {
+        errors: [afterOutcome.error],
+      })
+    }
+    const limitOutcome = validateChatLimitParam(urlObj.searchParams.get('limit'))
+    if (!limitOutcome.ok) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', limitOutcome.error.message, {
+        errors: [limitOutcome.error],
+      })
+    }
+    const nowMs = Date.now()
+    offlineChatMessages = offlineChatMessages.filter((m) => Date.parse(m.expires_at) > nowMs)
+    return buildMockChatPage({
+      messages: offlineChatMessages,
+      turnedOnAt: offlineChatTurnedOnAt,
+      afterCursor: afterOutcome.value,
+      limit: limitOutcome.value,
+      callerUserId: user.user_id,
+      nowMs,
+    })
+  }
+
+  if (pathname === '/chat/messages' && method === 'POST') {
+    const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+    if (!canUserParticipateInChat(user, userMems)) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only building apartment members and board members can participate in the building chat.',
+      )
+    }
+    const enabled = Boolean(readSettingFromStore(offlineSettings, 'chat.enabled', false))
+    if (!enabled) {
+      throw makeOfflineError(409, 'CHAT_DISABLED', 'Building chat is currently turned off.')
+    }
+    const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
+    const inputOutcome = validateChatMessageInput({
+      payload: reqBody,
+      user,
+      memberships: userMems,
+      maxLength: CHAT_MAX_LENGTH,
+    })
+    if (!inputOutcome.ok) {
+      throw makeOfflineError(
+        inputOutcome.status,
+        inputOutcome.errorCode,
+        inputOutcome.message,
+        inputOutcome.errors ? { errors: inputOutcome.errors } : {},
+      )
+    }
+    const nowMs = Date.now()
+    const rateOutcome = evaluateChatRateLimit(
+      offlineChatPostTimestampsByUser[user.user_id],
+      nowMs,
+    )
+    if (!rateOutcome.ok) {
+      offlineChatPostTimestampsByUser[user.user_id] = rateOutcome.pruned
+      throw makeOfflineError(
+        429,
+        'RATE_LIMITED',
+        'Too many messages sent. Please wait before sending again.',
+        {
+          retry_after_seconds: rateOutcome.retryAfterSeconds,
+          reason: rateOutcome.reason,
+        },
+      )
+    }
+    offlineChatPostTimestampsByUser[user.user_id] = [...rateOutcome.pruned, nowMs]
+    offlineChatMessages = offlineChatMessages.filter((m) => Date.parse(m.expires_at) > nowMs)
+    const createdAtIso = new Date(nowMs).toISOString()
+    const expiresAtIso = new Date(nowMs + CHAT_HISTORY_MS).toISOString()
+    const storedMsg = {
+      id: offlineChatNextId++,
+      body: inputOutcome.body,
+      author_badge: inputOutcome.badge,
+      author_user_id: user.user_id,
+      created_at: createdAtIso,
+      expires_at: expiresAtIso,
+    }
+    offlineChatMessages.push(storedMsg)
+    return {
+      id: storedMsg.id,
+      body: storedMsg.body,
+      author_badge: storedMsg.author_badge,
+      created_at: storedMsg.created_at,
+      expires_at: storedMsg.expires_at,
+      is_own: true,
+    }
   }
 
   return null

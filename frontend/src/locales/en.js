@@ -33,6 +33,7 @@ export default {
     readings: 'Readings & Utilities',
     forum: 'Discussions & Forum',
     messages: 'Messages',
+    chat: 'Building chat',
     polls: 'Polls',
     issues: 'Issues',
     documents: 'Documents',
@@ -65,6 +66,7 @@ export default {
     polls: 'Vote on association decisions and view poll results',
     forum: 'Neighbor discussions, announcements, and initiatives',
     messages: 'Direct communication threads with the board',
+    chat: 'Short-lived chat for neighbors and the board (2 hours)',
     boardRoom: 'Internal board member discussions and preparations',
     accounting: 'Master meters, period matrix, and cost distribution',
     apartments: 'Apartment registry, ownership cards, and meter history',
@@ -777,6 +779,7 @@ export default {
     TASK_ARCHIVED: 'This maintenance task is archived and cannot be changed.',
     INVALID_TASK_TRANSITION: 'This task is already in that state.',
     OCCURRENCE_CLOSED: 'Someone else closed this occurrence in the meantime. The page has been reloaded.',
+    CHAT_DISABLED: 'Building chat is currently turned off.',
     DEFAULT: 'Request could not be completed.{trace_suffix}',
   },
   auth: {
@@ -1638,6 +1641,7 @@ export default {
       'Configure building-wide limits and rules for the association. Changes take effect immediately.',
     readOnlyNotice:
       'Board members can view association settings in read-only mode. Only the chairman can change and save them.',
+    forbiddenDesc: 'Only the chairman and board members can view association settings.',
     loading: 'Loading association settings…',
     empty: 'No association settings are declared on the server.',
     defaultBadge: 'Default',
@@ -1659,11 +1663,26 @@ export default {
     fieldInvalidBoolean: 'Select a valid option.',
     fieldInvalidGeneric: 'Invalid value.',
     groups: {
+      chat: 'Building chat',
       issues: 'Issue reports',
       maintenance: 'Maintenance calendar',
       general: 'General',
     },
+    chatDisableConfirm: {
+      title: 'Turn off building chat?',
+      body: 'All messages will be deleted.',
+      hint: 'Turning it off hides existing messages at once and permanently deletes them. If you turn the chat back on later, it starts empty.',
+      pendingInlineWarning: 'All messages will be deleted when you save this change.',
+      cancelBtn: 'Cancel',
+      confirmBtn: 'Turn off chat',
+    },
     items: {
+      chat: {
+        enabled: {
+          label: 'Building chat',
+          help: 'A chat of the residents; messages disappear after 2 hours; nobody moderates it. Turning it off deletes all messages.',
+        },
+      },
       issues: {
         reports_per_apartment_per_day: {
           label: 'Issue reports per apartment per day',
@@ -2181,6 +2200,34 @@ export default {
     tableAriaLabel: 'Monthly breakdown for {resource}',
     staffOnlyAccess: 'Restricted to Chairman, Board, and Accountant',
     openConsumptionLink: 'Building Consumption',
+  },
+  chat: {
+    kicker: 'Community',
+    title: 'Building chat',
+    subtitle: 'Quick coordination with neighbours and the board when something happens in the building.',
+    disclaimer: 'Messages disappear after 2 hours. Others can still take screenshots.',
+    forbiddenTitle: 'Chat is only for residents and the board',
+    forbiddenBody: 'Accounts without a building apartment or board role cannot participate in the building chat.',
+    disabledTitle: 'Building chat is turned off',
+    disabledBody: 'The chairman has currently switched off the building chat.',
+    openSettingsBtn: 'Association Settings',
+    backToDashboard: 'Back to Dashboard',
+    loading: 'Loading chat messages…',
+    empty: 'No active messages in the last 2 hours. Start the conversation below.',
+    apartmentSelectLabel: 'Write from apartment',
+    composerPlaceholder: 'Write a quick message to neighbours and the board…',
+    charCounter: '{used} / {max}',
+    sendBtn: 'Send',
+    sendingBtn: 'Sending…',
+    sendCooldownBtn: 'Wait {seconds}s',
+    rateLimitNotice: 'Too many messages sent. Please wait {seconds} seconds before sending again.',
+    validationEmpty: 'Please enter a message (1–{max} characters).',
+    sendHint: 'Press Enter to send, Shift+Enter for a new line',
+    indicatorTitle: 'Building chat',
+    indicatorActiveTooltip: 'Chat active: {count} messages in {minutes} min',
+    dashboardActiveLine: 'Chat active: {count} messages in {minutes} min',
+    dashboardOpenLine: 'Building chat is open',
+    openChatBtn: 'Open chat',
   },
 }
 

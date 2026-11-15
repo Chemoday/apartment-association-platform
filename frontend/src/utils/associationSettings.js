@@ -4,6 +4,16 @@
 
 export const DEFAULT_ASSOCIATION_SETTINGS = [
   {
+    key: 'chat.enabled',
+    type: 'BOOLEAN',
+    value: false,
+    default: false,
+    minimum: null,
+    maximum: null,
+    is_default: true,
+    updated_at: null,
+  },
+  {
     key: 'issues.reports_per_apartment_per_day',
     type: 'INTEGER',
     value: 3,
@@ -45,14 +55,16 @@ export const DEFAULT_ASSOCIATION_SETTINGS = [
   },
 ]
 
+export function compareSettingKeys(a, b) {
+  return a.key < b.key ? -1 : a.key > b.key ? 1 : 0
+}
+
 /**
  * Deep-clone the default association settings list sorted by key.
  * @returns {Array<import('../api/schema').SettingView>}
  */
 export function cloneDefaultAssociationSettings() {
-  return DEFAULT_ASSOCIATION_SETTINGS.map((s) => ({ ...s })).sort((a, b) =>
-    a.key.localeCompare(b.key),
-  )
+  return DEFAULT_ASSOCIATION_SETTINGS.map((s) => ({ ...s })).sort(compareSettingKeys)
 }
 
 /**
@@ -63,7 +75,7 @@ export function cloneDefaultAssociationSettings() {
  */
 export function groupSettingsByPrefix(settings) {
   if (!Array.isArray(settings) || settings.length === 0) return []
-  const sorted = [...settings].sort((a, b) => a.key.localeCompare(b.key))
+  const sorted = [...settings].sort(compareSettingKeys)
   const groupsMap = new Map()
   for (const item of sorted) {
     const dotIdx = item.key.indexOf('.')
@@ -147,6 +159,27 @@ export function computeSettingsDiff(settings, draftValues, draftResets = {}) {
     }
   }
   return diff
+}
+
+/**
+ * Returns true if the pending diff will turn off `chat.enabled` when it is currently active (`true`).
+ * Covers both explicit `false` and resetting (`null`) back to its default (`false`).
+ * @param {Array<import('../api/schema').SettingView>} settings
+ * @param {Record<string, number | boolean | null>} diff
+ * @returns {boolean}
+ */
+export function isDisablingChatSetting(settings, diff) {
+  if (!diff || !Object.prototype.hasOwnProperty.call(diff, 'chat.enabled')) {
+    return false
+  }
+  const current = (settings || []).find((s) => s.key === 'chat.enabled')
+  if (!current || current.value !== true) {
+    return false
+  }
+  const incoming = diff['chat.enabled']
+  if (incoming === false) return true
+  if (incoming === null) return current.default === false
+  return false
 }
 
 /**
@@ -344,6 +377,6 @@ export function validateAndApplySettingsUpdate(
     }
   })
 
-  nextSettings.sort((a, b) => a.key.localeCompare(b.key))
+  nextSettings.sort(compareSettingKeys)
   return { ok: true, settings: nextSettings }
 }

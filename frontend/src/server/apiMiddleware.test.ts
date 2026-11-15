@@ -1497,6 +1497,447 @@ describe('apiMiddleware HTTP building consumption route (#031)', () => {
   })
 })
 
+describe('apiMiddleware Association Settings - chat.enabled (#032)', () => {
+  const CHAIRMAN_ID = '018f0000-0000-7000-8000-000000000101'
+  const BOARD_ID = '018f0000-0000-7000-8000-000000000105'
+
+  beforeEach(() => {
+    resetApiMiddlewareStateForTest()
+  })
+
+  it('serves and persists chat.enabled in /api/v1/settings (#032)', async () => {
+    const mw = createApiMiddleware()
+
+    // 1. Default is false, readable by BOARD and CHAIRMAN, forbidden for USER / ACCOUNTANT
+    const userGet = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/settings',
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    assert.equal(userGet.status, 403)
+
+    const boardGet = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/settings',
+      headers: { 'x-demo-user-id': BOARD_ID },
+    })
+    assert.equal(boardGet.status, 200)
+    const chatInitial = boardGet.json.settings.find((s: any) => s.key === 'chat.enabled')
+    assert.ok(chatInitial)
+    assert.equal(chatInitial.type, 'BOOLEAN')
+    assert.equal(chatInitial.value, false)
+    assert.equal(chatInitial.default, false)
+    assert.equal(chatInitial.is_default, true)
+
+    // 2. BOARD cannot change settings
+    const boardPutPayload = Buffer.from(JSON.stringify({ values: { 'chat.enabled': true } }))
+    const boardPut = await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': BOARD_ID,
+        'content-type': 'application/json',
+        'content-length': String(boardPutPayload.byteLength),
+      },
+      chunks: [boardPutPayload],
+    })
+    assert.equal(boardPut.status, 403)
+
+    // 3. CHAIRMAN enables chat.enabled and it persists on subsequent GET
+    const enablePayload = Buffer.from(JSON.stringify({ values: { 'chat.enabled': true } }))
+    const enableRes = await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(enablePayload.byteLength),
+      },
+      chunks: [enablePayload],
+    })
+    assert.equal(enableRes.status, 200)
+    const enabledSetting = enableRes.json.settings.find((s: any) => s.key === 'chat.enabled')
+    assert.equal(enabledSetting.value, true)
+    assert.equal(enabledSetting.is_default, false)
+    assert.ok(enabledSetting.updated_at)
+
+    const readAfterEnable = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/settings',
+      headers: { 'x-demo-user-id': BOARD_ID },
+    })
+    assert.equal(
+      readAfterEnable.json.settings.find((s: any) => s.key === 'chat.enabled').value,
+      true,
+    )
+
+    // 4. CHAIRMAN resets chat.enabled with null -> back to default (false, is_default: true, updated_at: null)
+    const resetPayload = Buffer.from(JSON.stringify({ values: { 'chat.enabled': null } }))
+    const resetRes = await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(resetPayload.byteLength),
+      },
+      chunks: [resetPayload],
+    })
+    assert.equal(resetRes.status, 200)
+    const resetSetting = resetRes.json.settings.find((s: any) => s.key === 'chat.enabled')
+    assert.equal(resetSetting.value, false)
+    assert.equal(resetSetting.is_default, true)
+    assert.equal(resetSetting.updated_at, null)
+
+    // 5. Non-boolean chat.enabled rejects with 422 VALIDATION_ERROR
+    const invalidPayload = Buffer.from(JSON.stringify({ values: { 'chat.enabled': 1 } }))
+    const invalidRes = await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(invalidPayload.byteLength),
+      },
+      chunks: [invalidPayload],
+    })
+    assert.equal(invalidRes.status, 422)
+    assert.equal(invalidRes.json.error_code, 'VALIDATION_ERROR')
+    assert.ok(
+      invalidRes.json.errors.some(
+        (e: any) => Array.isArray(e.loc) && e.loc.includes('chat.enabled'),
+      ),
+    )
+  })
+})
+
+describe('apiMiddleware Building Chat (#033)', () => {
+  const CHAIRMAN_ID = '018f0000-0000-7000-8000-000000000101'
+  const BOARD_ID = '018f0000-0000-7000-8000-000000000105'
+  const ACCOUNTANT_ID = '018f0000-0000-7000-8000-000000000103'
+
+  beforeEach(() => {
+    resetApiMiddlewareStateForTest()
+  })
+
+  it('handles #033 building chat lifecycle, settings wipe, RBAC/409/422 order, rate limits, and expiry', async (t) => {
+    const mw = createApiMiddleware()
+
+    // 1. Default: disabled; resident & chairman can_take_part=true, accountant can_take_part=false
+    const stateUserOff = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat',
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    assert.equal(stateUserOff.status, 200)
+    assert.equal(stateUserOff.json.enabled, false)
+    assert.equal(stateUserOff.json.turned_on_at, null)
+    assert.equal(stateUserOff.json.can_take_part, true)
+
+    const stateAccOff = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat',
+      headers: { 'x-demo-user-id': ACCOUNTANT_ID },
+    })
+    assert.equal(stateAccOff.status, 200)
+    assert.equal(stateAccOff.json.can_take_part, false)
+
+    // 2. While chat disabled: accountant gets 403 FORBIDDEN before 409 CHAT_DISABLED; resident gets 409 CHAT_DISABLED even with invalid params/body
+    const accMsgsOff = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat/messages',
+      headers: { 'x-demo-user-id': ACCOUNTANT_ID },
+    })
+    assert.equal(accMsgsOff.status, 403)
+    assert.equal(accMsgsOff.json.error_code, 'FORBIDDEN')
+
+    const resMsgsOff = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat/messages?limit=9999',
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    assert.equal(resMsgsOff.status, 409)
+    assert.equal(resMsgsOff.json.error_code, 'CHAT_DISABLED')
+
+    const emptyBody = Buffer.from(JSON.stringify({ body: '   ' }))
+    const postDisabledRes = await invokeMiddleware(mw, {
+      method: 'POST',
+      url: '/api/v1/chat/messages',
+      headers: {
+        'x-demo-user-id': RESIDENT_APT14_ID,
+        'content-type': 'application/json',
+        'content-length': String(emptyBody.byteLength),
+      },
+      chunks: [emptyBody],
+    })
+    assert.equal(postDisabledRes.status, 409)
+    assert.equal(postDisabledRes.json.error_code, 'CHAT_DISABLED')
+
+    // 3. Chairman enables chat -> turned_on_at populated; same PUT value keeps turned_on_at
+    const enableBuf = Buffer.from(JSON.stringify({ values: { 'chat.enabled': true } }))
+    await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(enableBuf.byteLength),
+      },
+      chunks: [enableBuf],
+    })
+    const stateEnabled = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat',
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    assert.equal(stateEnabled.json.enabled, true)
+    assert.ok(stateEnabled.json.turned_on_at)
+    const firstTurnedOnAt = stateEnabled.json.turned_on_at
+
+    await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(enableBuf.byteLength),
+      },
+      chunks: [enableBuf],
+    })
+    const stateStillEnabled = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat',
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    assert.equal(stateStillEnabled.json.turned_on_at, firstTurnedOnAt)
+
+    // 4. Resident posts with explicit valid apartment (Apt 14); invalid apartment rejected with INVALID_AUTHOR_APARTMENT
+    const postApt14 = Buffer.from(
+      JSON.stringify({
+        body: 'Elevator noise check',
+        author_apartment_id: '018f0000-0000-7000-8000-000000000314',
+      }),
+    )
+    const created1 = await invokeMiddleware(mw, {
+      method: 'POST',
+      url: '/api/v1/chat/messages',
+      headers: {
+        'x-demo-user-id': RESIDENT_APT14_ID,
+        'content-type': 'application/json',
+        'content-length': String(postApt14.byteLength),
+      },
+      chunks: [postApt14],
+    })
+    assert.equal(created1.status, 201)
+    assert.equal(created1.json.is_own, true)
+    assert.match(created1.json.author_badge.display_label, /14/)
+
+    const badApt = Buffer.from(
+      JSON.stringify({
+        body: 'Wrong apt',
+        author_apartment_id: '018f0000-0000-7000-8000-000000000309',
+      }),
+    )
+    const badAptRes = await invokeMiddleware(mw, {
+      method: 'POST',
+      url: '/api/v1/chat/messages',
+      headers: {
+        'x-demo-user-id': RESIDENT_APT14_ID,
+        'content-type': 'application/json',
+        'content-length': String(badApt.byteLength),
+      },
+      chunks: [badApt],
+    })
+    assert.equal(badAptRes.status, 422)
+    assert.equal(badAptRes.json.error_code, 'INVALID_AUTHOR_APARTMENT')
+
+    // 5. after > int64 max rejected with 422 VALIDATION_ERROR; pagination with after returns delta + is_own for caller
+    const hugeAfterRes = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat/messages?after=9223372036854775808',
+      headers: { 'x-demo-user-id': BOARD_ID },
+    })
+    assert.equal(hugeAfterRes.status, 422)
+    assert.equal(hugeAfterRes.json.error_code, 'VALIDATION_ERROR')
+
+    const boardRead = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat/messages',
+      headers: { 'x-demo-user-id': BOARD_ID },
+    })
+    assert.equal(boardRead.status, 200)
+    assert.equal(boardRead.json.messages.length, 1)
+    assert.equal(boardRead.json.messages[0].is_own, false)
+    assert.equal(boardRead.json.cursor, created1.json.id)
+
+    const deltaEmpty = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: `/api/v1/chat/messages?after=${created1.json.id}`,
+      headers: { 'x-demo-user-id': BOARD_ID },
+    })
+    assert.equal(deltaEmpty.status, 200)
+    assert.equal(deltaEmpty.json.messages.length, 0)
+
+    // 6. Rate limit: 10 messages / min allowed, 11th returns 429 RATE_LIMITED with Retry-After header
+    const nowStart = Date.parse('2026-11-15T12:00:00Z')
+    t.mock.timers.enable({ apis: ['Date'] })
+    t.mock.timers.setTime(nowStart)
+    for (let i = 0; i < 10; i += 1) {
+      const msgBuf = Buffer.from(JSON.stringify({ body: `Burst #${i}` }))
+      const r = await invokeMiddleware(mw, {
+        method: 'POST',
+        url: '/api/v1/chat/messages',
+        headers: {
+          'x-demo-user-id': CHAIRMAN_ID,
+          'content-type': 'application/json',
+          'content-length': String(msgBuf.byteLength),
+        },
+        chunks: [msgBuf],
+      })
+      assert.equal(r.status, 201)
+    }
+    const overBuf = Buffer.from(JSON.stringify({ body: 'Burst #11' }))
+    const overRes = await invokeMiddleware(mw, {
+      method: 'POST',
+      url: '/api/v1/chat/messages',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(overBuf.byteLength),
+      },
+      chunks: [overBuf],
+    })
+    assert.equal(overRes.status, 429)
+    assert.equal(overRes.json.error_code, 'RATE_LIMITED')
+    assert.ok(overRes.json.retry_after_seconds >= 1)
+    assert.equal(overRes.headers['retry-after'], String(overRes.json.retry_after_seconds))
+
+    // 7. 2-hour expiry removes old messages from GET /chat/messages & recent_count
+    t.mock.timers.setTime(nowStart + 2 * 60 * 60 * 1000 + 1000)
+    const afterExpiry = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat/messages',
+      headers: { 'x-demo-user-id': CHAIRMAN_ID },
+    })
+    assert.equal(afterExpiry.status, 200)
+    assert.equal(afterExpiry.json.messages.length, 0)
+
+    // 8. Turning chat off and back on wipes messages and rotates turned_on_at
+    const newMsgBuf = Buffer.from(JSON.stringify({ body: 'Before turn off' }))
+    await invokeMiddleware(mw, {
+      method: 'POST',
+      url: '/api/v1/chat/messages',
+      headers: {
+        'x-demo-user-id': BOARD_ID,
+        'content-type': 'application/json',
+        'content-length': String(newMsgBuf.byteLength),
+      },
+      chunks: [newMsgBuf],
+    })
+    const offBuf = Buffer.from(JSON.stringify({ values: { 'chat.enabled': null } }))
+    await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(offBuf.byteLength),
+      },
+      chunks: [offBuf],
+    })
+    t.mock.timers.setTime(nowStart + 2 * 60 * 60 * 1000 + 5000)
+    await invokeMiddleware(mw, {
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: {
+        'x-demo-user-id': CHAIRMAN_ID,
+        'content-type': 'application/json',
+        'content-length': String(enableBuf.byteLength),
+      },
+      chunks: [enableBuf],
+    })
+    const afterReenable = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/chat/messages',
+      headers: { 'x-demo-user-id': BOARD_ID },
+    })
+    assert.equal(afterReenable.status, 200)
+    assert.equal(afterReenable.json.messages.length, 0)
+    assert.notEqual(afterReenable.json.turned_on_at, firstTurnedOnAt)
+
+    // 9. Validation: control char, whitespace-only, and empty author_apartment_id -> 422
+    for (const [badPayload, expectedCode] of [
+      [{ body: 'Bad\u0007bell' }, 'VALIDATION_ERROR'],
+      [{ body: '   \n\t  ' }, 'VALIDATION_ERROR'],
+      [{ body: 'Valid body', author_apartment_id: '' }, 'INVALID_AUTHOR_APARTMENT'],
+    ] as const) {
+      const buf = Buffer.from(JSON.stringify(badPayload))
+      const res = await invokeMiddleware(mw, {
+        method: 'POST',
+        url: '/api/v1/chat/messages',
+        headers: {
+          'x-demo-user-id': RESIDENT_APT14_ID,
+          'content-type': 'application/json',
+          'content-length': String(buf.byteLength),
+        },
+        chunks: [buf],
+      })
+      assert.equal(res.status, 422)
+      assert.equal(res.json.error_code, expectedCode)
+    }
+
+    // 10. Pagination has_more:true with ?after & ?limit=1, and 60/hour limit
+    let pNow = nowStart + 3 * 60 * 60 * 1000
+    t.mock.timers.setTime(pNow)
+    const createdIds: number[] = []
+    for (let batch = 0; batch < 6; batch += 1) {
+      t.mock.timers.setTime(pNow + batch * 70_000)
+      for (let i = 0; i < 10; i += 1) {
+        const msgBuf = Buffer.from(JSON.stringify({ body: `Batch ${batch}-${i}` }))
+        const r = await invokeMiddleware(mw, {
+          method: 'POST',
+          url: '/api/v1/chat/messages',
+          headers: {
+            'x-demo-user-id': RESIDENT_APT14_ID,
+            'content-type': 'application/json',
+            'content-length': String(msgBuf.byteLength),
+          },
+          chunks: [msgBuf],
+        })
+        assert.equal(r.status, 201)
+        createdIds.push(r.json.id)
+      }
+    }
+    const hourOverBuf = Buffer.from(JSON.stringify({ body: '61st in hour' }))
+    const hourOverRes = await invokeMiddleware(mw, {
+      method: 'POST',
+      url: '/api/v1/chat/messages',
+      headers: {
+        'x-demo-user-id': RESIDENT_APT14_ID,
+        'content-type': 'application/json',
+        'content-length': String(hourOverBuf.byteLength),
+      },
+      chunks: [hourOverBuf],
+    })
+    assert.equal(hourOverRes.status, 429)
+    assert.equal(hourOverRes.json.error_code, 'RATE_LIMITED')
+    assert.equal(hourOverRes.json.reason, 'HOUR_LIMIT')
+
+    const pagedRes = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: `/api/v1/chat/messages?after=${createdIds[0]}&limit=1`,
+      headers: { 'x-demo-user-id': BOARD_ID },
+    })
+    assert.equal(pagedRes.status, 200)
+    assert.equal(pagedRes.json.has_more, true)
+    assert.equal(pagedRes.json.messages.length, 1)
+    assert.equal(pagedRes.json.messages[0].id, createdIds[1])
+  })
+})
+
+
+
+
 
 
 

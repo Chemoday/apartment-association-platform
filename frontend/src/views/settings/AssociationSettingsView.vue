@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { getSettings, updateSettings } from '@/api/endpoints/settings.js'
+import { refreshChatState } from '@/composables/useChatState.js'
 import { getFileUsage } from '@/api/endpoints/files.js'
 import { localizeError } from '@/locales/index.js'
 import { formatDateTime } from '@/utils/dates.js'
@@ -17,7 +18,9 @@ import {
   buildInitialDraftState,
   computeSettingsDiff,
   extractSettingFieldErrors,
+  isDisablingChatSetting,
 } from '@/utils/associationSettings.js'
+import BaseModal from '@/components/base/BaseModal.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const route = useRoute()
@@ -33,6 +36,9 @@ const loadError = ref(null)
 const saveErrorBanner = ref('')
 const saveSuccessBanner = ref('')
 const fieldErrorMap = ref({})
+const confirmDisableChatOpen = ref(false)
+const pendingConfirmedDiff = ref(null)
+const errorBannerRef = ref(null)
 
 const storageUsage = ref(null)
 const storageLoading = ref(false)
@@ -40,7 +46,10 @@ const storageError = ref(null)
 const storageSectionRef = ref(null)
 
 let requestSeq = 0
+let saveSeq = 0
 let storageSeq = 0
+let getAbortController = null
+let saveAbortController = null
 let storageAbortController = null
 
 const groupedSettings = computed(() => groupSettingsByPrefix(settings.value))
@@ -50,6 +59,10 @@ const pendingDiff = computed(() =>
 )
 
 const hasPendingChanges = computed(() => Object.keys(pendingDiff.value).length > 0)
+
+const isDisablingChatDraft = computed(() =>
+  isDisablingChatSetting(settings.value, pendingDiff.value),
+)
 
 const storagePercent = computed(() => clampUsedPercent(storageUsage.value?.used_percent))
 
@@ -186,6 +199,8 @@ function applyLoadedSettings(loadedList) {
   draftValues.value = initial.values
   draftResets.value = initial.resets
   fieldErrorMap.value = {}
+  confirmDisableChatOpen.value = false
+  pendingConfirmedDiff.value = null
 }
 
 function scrollToStorageHashIfNeeded() {
@@ -235,6 +250,24 @@ async function fetchStorageUsage() {
 }
 
 async function fetchSettings() {
+  const seq = ++requestSeq
+  ++saveSeq
+  if (getAbortController) {
+    getAbortController.abort()
+    getAbortController = null
+  }
+  if (saveAbortController) {
+    saveAbortController.abort()
+    saveAbortController = null
+  }
+
+  saving.value = false
+  confirmDisableChatOpen.value = false
+  pendingConfirmedDiff.value = null
+  fieldErrorMap.value = {}
+  saveErrorBanner.value = ''
+  saveSuccessBanner.value = ''
+
   if (!canViewAssociationSettings.value) {
     settings.value = []
     draftValues.value = {}
@@ -243,22 +276,33 @@ async function fetchSettings() {
     loading.value = false
     return
   }
-  const seq = ++requestSeq
+
+  const expectedUserId = session.activeUserId
+  const controller = new AbortController()
+  getAbortController = controller
   loading.value = true
   loadError.value = null
-  saveErrorBanner.value = ''
-  saveSuccessBanner.value = ''
 
   try {
-    const res = await getSettings()
-    if (seq !== requestSeq) return
+    const res = await getSettings({ signal: controller.signal })
+    if (seq !== requestSeq || session.activeUserId !== expectedUserId) return
     applyLoadedSettings(res?.settings || [])
   } catch (err) {
-    if (seq !== requestSeq) return
+    if (
+      seq !== requestSeq ||
+      session.activeUserId !== expectedUserId ||
+      err?.name === 'AbortError' ||
+      err?.errorCode === 'REQUEST_ABORTED'
+    ) {
+      return
+    }
     loadError.value = err
   } finally {
     if (seq === requestSeq) {
       loading.value = false
+      if (getAbortController === controller) {
+        getAbortController = null
+      }
     }
   }
 }
@@ -270,12 +314,24 @@ function discardChanges() {
   fieldErrorMap.value = {}
   saveErrorBanner.value = ''
   saveSuccessBanner.value = ''
+  confirmDisableChatOpen.value = false
+  pendingConfirmedDiff.value = null
 }
 
-async function saveChanges() {
-  if (!isChairman.value || saving.value) return
-  const diff = pendingDiff.value
-  if (Object.keys(diff).length === 0) return
+async function executeSave(diff) {
+  if (!isChairman.value || !canViewAssociationSettings.value || saving.value) return false
+  if (!diff || Object.keys(diff).length === 0) return false
+
+  if (saveAbortController) {
+    saveAbortController.abort()
+    saveAbortController = null
+  }
+
+  const mySaveSeq = ++saveSeq
+  const myRequestSeq = requestSeq
+  const expectedUserId = session.activeUserId
+  const controller = new AbortController()
+  saveAbortController = controller
 
   saving.value = true
   saveErrorBanner.value = ''
@@ -283,18 +339,82 @@ async function saveChanges() {
   fieldErrorMap.value = {}
 
   try {
-    const res = await updateSettings({ values: diff })
+    const res = await updateSettings({ values: diff }, { signal: controller.signal })
+    if (
+      mySaveSeq !== saveSeq ||
+      myRequestSeq !== requestSeq ||
+      session.activeUserId !== expectedUserId ||
+      !isChairman.value ||
+      !canViewAssociationSettings.value
+    ) {
+      return false
+    }
     applyLoadedSettings(res?.settings || [])
+    if (Object.prototype.hasOwnProperty.call(diff, 'chat.enabled')) {
+      refreshChatState()
+    }
     saveSuccessBanner.value = session.t('associationSettings.savedBanner')
+    return true
   } catch (err) {
+    if (
+      mySaveSeq !== saveSeq ||
+      myRequestSeq !== requestSeq ||
+      session.activeUserId !== expectedUserId ||
+      !isChairman.value ||
+      !canViewAssociationSettings.value ||
+      err?.name === 'AbortError' ||
+      err?.errorCode === 'REQUEST_ABORTED'
+    ) {
+      return false
+    }
     if (err?.status === 422 || err?.errorCode === 'VALIDATION_ERROR') {
       fieldErrorMap.value = extractSettingFieldErrors(err)
       saveErrorBanner.value = session.t('associationSettings.validationBanner')
     } else {
       saveErrorBanner.value = localizeError(err, {}, session.locale)
     }
+    return false
   } finally {
-    saving.value = false
+    if (mySaveSeq === saveSeq) {
+      saving.value = false
+      if (saveAbortController === controller) {
+        saveAbortController = null
+      }
+    }
+  }
+}
+
+async function saveChanges() {
+  if (!isChairman.value || !canViewAssociationSettings.value || saving.value) return
+  const diff = pendingDiff.value
+  if (Object.keys(diff).length === 0) return
+
+  if (isDisablingChatSetting(settings.value, diff)) {
+    pendingConfirmedDiff.value = { ...diff }
+    confirmDisableChatOpen.value = true
+    return
+  }
+
+  await executeSave(diff)
+}
+
+function cancelDisableChatConfirm() {
+  if (saving.value) return
+  confirmDisableChatOpen.value = false
+  pendingConfirmedDiff.value = null
+}
+
+async function confirmDisableChatSave() {
+  if (!isChairman.value || !canViewAssociationSettings.value || saving.value) return
+  const diff = pendingConfirmedDiff.value || pendingDiff.value
+  const ok = await executeSave(diff)
+  if (!ok) {
+    confirmDisableChatOpen.value = false
+    pendingConfirmedDiff.value = null
+    if (saveErrorBanner.value) {
+      await nextTick()
+      errorBannerRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+    }
   }
 }
 
@@ -324,6 +444,17 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  ++requestSeq
+  ++saveSeq
+  ++storageSeq
+  if (getAbortController) {
+    getAbortController.abort()
+    getAbortController = null
+  }
+  if (saveAbortController) {
+    saveAbortController.abort()
+    saveAbortController = null
+  }
   if (storageAbortController) {
     storageAbortController.abort()
     storageAbortController = null
@@ -346,29 +477,49 @@ onBeforeUnmount(() => {
       </p>
     </header>
 
-    <!-- Board Read-Only Banner -->
+    <!-- Fail-Closed Role Guard -->
     <div
-      v-if="!isChairman"
-      data-testid="association-settings-readonly-banner"
-      class="bg-surface-container-low border border-surface-container rounded-xl px-4 py-3 flex items-start gap-3 text-sm text-on-surface-variant"
-      role="status"
-    >
-      <span class="material-symbols-outlined text-[20px] text-primary shrink-0 mt-0.5">
-        visibility
-      </span>
-      <p>{{ session.t('associationSettings.readOnlyNotice') }}</p>
-    </div>
-
-    <!-- Validation / Save Error Banner -->
-    <div
-      v-if="saveErrorBanner"
-      data-testid="association-settings-error-banner"
-      class="bg-error-container/80 border border-error/30 text-on-error-container rounded-xl px-4 py-3 flex items-start gap-3 text-sm"
+      v-if="!canViewAssociationSettings"
+      data-testid="association-settings-forbidden"
+      class="p-8 rounded-2xl bg-surface-container-lowest border border-surface-container text-center space-y-3"
       role="alert"
     >
-      <span class="material-symbols-outlined text-[20px] shrink-0 mt-0.5">error</span>
-      <p class="font-medium">{{ saveErrorBanner }}</p>
+      <div class="w-12 h-12 rounded-full bg-surface-container-high mx-auto flex items-center justify-center text-on-surface-variant">
+        <span class="material-symbols-outlined text-[24px]" aria-hidden="true">lock</span>
+      </div>
+      <h2 class="font-bold text-base text-on-surface">
+        {{ session.t('common.noAccessTitle') }}
+      </h2>
+      <p class="text-sm text-on-surface-variant max-w-md mx-auto">
+        {{ session.t('associationSettings.forbiddenDesc') }}
+      </p>
     </div>
+
+    <template v-else>
+      <!-- Board Read-Only Banner -->
+      <div
+        v-if="!isChairman"
+        data-testid="association-settings-readonly-banner"
+        class="bg-surface-container-low border border-surface-container rounded-xl px-4 py-3 flex items-start gap-3 text-sm text-on-surface-variant"
+        role="status"
+      >
+        <span class="material-symbols-outlined text-[20px] text-primary shrink-0 mt-0.5">
+          visibility
+        </span>
+        <p>{{ session.t('associationSettings.readOnlyNotice') }}</p>
+      </div>
+
+      <!-- Validation / Save Error Banner -->
+      <div
+        v-if="saveErrorBanner"
+        ref="errorBannerRef"
+        data-testid="association-settings-error-banner"
+        class="bg-error-container/80 border border-error/30 text-on-error-container rounded-xl px-4 py-3 flex items-start gap-3 text-sm"
+        role="alert"
+      >
+        <span class="material-symbols-outlined text-[20px] shrink-0 mt-0.5">error</span>
+        <p class="font-medium">{{ saveErrorBanner }}</p>
+      </div>
 
     <!-- Save Success Banner -->
     <div
@@ -528,6 +679,17 @@ onBeforeUnmount(() => {
                 {{ session.t('associationSettings.undoResetBtn') }}
               </button>
             </div>
+
+            <!-- Pending Chat Disable Warning -->
+            <p
+              v-if="setting.key === 'chat.enabled' && isDisablingChatDraft"
+              data-testid="chat-disable-pending-warning"
+              class="text-xs font-medium text-error pt-1 flex items-center gap-1.5"
+              role="note"
+            >
+              <span class="material-symbols-outlined text-[15px] shrink-0" aria-hidden="true">warning</span>
+              <span>{{ session.t('associationSettings.chatDisableConfirm.pendingInlineWarning') }}</span>
+            </p>
 
             <!-- Per-Field Validation Error Message -->
             <p
@@ -794,5 +956,50 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </section>
+    </template>
+
+    <!-- Confirm Turning Off Building Chat -->
+    <BaseModal
+      :open="confirmDisableChatOpen"
+      :title="session.t('associationSettings.chatDisableConfirm.title')"
+      max-width="max-w-md"
+      @close="cancelDisableChatConfirm"
+    >
+      <template #icon>
+        <span class="material-symbols-outlined text-[22px] text-error shrink-0" aria-hidden="true">
+          warning
+        </span>
+      </template>
+
+      <div data-testid="chat-disable-confirm-modal" class="space-y-2.5 text-sm">
+        <p class="font-semibold text-on-surface">
+          {{ session.t('associationSettings.chatDisableConfirm.body') }}
+        </p>
+        <p class="text-xs text-on-surface-variant leading-relaxed">
+          {{ session.t('associationSettings.chatDisableConfirm.hint') }}
+        </p>
+      </div>
+
+      <template #footer>
+        <button
+          type="button"
+          data-testid="chat-disable-cancel-btn"
+          :disabled="saving"
+          class="px-4 py-2 rounded-lg border border-outline-variant text-xs font-semibold text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+          @click="cancelDisableChatConfirm"
+        >
+          {{ session.t('associationSettings.chatDisableConfirm.cancelBtn') }}
+        </button>
+        <button
+          type="button"
+          data-testid="chat-disable-confirm-btn"
+          :disabled="saving"
+          class="px-4 py-2 rounded-lg bg-error text-on-error text-xs font-semibold hover:bg-error/90 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+          @click="confirmDisableChatSave"
+        >
+          {{ session.t('associationSettings.chatDisableConfirm.confirmBtn') }}
+        </button>
+      </template>
+    </BaseModal>
   </div>
 </template>

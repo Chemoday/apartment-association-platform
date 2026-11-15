@@ -7,6 +7,7 @@ import {
   computeSettingsDiff,
   extractSettingFieldErrors,
   validateAndApplySettingsUpdate,
+  isDisablingChatSetting,
 } from './associationSettings.js'
 
 test('groupSettingsByPrefix groups settings by prefix and preserves alphabetical key order', () => {
@@ -37,7 +38,11 @@ test('groupSettingsByPrefix groups settings by prefix and preserves alphabetical
   const groups = groupSettingsByPrefix(raw)
   assert.deepEqual(
     groups.map((g) => g.prefix),
-    ['general', 'issues', 'maintenance'],
+    ['chat', 'general', 'issues', 'maintenance'],
+  )
+  assert.deepEqual(
+    groups.find((g) => g.prefix === 'chat')?.settings.map((s) => s.key),
+    ['chat.enabled'],
   )
   assert.deepEqual(
     groups.find((g) => g.prefix === 'issues')?.settings.map((s) => s.key),
@@ -52,8 +57,9 @@ test('groupSettingsByPrefix groups settings by prefix and preserves alphabetical
 test('computeSettingsDiff returns only changed keys and sends null for reset-to-default on non-default settings', () => {
   const settings = cloneDefaultAssociationSettings()
   // Mark issues.urgent_enabled as non-default on server
-  settings[1] = {
-    ...settings[1],
+  const urgentIdx = settings.findIndex((s) => s.key === 'issues.urgent_enabled')
+  settings[urgentIdx] = {
+    ...settings[urgentIdx],
     value: true,
     is_default: false,
     updated_at: '2026-11-08T12:00:00Z',
@@ -81,6 +87,11 @@ test('computeSettingsDiff returns only changed keys and sends null for reset-to-
 
 test('validateAndApplySettingsUpdate enforces all-or-nothing validation and resets on null', () => {
   const base = cloneDefaultAssociationSettings()
+  const chatDefault = base.find((s) => s.key === 'chat.enabled')!
+  assert.equal(chatDefault.type, 'BOOLEAN')
+  assert.equal(chatDefault.value, false)
+  assert.equal(chatDefault.default, false)
+  assert.equal(chatDefault.is_default, true)
 
   // 1. Out of bounds + valid change together -> all or nothing (nothing changes, 422 errors returned)
   const invalidRes = validateAndApplySettingsUpdate(base, {
@@ -103,6 +114,7 @@ test('validateAndApplySettingsUpdate enforces all-or-nothing validation and rese
     base,
     {
       values: {
+        'chat.enabled': true,
         'issues.urgent_enabled': true,
         'issues.urgent_per_apartment_per_day': 4,
       },
@@ -111,6 +123,11 @@ test('validateAndApplySettingsUpdate enforces all-or-nothing validation and rese
   )
   assert.equal(validRes.ok, true)
   if (validRes.ok) {
+    const chatEnabled = validRes.settings.find((s) => s.key === 'chat.enabled')!
+    assert.equal(chatEnabled.value, true)
+    assert.equal(chatEnabled.is_default, false)
+    assert.equal(chatEnabled.updated_at, '2026-11-08T15:00:00Z')
+
     const urgentEnabled = validRes.settings.find((s) => s.key === 'issues.urgent_enabled')!
     assert.equal(urgentEnabled.value, true)
     assert.equal(urgentEnabled.is_default, false)
@@ -137,4 +154,26 @@ test('validateAndApplySettingsUpdate enforces all-or-nothing validation and rese
       assert.equal(afterReset.updated_at, null)
     }
   }
+})
+
+test('isDisablingChatSetting returns true only when active chat.enabled transitions to false or default-false', () => {
+  const offSettings = cloneDefaultAssociationSettings()
+  assert.equal(isDisablingChatSetting(offSettings, { 'chat.enabled': true }), false)
+  assert.equal(isDisablingChatSetting(offSettings, { 'chat.enabled': false }), false)
+  assert.equal(isDisablingChatSetting(offSettings, { 'issues.urgent_enabled': true }), false)
+
+  const onSettings = offSettings.map((s) =>
+    s.key === 'chat.enabled' ? { ...s, value: true, is_default: false } : s,
+  )
+  assert.equal(isDisablingChatSetting(onSettings, { 'issues.urgent_enabled': true }), false)
+  assert.equal(isDisablingChatSetting(onSettings, { 'chat.enabled': true }), false)
+  assert.equal(isDisablingChatSetting(onSettings, { 'chat.enabled': false }), true)
+  assert.equal(isDisablingChatSetting(onSettings, { 'chat.enabled': null }), true)
+})
+
+test('cloneDefaultAssociationSettings sorts deterministically across keys', () => {
+  const cloned = cloneDefaultAssociationSettings()
+  const keys = cloned.map((s) => s.key)
+  assert.deepEqual(keys, [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
+  assert.equal(keys[0], 'chat.enabled')
 })
