@@ -28,6 +28,7 @@ export type NotificationEventType =
   | 'MAINTENANCE_DUE'
   | 'NOTICE_PUBLISHED'
   | 'STORAGE_ALMOST_FULL'
+  | 'ENERGY_CERTIFICATE_EXPIRING'
 export type PeriodStatus = 'OPEN_FOR_RESIDENTS' | 'REVIEW_BY_BOARD' | 'LOCKED'
 export type PollKind = 'INFORMATIVE'
 export type PollStatus = 'DRAFT' | 'OPEN' | 'CLOSED' | 'CANCELLED'
@@ -46,7 +47,14 @@ export type ResourceType = 'COLD_WATER' | 'HOT_WATER' | 'ELECTRICITY' | 'HEAT' |
 export type RoleBadge = 'OWNER' | 'RESIDENT' | 'BOARD' | 'ACCOUNTANT'
 export type SignInStatus = 'SIGNED_IN' | 'REGISTRATION_REQUIRED' | 'SIGN_IN_TO_ACCEPT'
 export type StaffRole = 'BOARD' | 'ACCOUNTANT' | 'CHAIRMAN'
-export type SubjectType = 'post' | 'period' | 'poll' | 'issue' | 'maintenance_task' | 'storage'
+export type SubjectType =
+  | 'post'
+  | 'period'
+  | 'poll'
+  | 'issue'
+  | 'maintenance_task'
+  | 'storage'
+  | 'building'
 export type SubmissionStatus = 'SUBMITTED' | 'MISSING' | 'AUTO_ESTIMATED' | 'ANOMALY_CONFIRMED'
 export type TargetScope = 'ALL_BUILDING' | 'ENTRANCE' | 'APARTMENT_LIST'
 export type UnavailableReason = 'DEMO_MODE' | 'CHANNEL_NOT_ENABLED' | 'NO_EMAIL' | 'NOT_LINKED'
@@ -96,6 +104,7 @@ export interface BuildingResponse {
   total_entrances?: number
   heated_area_m2: string
   total_area_m2?: string
+  registry_facts?: EEBuildingFacts | null
 }
 
 export interface MembershipView {
@@ -740,6 +749,7 @@ export interface components {
     CardResident: CardResident
     Channel: Channel
     ChannelAvailability: ChannelAvailability
+    Classified: Classified
     CommentCreateRequest: CommentCreateRequest
     CommentView: CommentView
     DashboardApartment: DashboardApartment
@@ -748,6 +758,13 @@ export interface components {
     DemoUserView: DemoUserView
     DeviceKind: DeviceKind
     DisplayMode: DisplayMode
+    EEBuilding: EEBuilding
+    EEBuildingFacts: EEBuildingFacts
+    EECadastralUnit: EECadastralUnit
+    EEEnergyCertificate: EEEnergyCertificate
+    EESource: EESource
+    EETechnical: EETechnical
+    EEUnit: EEUnit
     EmergencyView: EmergencyView
     ErrorResponse: ErrorResponse
     EstimateResponse: EstimateResponse
@@ -806,6 +823,11 @@ export interface components {
     ReadingSummary: ReadingSummary
     RedeemRequest: RedeemRequest
     RegistrationRequest: RegistrationRequest
+    RegistryCandidateView: RegistryCandidateView
+    RegistryProposalRequest: RegistryProposalRequest
+    RegistrySearchRequest: RegistrySearchRequest
+    RegistrySearchResponse: RegistrySearchResponse
+    RegistryState: RegistryState
     RelationType: RelationType
     ReplaceTenantRequest: ReplaceTenantRequest
     ResidentView: ResidentView
@@ -827,6 +849,7 @@ export interface components {
     TargetScope: TargetScope
     TenantInvitationCreate: TenantInvitationCreate
     UnavailableReason: UnavailableReason
+    UnitKind: UnitKind
     UnreadCountResponse: UnreadCountResponse
     UnsubscribeResponse: UnsubscribeResponse
     ValidationErrorItem: ValidationErrorItem
@@ -1386,6 +1409,107 @@ export interface ChatState {
   history_hours: number
   max_length: number
 }
+
+export type UnitKind = 'APARTMENT' | 'NON_RESIDENTIAL' | 'COMMON' | 'OTHER'
+
+export interface Classified {
+  code: string | null
+  label_et: string | null
+}
+
+export interface EESource {
+  register: string
+  building_code: string
+  fetched_at: string
+  attribution: string
+}
+
+export interface EEBuilding {
+  first_use_year: number | null
+  purpose: Classified | null
+  state: Classified | null
+  ownership: Classified | null
+  construction_started_on: string | null
+  floors_max: number | null
+  floors_min: number | null
+  lifts: number | null
+  rooms: number | null
+  non_residential_units: number | null
+  closed_net_area_m2: string | null
+  heated_area_m2: string | null
+  common_area_m2: string | null
+  auxiliary_area_m2: string | null
+  footprint_m2: string | null
+  volume_m3: string | null
+  height_m: string | null
+}
+
+export interface EEUnit {
+  number: string | null
+  kind: UnitKind | string
+  area_m2: string | null
+  heated_area_m2: string | null
+  rooms: number | null
+  toilets: number | null
+  entrance_floor: number | null
+}
+
+export interface EEEnergyCertificate {
+  energy_class: string | null
+  document_number: string | null
+  document_kind: Classified | null
+  state: Classified | null
+  issued_on: string | null
+  valid_until: string | null
+  value: number | null
+  value_type: string | null
+}
+
+export interface EETechnical {
+  group: Classified
+  value: Classified
+}
+
+export interface EECadastralUnit {
+  code: string
+}
+
+export interface EEBuildingFacts {
+  country_code: string
+  schema: string
+  source: EESource
+  building: EEBuilding
+  units: EEUnit[]
+  energy_certificates: EEEnergyCertificate[]
+  technical: EETechnical[]
+  cadastral_units: EECadastralUnit[]
+}
+
+export interface RegistryCandidateView {
+  code: string
+  address: string
+  kind_label: string | null
+}
+
+export interface RegistrySearchRequest {
+  query?: string | null
+}
+
+export interface RegistrySearchResponse {
+  candidates: RegistryCandidateView[]
+}
+
+export interface RegistryProposalRequest {
+  code: string
+}
+
+export interface RegistryState {
+  accepted: EEBuildingFacts | null
+  accepted_at: string | null
+  proposal: EEBuildingFacts | null
+  proposal_fetched_at: string | null
+}
+
 
 
 

@@ -29,6 +29,39 @@ export function formatDate(isoString, locale = 'en-GB') {
 }
 
 /**
+ * Format a pure calendar date string ("YYYY-MM-DD") without timezone shift.
+ * Returns `'-'` for null/undefined/blank values.
+ * @param {string | null | undefined} dateStr
+ * @param {string} [locale]
+ * @returns {string}
+ */
+export function formatCalendarDate(dateStr, locale = 'en-GB') {
+  if (typeof dateStr !== 'string') return '-'
+  const trimmed = dateStr.trim()
+  if (!trimmed) return '-'
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed)
+  if (match) {
+    const y = Number(match[1])
+    const m = Number(match[2])
+    const d = Number(match[3])
+    const utcDate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+    if (
+      utcDate.getUTCFullYear() === y &&
+      utcDate.getUTCMonth() === m - 1 &&
+      utcDate.getUTCDate() === d
+    ) {
+      return new Intl.DateTimeFormat(resolveIntlLocale(locale, 'en-GB'), {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }).format(utcDate)
+    }
+  }
+  return formatDate(trimmed, locale)
+}
+
+/**
  * Format an ISO UTC timestamp string with date and time in Europe/Tallinn timezone.
  * @param {string | null | undefined} isoString
  * @param {string} locale

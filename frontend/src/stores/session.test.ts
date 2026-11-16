@@ -90,3 +90,71 @@ test('every session.<prop> referenced in Vue templates and scripts exists on use
     }
   }
 })
+
+test('session store clears building on failure/user switch and reloads via refreshBuilding()', async () => {
+  const originalFetch = globalThis.fetch
+  let failBuilding = false
+
+  try {
+    setActivePinia(createPinia())
+    const session = useSessionStore() as Record<string, any>
+    await session.activateOfflineDemoMode()
+    assert.ok(session.building)
+    assert.equal(session.buildingError, null)
+
+    // Switch off offline demo fallback for fetch test using a controlled fetch stub on refreshBuilding
+    // First test buildingError & clearing on a fresh pinia instance in online demo mode via fetch mock
+    const { setDemoUser } = await import('../api/client.js')
+    const { disableOfflineDemo } = await import('../api/offlineDemoData.js')
+    disableOfflineDemo()
+    setActivePinia(createPinia())
+    const s2 = useSessionStore() as Record<string, any>
+    setDemoUser('018f0000-0000-7000-8000-000000000102')
+
+    globalThis.fetch = async (url: any) => {
+      const u = String(url)
+      if (u.includes('/property/me')) {
+        return new Response(
+          JSON.stringify({ user_id: '018f0000-0000-7000-8000-000000000102', building_role: 'USER', memberships: [] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      if (u.includes('/property/building')) {
+        if (failBuilding) {
+          return new Response(
+            JSON.stringify({ error: 'INTERNAL_SERVER_ERROR', message: 'boom' }),
+            { status: 500, headers: { 'Content-Type': 'application/json' } },
+          )
+        }
+        return new Response(
+          JSON.stringify({
+            building_id: 'b1',
+            name: 'KÜ Sõpruse 12',
+            address: 'Sõpruse pst 12, Tallinn',
+            registry_facts: null,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+
+    await s2.loadMe()
+    assert.equal(s2.building?.address, 'Sõpruse pst 12, Tallinn')
+    assert.equal(s2.buildingError, null)
+
+    // Subsequent user switch where getBuilding fails must clear stale building and expose buildingError
+    failBuilding = true
+    await s2.switchUser('018f0000-0000-7000-8000-000000000101')
+    assert.equal(s2.building, null)
+    assert.ok(s2.buildingError)
+
+    // Retry via refreshBuilding recovers building state
+    failBuilding = false
+    await s2.refreshBuilding()
+    assert.equal((s2.building as any)?.address, 'Sõpruse pst 12, Tallinn')
+    assert.equal(s2.buildingError, null)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

@@ -22,6 +22,7 @@ import {
 } from '@/utils/associationSettings.js'
 import BaseModal from '@/components/base/BaseModal.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import BuildingRegisterCard from './components/BuildingRegisterCard.vue'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -44,6 +45,7 @@ const storageUsage = ref(null)
 const storageLoading = ref(false)
 const storageError = ref(null)
 const storageSectionRef = ref(null)
+const registerCardRef = ref(null)
 
 let requestSeq = 0
 let saveSeq = 0
@@ -234,6 +236,7 @@ async function fetchStorageUsage() {
     if (seq !== storageSeq) return
     storageUsage.value = res
     scrollToStorageHashIfNeeded()
+    nextTick(() => registerCardRef.value?.scrollIntoViewIfHash?.())
   } catch (err) {
     if (seq !== storageSeq || err?.name === 'AbortError' || err?.errorCode === 'REQUEST_ABORTED') {
       return
@@ -287,6 +290,7 @@ async function fetchSettings() {
     const res = await getSettings({ signal: controller.signal })
     if (seq !== requestSeq || session.activeUserId !== expectedUserId) return
     applyLoadedSettings(res?.settings || [])
+    nextTick(() => registerCardRef.value?.scrollIntoViewIfHash?.())
   } catch (err) {
     if (
       seq !== requestSeq ||
@@ -956,6 +960,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </section>
+
+    <!-- Building Register Management (#035 E12/X1-X2: CHAIRMAN & read-only BOARD) -->
+    <BuildingRegisterCard ref="registerCardRef" />
     </template>
 
     <!-- Confirm Turning Off Building Chat -->

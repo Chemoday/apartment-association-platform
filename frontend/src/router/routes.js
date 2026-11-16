@@ -48,6 +48,18 @@ export const APP_ROUTES = [
     },
   },
   {
+    path: '/building',
+    name: 'building',
+    component: () => import('@/views/building/BuildingView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
+      navKey: 'building',
+      navGroup: 'home',
+      icon: 'apartment',
+    },
+  },
+  {
     path: '/readings',
     name: 'readings',
     component: ReadingsView,

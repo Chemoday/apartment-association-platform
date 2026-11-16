@@ -333,13 +333,13 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
       err?.payload?.status === 'CANCELLED',
   )
 
-  // #010, #014, #018 & #024 Poll, Issue, Maintenance & Storage Notifications & Preferences:
-  // 1. Preferences matrix returns 52 cells (13 event types x 4 channels) with POLL_OPENED enabled by default and non-mandatory
+  // #010, #014, #018, #024 & #037 Poll, Issue, Maintenance, Storage & Energy Certificate Notifications & Preferences:
+  // 1. Preferences matrix returns 56 cells (14 event types x 4 channels) with POLL_OPENED enabled by default and non-mandatory
   const prefsResp = await resolveOfflineDemoRequest('/notifications/preferences', {
     method: 'GET',
     actingUserId: '018f0000-0000-7000-8000-000000000102',
   })
-  assert.equal(prefsResp.preferences.length, 52)
+  assert.equal(prefsResp.preferences.length, 56)
   const pollOpenedPrefs = prefsResp.preferences.filter((p: any) => p.event_type === 'POLL_OPENED')
   assert.equal(pollOpenedPrefs.length, 4)
   assert.equal(
@@ -1114,12 +1114,12 @@ test('offlineDemoData supports #018 maintenance due and notice published notific
   assert.equal(residentNotice.subject_type, 'post')
   assert.deepEqual(residentNotice.params, {}, 'Notice params must be empty')
 
-  // 2. Preferences matrix has 52 rows (13 event types x 4 channels)
+  // 2. Preferences matrix has 56 rows (14 event types x 4 channels)
   const prefsRes = await resolveOfflineDemoRequest('/notifications/preferences', {
     method: 'GET',
     actingUserId: residentId,
   })
-  assert.equal(prefsRes.preferences.length, 52)
+  assert.equal(prefsRes.preferences.length, 56)
 
   const maintPrefs = prefsRes.preferences.filter((p: any) => p.event_type === 'MAINTENANCE_DUE')
   assert.equal(maintPrefs.length, 4)
@@ -1137,8 +1137,18 @@ test('offlineDemoData supports #018 maintenance due and notice published notific
   assert.equal(storagePrefs.length, 4)
   assert.equal(storagePrefs.every((p: any) => p.mandatory === false), true)
 
-  // 3. PUT /notifications/preferences bounds validation (1..52)
-  const excessiveChanges = Array.from({ length: 53 }, (_, i) => ({
+  const certPrefs = prefsRes.preferences.filter(
+    (p: any) => p.event_type === 'ENERGY_CERTIFICATE_EXPIRING',
+  )
+  assert.equal(certPrefs.length, 4)
+  assert.equal(certPrefs.find((p: any) => p.channel === 'in_app')?.enabled, true)
+  assert.equal(certPrefs.find((p: any) => p.channel === 'email')?.enabled, true)
+  assert.equal(certPrefs.find((p: any) => p.channel === 'telegram')?.enabled, false)
+  assert.equal(certPrefs.find((p: any) => p.channel === 'webpush')?.enabled, false)
+  assert.equal(certPrefs.every((p: any) => p.mandatory === false), true)
+
+  // 3. PUT /notifications/preferences bounds validation (1..56)
+  const excessiveChanges = Array.from({ length: 57 }, () => ({
     event_type: 'NOTICE_PUBLISHED',
     channel: 'in_app',
     enabled: true,
@@ -3206,74 +3216,81 @@ test('offlineDemoData supports #032 chat.enabled toggle, null reset, RBAC, and 4
   const boardId = '018f0000-0000-7000-8000-000000000105'
   const residentId = '018f0000-0000-7000-8000-000000000102'
 
-  const initial = await resolveOfflineDemoRequest('/settings', {
-    method: 'GET',
-    actingUserId: boardId,
-  })
-  const chatInitial = initial.settings.find((s: any) => s.key === 'chat.enabled')
-  assert.equal(chatInitial.value, false)
-  assert.equal(chatInitial.is_default, true)
+  try {
+    const initial = await resolveOfflineDemoRequest('/settings', {
+      method: 'GET',
+      actingUserId: boardId,
+    })
+    const chatInitial = initial.settings.find((s: any) => s.key === 'chat.enabled')
+    assert.equal(chatInitial.value, false)
+    assert.equal(chatInitial.is_default, true)
 
-  await assert.rejects(
-    () =>
-      resolveOfflineDemoRequest('/settings', {
-        method: 'GET',
-        actingUserId: residentId,
-      }),
-    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
-  )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/settings', {
+          method: 'GET',
+          actingUserId: residentId,
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
 
-  await assert.rejects(
-    () =>
-      resolveOfflineDemoRequest('/settings', {
-        method: 'PUT',
-        actingUserId: boardId,
-        body: { values: { 'chat.enabled': true } },
-      }),
-    (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
-  )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/settings', {
+          method: 'PUT',
+          actingUserId: boardId,
+          body: { values: { 'chat.enabled': true } },
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
 
-  const enabledRes = await resolveOfflineDemoRequest('/settings', {
-    method: 'PUT',
-    actingUserId: chairmanId,
-    body: { values: { 'chat.enabled': true } },
-  })
-  const chatEnabled = enabledRes.settings.find((s: any) => s.key === 'chat.enabled')
-  assert.equal(chatEnabled.value, true)
-  assert.equal(chatEnabled.is_default, false)
-  assert.ok(chatEnabled.updated_at)
+    const enabledRes = await resolveOfflineDemoRequest('/settings', {
+      method: 'PUT',
+      actingUserId: chairmanId,
+      body: { values: { 'chat.enabled': true } },
+    })
+    const chatEnabled = enabledRes.settings.find((s: any) => s.key === 'chat.enabled')
+    assert.equal(chatEnabled.value, true)
+    assert.equal(chatEnabled.is_default, false)
+    assert.ok(chatEnabled.updated_at)
 
-  const resetRes = await resolveOfflineDemoRequest('/settings', {
-    method: 'PUT',
-    actingUserId: chairmanId,
-    body: { values: { 'chat.enabled': null } },
-  })
-  const chatReset = resetRes.settings.find((s: any) => s.key === 'chat.enabled')
-  assert.equal(chatReset.value, false)
-  assert.equal(chatReset.is_default, true)
-  assert.equal(chatReset.updated_at, null)
+    const resetRes = await resolveOfflineDemoRequest('/settings', {
+      method: 'PUT',
+      actingUserId: chairmanId,
+      body: { values: { 'chat.enabled': null } },
+    })
+    const chatReset = resetRes.settings.find((s: any) => s.key === 'chat.enabled')
+    assert.equal(chatReset.value, false)
+    assert.equal(chatReset.is_default, true)
+    assert.equal(chatReset.updated_at, null)
 
-  await assert.rejects(
-    () =>
-      resolveOfflineDemoRequest('/settings', {
-        method: 'PUT',
-        actingUserId: chairmanId,
-        body: { values: { 'chat.enabled': 'yes' } },
-      }),
-    (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
-  )
-
-  disableOfflineDemo()
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/settings', {
+          method: 'PUT',
+          actingUserId: chairmanId,
+          body: { values: { 'chat.enabled': 'yes' } },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+    )
+  } finally {
+    disableOfflineDemo()
+  }
 })
 
 test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate limit, and expiry', async (t) => {
-  enableOfflineDemo()
+  const t0 = Date.parse('2026-11-15T14:00:00Z')
+  t.mock.timers.enable({ apis: ['Date'] })
+  t.mock.timers.setTime(t0)
+
   const chairmanId = '018f0000-0000-7000-8000-000000000101'
   const boardId = '018f0000-0000-7000-8000-000000000105'
   const residentId = '018f0000-0000-7000-8000-000000000102'
   const accountantId = '018f0000-0000-7000-8000-000000000103'
 
   try {
+    enableOfflineDemo()
+
     const offState = await resolveOfflineDemoRequest('/chat', {
       method: 'GET',
       actingUserId: residentId,
@@ -3305,10 +3322,6 @@ test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate lim
       body: { values: { 'chat.enabled': true } },
     })
 
-    const t0 = Date.parse('2026-11-15T14:00:00Z')
-    t.mock.timers.enable({ apis: ['Date'] })
-    t.mock.timers.setTime(t0)
-
     const posted = await resolveOfflineDemoRequest('/chat/messages', {
       method: 'POST',
       actingUserId: residentId,
@@ -3339,6 +3352,7 @@ test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate lim
     })
     assert.equal(stateActive.enabled, true)
     assert.equal(stateActive.recent_count, 1)
+    const firstTurnedOnAt = stateActive.turned_on_at
 
     const boardPage = await resolveOfflineDemoRequest('/chat/messages', {
       method: 'GET',
@@ -3368,12 +3382,32 @@ test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate lim
         err?.payload?.retry_after_seconds >= 1,
     )
 
-    // Turn off clears messages
+    // 2-hour expiry removes old messages from GET /chat & GET /chat/messages
+    t.mock.timers.setTime(t0 + 2 * 60 * 60 * 1000 + 1000)
+    const stateAfterExpiry = await resolveOfflineDemoRequest('/chat', {
+      method: 'GET',
+      actingUserId: boardId,
+    })
+    assert.equal(stateAfterExpiry.recent_count, 0)
+    assert.equal(stateAfterExpiry.last_message_at, null)
+    const pageAfterExpiry = await resolveOfflineDemoRequest('/chat/messages', {
+      method: 'GET',
+      actingUserId: residentId,
+    })
+    assert.equal(pageAfterExpiry.messages.length, 0)
+
+    // Post fresh message, then turn off + back on wipes messages and rotates turned_on_at
+    await resolveOfflineDemoRequest('/chat/messages', {
+      method: 'POST',
+      actingUserId: boardId,
+      body: { body: 'Before turn off' },
+    })
     await resolveOfflineDemoRequest('/settings', {
       method: 'PUT',
       actingUserId: chairmanId,
       body: { values: { 'chat.enabled': false } },
     })
+    t.mock.timers.setTime(t0 + 2 * 60 * 60 * 1000 + 5000)
     await resolveOfflineDemoRequest('/settings', {
       method: 'PUT',
       actingUserId: chairmanId,
@@ -3384,6 +3418,7 @@ test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate lim
       actingUserId: residentId,
     })
     assert.equal(emptyAfterReset.messages.length, 0)
+    assert.notEqual(emptyAfterReset.turned_on_at, firstTurnedOnAt)
 
     // 422 on control char and whitespace-only body
     await assert.rejects(
@@ -3406,7 +3441,7 @@ test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate lim
     )
 
     // 60/hour limit + has_more pagination with ?after & ?limit=1
-    let offlineNow = Date.parse('2026-11-15T18:00:00Z')
+    let offlineNow = t0 + 4 * 60 * 60 * 1000
     const postedIds: number[] = []
     for (let batch = 0; batch < 6; batch += 1) {
       t.mock.timers.setTime(offlineNow + batch * 70_000)
@@ -3440,12 +3475,290 @@ test('offlineDemoData supports #033 building chat, settings wipe, RBAC, rate lim
     assert.equal(paged.messages.length, 1)
     assert.equal(paged.messages[0].id, postedIds[1])
   } finally {
+    t.mock.timers.reset()
     disableOfflineDemo()
   }
 })
 
+test('offline GET /property/building returns accepted invented ee/1 registry_facts (#034)', async () => {
+  enableOfflineDemo()
+  try {
+    const building = await resolveOfflineDemoRequest('/property/building', {
+      method: 'GET',
+      actingUserId: '018f0000-0000-7000-8000-000000000102',
+    })
+    assert.equal(building.country_code, 'EE')
+    assert.ok(building.registry_facts)
+    assert.equal(building.registry_facts.country_code, 'EE')
+    assert.equal(building.registry_facts.schema, 'ee/1')
+    assert.equal(building.registry_facts.source.attribution, 'Ehitisregister')
+    assert.equal(typeof building.registry_facts.building.closed_net_area_m2, 'string')
+    assert.ok(building.registry_facts.units.length > 0)
+  } finally {
+    disableOfflineDemo()
+  }
+})
 
+test('offline building register CRUD, validation, RBAC, and GET /property/building sync (#035)', async () => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+  const accountantId = '018f0000-0000-7000-8000-000000000103'
+  const boardId = '018f0000-0000-7000-8000-000000000105'
+  try {
+    // USER and ACCOUNTANT cannot read or mutate registry on any of the 5 endpoints
+    for (const deniedUser of [residentId, accountantId]) {
+      for (const [path, method, body] of [
+        ['/property/building/registry', 'GET', undefined],
+        ['/property/building/registry/search', 'POST', {}],
+        ['/property/building/registry/proposal', 'POST', { code: '100000002' }],
+        ['/property/building/registry/accept', 'POST', undefined],
+        ['/property/building/registry', 'DELETE', undefined],
+      ] as const) {
+        await assert.rejects(
+          () =>
+            resolveOfflineDemoRequest(path, {
+              method,
+              actingUserId: deniedUser,
+              body,
+            }),
+          (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+        )
+      }
+    }
 
+    // BOARD can GET state, forbidden on search/proposal/accept/delete
+    const boardState = await resolveOfflineDemoRequest('/property/building/registry', {
+      method: 'GET',
+      actingUserId: boardId,
+    })
+    assert.equal(boardState.accepted?.source?.building_code, '100000001')
+    assert.equal(boardState.proposal, null)
 
+    for (const [path, method, body] of [
+      ['/property/building/registry/search', 'POST', {}],
+      ['/property/building/registry/proposal', 'POST', { code: '100000002' }],
+      ['/property/building/registry/accept', 'POST', {}],
+      ['/property/building/registry', 'DELETE', undefined],
+    ] as const) {
+      await assert.rejects(
+        () =>
+          resolveOfflineDemoRequest(path, {
+            method,
+            actingUserId: boardId,
+            body,
+          }),
+        (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+      )
+    }
 
+    // CHAIRMAN accept without proposal -> 409 NO_REGISTRY_PROPOSAL
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/property/building/registry/accept', {
+          method: 'POST',
+          actingUserId: chairmanId,
+        }),
+      (err: any) => err?.status === 409 && err?.errorCode === 'NO_REGISTRY_PROPOSAL',
+    )
 
+    // Search with {} returns up to 10 candidates
+    const defaultSearch = await resolveOfflineDemoRequest('/property/building/registry/search', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: {},
+    })
+    assert.ok(Array.isArray(defaultSearch.candidates) && defaultSearch.candidates.length >= 2)
+    assert.ok(defaultSearch.candidates.length <= 10)
+
+    // Search with unmatched query returns empty array; short query returns 422 VALIDATION_ERROR
+    const emptySearch = await resolveOfflineDemoRequest('/property/building/registry/search', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: { query: 'Nonexistent 999' },
+    })
+    assert.deepEqual(emptySearch.candidates, [])
+
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/property/building/registry/search', {
+          method: 'POST',
+          actingUserId: chairmanId,
+          body: { query: 'ab' },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+    )
+
+    // Proposal for bad code -> 422 VALIDATION_ERROR; unknown code -> 404 REGISTRY_BUILDING_NOT_FOUND
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/property/building/registry/proposal', {
+          method: 'POST',
+          actingUserId: chairmanId,
+          body: { code: 'bad' },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/property/building/registry/proposal', {
+          method: 'POST',
+          actingUserId: chairmanId,
+          body: { code: '999999999' },
+        }),
+      (err: any) => err?.status === 404 && err?.errorCode === 'REGISTRY_BUILDING_NOT_FOUND',
+    )
+
+    // Proposal for '100000002' stores proposal without replacing accepted yet
+    const proposed = await resolveOfflineDemoRequest('/property/building/registry/proposal', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: { code: '100000002' },
+    })
+    assert.equal(proposed.accepted?.source?.building_code, '100000001')
+    assert.equal(proposed.proposal?.source?.building_code, '100000002')
+    assert.ok(proposed.proposal_fetched_at)
+
+    // Accept replaces accepted and updates GET /property/building for residents
+    const acceptedState = await resolveOfflineDemoRequest('/property/building/registry/accept', {
+      method: 'POST',
+      actingUserId: chairmanId,
+    })
+    assert.equal(acceptedState.accepted?.source?.building_code, '100000002')
+    assert.equal(acceptedState.proposal, null)
+
+    const updatedBuilding = await resolveOfflineDemoRequest('/property/building', {
+      method: 'GET',
+      actingUserId: residentId,
+    })
+    assert.equal(updatedBuilding.registry_facts?.source?.building_code, '100000002')
+
+    // DELETE clears accepted & proposal, returning null registry_facts to residents
+    const delRes = await resolveOfflineDemoRequest('/property/building/registry', {
+      method: 'DELETE',
+      actingUserId: chairmanId,
+    })
+    assert.equal(delRes, null)
+
+    const clearedBuilding = await resolveOfflineDemoRequest('/property/building', {
+      method: 'GET',
+      actingUserId: residentId,
+    })
+    assert.equal(clearedBuilding.registry_facts, null)
+  } finally {
+    disableOfflineDemo()
+  }
+})
+
+test('offlineDemoData supports #037 energy certificate feed seed, demo-energy unsubscribe, and register daily quota 429', async (t) => {
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+  const boardId = '018f0000-0000-7000-8000-000000000105'
+  const t0 = Date.UTC(2026, 10, 15, 22, 0, 0) // 2026-11-15T22:00:00Z (2h until midnight UTC)
+
+  t.mock.timers.enable({ apis: ['Date'] })
+  t.mock.timers.setTime(t0)
+  enableOfflineDemo()
+
+  try {
+    // 1. Chairman & Board feeds include seeded ENERGY_CERTIFICATE_EXPIRING (subject_type: building)
+    for (const actorId of [chairmanId, boardId]) {
+      const feed = await resolveOfflineDemoRequest('/notifications/feed', {
+        method: 'GET',
+        actingUserId: actorId,
+      })
+      const certNotif = feed.find((n: any) => n.event_type === 'ENERGY_CERTIFICATE_EXPIRING')
+      assert.ok(certNotif)
+      assert.equal(certNotif.subject_type, 'building')
+      assert.equal(certNotif.params.valid_until, '2026-12-15')
+      assert.equal(certNotif.params.days_left, 30)
+      assert.equal(certNotif.params.threshold, 30)
+    }
+
+    // Resident feed does NOT include ENERGY_CERTIFICATE_EXPIRING
+    const residentFeed = await resolveOfflineDemoRequest('/notifications/feed', {
+      method: 'GET',
+      actingUserId: residentId,
+    })
+    assert.equal(
+      residentFeed.some((n: any) => n.event_type === 'ENERGY_CERTIFICATE_EXPIRING'),
+      false,
+    )
+
+    // 2. demo-energy unsubscribe disables ENERGY_CERTIFICATE_EXPIRING email preference
+    const unsubRes = await resolveOfflineDemoRequest('/notifications/unsubscribe?token=demo-energy', {
+      method: 'POST',
+      actingUserId: chairmanId,
+    })
+    assert.deepEqual(unsubRes, {
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      channel: 'email',
+    })
+    const prefsAfterUnsub = await resolveOfflineDemoRequest('/notifications/preferences', {
+      method: 'GET',
+      actingUserId: chairmanId,
+    })
+    const certEmailPref = prefsAfterUnsub.preferences.find(
+      (p: any) => p.event_type === 'ENERGY_CERTIFICATE_EXPIRING' && p.channel === 'email',
+    )
+    assert.equal(certEmailPref?.enabled, false)
+
+    // 3. Consume all 10 daily register calls across search (6) and proposal (4)
+    for (let i = 0; i < 6; i += 1) {
+      const res = await resolveOfflineDemoRequest('/property/building/registry/search', {
+        method: 'POST',
+        actingUserId: chairmanId,
+        body: {},
+      })
+      assert.ok(Array.isArray(res.candidates))
+    }
+    for (let i = 0; i < 4; i += 1) {
+      const res = await resolveOfflineDemoRequest('/property/building/registry/proposal', {
+        method: 'POST',
+        actingUserId: chairmanId,
+        body: { code: '100000002' },
+      })
+      assert.equal(res.proposal?.source?.building_code, '100000002')
+    }
+
+    // 11th call (search & proposal) rejects with 429 RATE_LIMITED (reason: DAILY_LIMIT, retry_after_seconds: 7200)
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/property/building/registry/search', {
+          method: 'POST',
+          actingUserId: chairmanId,
+          body: {},
+        }),
+      (err: any) =>
+        err?.status === 429 &&
+        err?.errorCode === 'RATE_LIMITED' &&
+        err?.payload?.reason === 'DAILY_LIMIT' &&
+        err?.payload?.retry_after_seconds === 7200,
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/property/building/registry/proposal', {
+          method: 'POST',
+          actingUserId: chairmanId,
+          body: { code: '100000002' },
+        }),
+      (err: any) =>
+        err?.status === 429 &&
+        err?.errorCode === 'RATE_LIMITED' &&
+        err?.payload?.reason === 'DAILY_LIMIT' &&
+        err?.payload?.retry_after_seconds === 7200,
+    )
+
+    // Advance clock past UTC midnight -> quota resets
+    t.mock.timers.setTime(t0 + 2 * 3600 * 1000 + 1000)
+    const nextDaySearch = await resolveOfflineDemoRequest('/property/building/registry/search', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: {},
+    })
+    assert.ok(Array.isArray(nextDaySearch.candidates))
+  } finally {
+    t.mock.timers.reset()
+    disableOfflineDemo()
+  }
+})

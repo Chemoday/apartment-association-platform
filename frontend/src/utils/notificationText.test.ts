@@ -282,6 +282,95 @@ test('buildNotificationDescriptor maps all 4 known event types and unknown safel
   )
   assert.equal(storageAlertWarnDesc.variant, 'deadline')
 
+  const certExpiringDesc = buildNotificationDescriptor(
+    {
+      id: 'n20',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-12-15', days_left: 30, threshold: 30 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(certExpiringDesc.key, 'notifications.events.ENERGY_CERTIFICATE_EXPIRING')
+  assert.equal(certExpiringDesc.route, '/building')
+  assert.equal(certExpiringDesc.icon, 'energy_savings_leaf')
+  assert.equal(certExpiringDesc.variant, 'deadline')
+  assert.equal(certExpiringDesc.values.days_left, 30)
+  assert.ok(certExpiringDesc.values.valid_until.includes('2026'))
+
+  const certTodayDesc = buildNotificationDescriptor(
+    {
+      id: 'n21',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-15', days_left: 0, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(certTodayDesc.key, 'notifications.events.ENERGY_CERTIFICATE_EXPIRING_TODAY')
+  assert.equal(certTodayDesc.route, '/building')
+  assert.equal(certTodayDesc.icon, 'warning')
+  assert.equal(certTodayDesc.variant, 'emergency')
+
+  const certExpiredDesc = buildNotificationDescriptor(
+    {
+      id: 'n22',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-10', days_left: -5, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(certExpiredDesc.key, 'notifications.events.ENERGY_CERTIFICATE_EXPIRING_EXPIRED')
+  assert.equal(certExpiredDesc.route, '/building')
+  assert.equal(certExpiredDesc.variant, 'emergency')
+
+  const certMissingParamsDesc = buildNotificationDescriptor(
+    {
+      id: 'n23',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: {},
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    'en',
+  )
+  assert.equal(certMissingParamsDesc.key, 'notifications.events.ENERGY_CERTIFICATE_EXPIRING_GENERIC')
+  assert.equal(certMissingParamsDesc.route, '/building')
+
+  for (const edgeParams of [
+    { valid_until: '2026-12-15', days_left: false },
+    { valid_until: '2026-12-15', days_left: 'abc' },
+    { days_left: 30 },
+    { valid_until: '', days_left: -5 },
+  ]) {
+    const edgeDesc = buildNotificationDescriptor(
+      {
+        id: 'n23-edge',
+        event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+        params: edgeParams,
+        subject_type: 'building',
+        subject_id: 'building-1',
+        created_at: '2026-11-15T08:00:00Z',
+        read_at: null,
+      },
+      'en',
+    )
+    assert.equal(edgeDesc.key, 'notifications.events.ENERGY_CERTIFICATE_EXPIRING_GENERIC')
+    assert.equal(edgeDesc.route, '/building')
+  }
+
   const unknown = buildNotificationDescriptor(
     {
       id: 'n5',
@@ -710,6 +799,149 @@ test('formatNotificationText formats human-readable text in English and Estonian
     storageAlertRu,
     'Файлы товарищества занимают 92% хранилища. Удалите старые документы или попросите оператора сервера увеличить объём.',
   )
+
+  setI18nLocale('en')
+  const certEn30 = formatNotificationText(
+    {
+      id: 'n20',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-12-15', days_left: 30, threshold: 30 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.ok(certEn30.startsWith("The building's energy certificate expires on "))
+  assert.ok(certEn30.includes('2026'))
+  assert.ok(certEn30.includes('(in 30 days)'))
+
+  const certEn0 = formatNotificationText(
+    {
+      id: 'n21',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-15', days_left: 0, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.equal(certEn0, "The building's energy certificate is valid only until today")
+
+  const certEnExpired = formatNotificationText(
+    {
+      id: 'n22',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-10', days_left: -5, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'en',
+  )
+  assert.ok(certEnExpired.startsWith("The building's energy certificate expired on "))
+  assert.ok(certEnExpired.includes('2026'))
+
+  setI18nLocale('et')
+  const certEt30 = formatNotificationText(
+    {
+      id: 'n20',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-12-15', days_left: 30, threshold: 30 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'et',
+  )
+  assert.ok(certEt30.includes('Hoone energiamärgis aegub'))
+  assert.ok(certEt30.includes('(30 päeva pärast)'))
+
+  const certEt0 = formatNotificationText(
+    {
+      id: 'n21',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-15', days_left: 0, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'et',
+  )
+  assert.equal(certEt0, 'Hoone energiamärgis kehtib ainult tänaseni')
+
+  const certEtExpired = formatNotificationText(
+    {
+      id: 'n22',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-10', days_left: -5, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'et',
+  )
+  assert.ok(certEtExpired.startsWith('Hoone energiamärgis aegus '))
+
+  setI18nLocale('ru')
+  const certRu30 = formatNotificationText(
+    {
+      id: 'n20',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-12-15', days_left: 30, threshold: 30 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'ru',
+  )
+  assert.ok(certRu30.includes('Энергосертификат здания истекает'))
+  assert.ok(certRu30.includes('(через 30 дн.)'))
+
+  const certRu0 = formatNotificationText(
+    {
+      id: 'n21',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-15', days_left: 0, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'ru',
+  )
+  assert.equal(certRu0, 'Энергосертификат здания действует только до сегодняшнего дня')
+
+  const certRuExpired = formatNotificationText(
+    {
+      id: 'n22',
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      params: { valid_until: '2026-11-10', days_left: -5, threshold: 0 },
+      subject_type: 'building',
+      subject_id: 'building-1',
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    },
+    translate,
+    'ru',
+  )
+  assert.ok(certRuExpired.startsWith('Срок действия энергосертификата здания истёк '))
 
   setI18nLocale('en')
 })

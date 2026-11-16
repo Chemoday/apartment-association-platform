@@ -1,4 +1,4 @@
-import { formatDate, formatPeriodLabel, formatShortDate } from './dates.js'
+import { formatCalendarDate, formatDate, formatPeriodLabel, formatShortDate } from './dates.js'
 
 /**
  * Maps a NotificationView item to a translation key, interpolation parameters, icon, visual variant, and target route.
@@ -225,6 +225,41 @@ export function buildNotificationDescriptor(item, lang = 'en') {
       icon: 'hard_drive',
       variant: threshold >= 90 ? 'emergency' : 'deadline',
       route: '/settings/association#storage',
+    }
+  }
+
+  if (eventType === 'ENERGY_CERTIFICATE_EXPIRING') {
+    const rawValidUntil = typeof params.valid_until === 'string' ? params.valid_until.trim() : ''
+    const validUntil = rawValidUntil ? formatCalendarDate(rawValidUntil, lang) : '-'
+    const hasValidUntil = Boolean(rawValidUntil) && validUntil !== '-'
+    const parsedDays =
+      typeof params.days_left !== 'boolean' &&
+      params.days_left !== undefined &&
+      params.days_left !== null &&
+      params.days_left !== ''
+        ? Number(params.days_left)
+        : NaN
+    const hasDays = Number.isFinite(parsedDays)
+    const daysLeft = hasDays ? Math.trunc(parsedDays) : null
+    let key = 'notifications.events.ENERGY_CERTIFICATE_EXPIRING_GENERIC'
+    if (daysLeft !== null) {
+      if (daysLeft === 0) {
+        key = 'notifications.events.ENERGY_CERTIFICATE_EXPIRING_TODAY'
+      } else if (hasValidUntil && daysLeft > 0) {
+        key = 'notifications.events.ENERGY_CERTIFICATE_EXPIRING'
+      } else if (hasValidUntil && daysLeft < 0) {
+        key = 'notifications.events.ENERGY_CERTIFICATE_EXPIRING_EXPIRED'
+      }
+    }
+    return {
+      key,
+      values: {
+        valid_until: validUntil,
+        days_left: daysLeft ?? 0,
+      },
+      icon: daysLeft !== null && daysLeft <= 0 ? 'warning' : 'energy_savings_leaf',
+      variant: daysLeft !== null && daysLeft <= 0 ? 'emergency' : 'deadline',
+      route: '/building',
     }
   }
 
