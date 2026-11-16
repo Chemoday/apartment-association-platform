@@ -50,6 +50,9 @@ export const useSessionStore = defineStore('session', () => {
   const building = ref(null)
   const meLoading = ref(false)
   const meError = ref(null)
+  const buildingLoading = ref(false)
+  const buildingError = ref(null)
+  let buildingSeq = 0
 
   const selectedApartmentId = ref('')
   const lang = ref(setI18nLocale(readStoredLocale()))
@@ -125,6 +128,7 @@ export const useSessionStore = defineStore('session', () => {
       building.value?.total_area_m2 ??
       '329.20',
   )
+  const buildingRegistryFacts = computed(() => building.value?.registry_facts ?? null)
 
   function setLang(newLang) {
     const valid = setI18nLocale(newLang)
@@ -200,23 +204,46 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  async function loadBuilding() {
+    const seq = ++buildingSeq
+    if (!signedIn.value && !activeDemoUserId.value) {
+      building.value = null
+      buildingError.value = null
+      buildingLoading.value = false
+      return null
+    }
+    buildingLoading.value = true
+    buildingError.value = null
+    try {
+      const buildingData = await getBuilding()
+      if (seq !== buildingSeq) return null
+      building.value = buildingData || null
+      return building.value
+    } catch (error) {
+      if (seq !== buildingSeq) return null
+      building.value = null
+      buildingError.value = error
+      return null
+    } finally {
+      if (seq === buildingSeq) {
+        buildingLoading.value = false
+      }
+    }
+  }
+
   async function loadMe() {
     if (!signedIn.value && !activeDemoUserId.value) {
       me.value = null
       building.value = null
+      buildingError.value = null
+      ++buildingSeq
       return null
     }
     meLoading.value = true
     meError.value = null
     try {
-      const [meData, buildingData] = await Promise.all([
-        getMe(),
-        getBuilding().catch(() => null),
-      ])
+      const [meData] = await Promise.all([getMe(), loadBuilding()])
       me.value = meData
-      if (buildingData) {
-        building.value = buildingData
-      }
       if (meData.memberships?.length) {
         const stillValid = meData.memberships.some(
           (m) => m.apartment_id === selectedApartmentId.value,
@@ -355,6 +382,9 @@ export const useSessionStore = defineStore('session', () => {
     setDemoUser('')
     me.value = null
     building.value = null
+    buildingError.value = null
+    buildingLoading.value = false
+    ++buildingSeq
     selectedApartmentId.value = ''
     sessionRevision.value += 1
   }
@@ -364,6 +394,9 @@ export const useSessionStore = defineStore('session', () => {
     setDemoUser('')
     sessionEndedReason.value = ''
     me.value = null
+    building.value = null
+    buildingError.value = null
+    ++buildingSeq
     selectedApartmentId.value = ''
     sessionRevision.value += 1
     await loadMe()
@@ -399,12 +432,18 @@ export const useSessionStore = defineStore('session', () => {
     if (!userId) {
       me.value = null
       building.value = null
+      buildingError.value = null
+      buildingLoading.value = false
+      ++buildingSeq
       selectedApartmentId.value = ''
       setDemoUser('')
       sessionRevision.value += 1
       return
     }
     me.value = null
+    building.value = null
+    buildingError.value = null
+    ++buildingSeq
     selectedApartmentId.value = ''
     setDemoUser(userId)
     sessionRevision.value += 1
@@ -486,8 +525,11 @@ export const useSessionStore = defineStore('session', () => {
     knownBuildingApartmentsCount,
     buildingEntrancesCount,
     buildingHeatedArea,
+    buildingRegistryFacts,
     meLoading,
     meError,
+    buildingLoading,
+    buildingError,
     authMode,
     isSignedIn,
     sessionEndedReason,
@@ -518,6 +560,7 @@ export const useSessionStore = defineStore('session', () => {
     selectApartment,
     loadDemoUsers,
     loadMe,
+    refreshBuilding: loadBuilding,
     initializeSession,
     bootstrap,
     completeSignIn,

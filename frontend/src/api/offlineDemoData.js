@@ -92,6 +92,15 @@ import {
   validateChatLimitParam,
   validateChatMessageInput,
 } from '../utils/chat.js'
+import {
+  createDemoEeBuildingFacts,
+  createDemoEeBuildingFactsForCode,
+  createDemoRegistryCandidates,
+  normalizeRegistrySearchQuery,
+  REGISTRY_CODE_PATTERN,
+  REGISTRY_QUERY_MAX_LENGTH,
+  REGISTRY_QUERY_MIN_LENGTH,
+} from '../utils/buildingPassport.js'
 
 export const isOfflineDemoMode = ref(false)
 
@@ -115,6 +124,49 @@ let offlineChatMessages = []
 let offlineChatNextId = 1
 let offlineChatPostTimestampsByUser = {}
 
+function createInitialOfflineRegistryState() {
+  return {
+    accepted: createDemoEeBuildingFacts('2026-11-15T09:00:00Z'),
+    accepted_at: '2026-11-15T09:05:00Z',
+    proposal: null,
+    proposal_fetched_at: null,
+  }
+}
+
+let offlineRegistryState = createInitialOfflineRegistryState()
+const REGISTRY_CALLS_PER_DAY = 10
+let offlineRegistryDailyCalls = { date: '', count: 0 }
+
+function consumeOfflineRegistryQuota() {
+  const nowMs = Date.now()
+  const todayUtc = new Date(nowMs).toISOString().slice(0, 10)
+  if (offlineRegistryDailyCalls.date !== todayUtc) {
+    offlineRegistryDailyCalls = { date: todayUtc, count: 0 }
+  }
+  if (offlineRegistryDailyCalls.count >= REGISTRY_CALLS_PER_DAY) {
+    const now = new Date(nowMs)
+    const nextMidnightMs = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + 1,
+      0,
+      0,
+      0,
+    )
+    const retryAfterSeconds = Math.max(1, Math.ceil((nextMidnightMs - nowMs) / 1000))
+    throw makeOfflineError(
+      429,
+      'RATE_LIMITED',
+      'Daily building register lookup limit reached.',
+      {
+        reason: 'DAILY_LIMIT',
+        retry_after_seconds: retryAfterSeconds,
+      },
+    )
+  }
+  offlineRegistryDailyCalls.count += 1
+}
+
 export function enableOfflineDemo() {
   isOfflineDemoMode.value = true
   offlineNotificationsByUser = {}
@@ -136,6 +188,8 @@ export function enableOfflineDemo() {
   offlineChatMessages = []
   offlineChatNextId = 1
   offlineChatPostTimestampsByUser = {}
+  offlineRegistryState = createInitialOfflineRegistryState()
+  offlineRegistryDailyCalls = { date: '', count: 0 }
   OFFLINE_POSTS.splice(0, OFFLINE_POSTS.length, ...createDefaultOfflinePosts())
 }
 
@@ -283,6 +337,7 @@ const OFFLINE_BUILDING = {
   name: 'KÜ Sõpruse 12',
   registry_code: '80123456',
   address: 'Sõpruse pst 12, Kristiine, Tallinn',
+  country_code: 'EE',
   district: 'Kristiine',
   apartment_count: 6,
   apartments_count: 6,
@@ -291,6 +346,7 @@ const OFFLINE_BUILDING = {
   entrances_count: 2,
   total_entrances: 2,
   heated_area_m2: '329.20',
+  registry_facts: createDemoEeBuildingFacts(),
 }
 
 const OFFLINE_PERIODS = [
@@ -1125,7 +1181,104 @@ export async function resolveOfflineDemoRequest(
 
   // 3. GET /property/building
   if (pathname === '/property/building' && method === 'GET') {
-    return { ...OFFLINE_BUILDING }
+    const cloned = JSON.parse(JSON.stringify(OFFLINE_BUILDING))
+    cloned.registry_facts = offlineRegistryState.accepted
+      ? JSON.parse(JSON.stringify(offlineRegistryState.accepted))
+      : null
+    return cloned
+  }
+
+  // 3a. Building register endpoints (#035 E12/X1-X2)
+  if (pathname === '/property/building/registry' && method === 'GET') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only chairman and board members can view building register state.')
+    }
+    return JSON.parse(JSON.stringify(offlineRegistryState))
+  }
+
+  if (pathname === '/property/building/registry/search' && method === 'POST') {
+    if (user.building_role !== 'CHAIRMAN') {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only chairman can search the building register.')
+    }
+    let normalizedQuery = ''
+    if (body && body.query !== undefined && body.query !== null) {
+      if (typeof body.query !== 'string') {
+        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Search query must be a string or null.')
+      }
+      normalizedQuery = normalizeRegistrySearchQuery(body.query)
+      if (
+        normalizedQuery.length < REGISTRY_QUERY_MIN_LENGTH ||
+        normalizedQuery.length > REGISTRY_QUERY_MAX_LENGTH
+      ) {
+        throw makeOfflineError(
+          422,
+          'VALIDATION_ERROR',
+          'Search query must be between 3 and 200 characters.',
+        )
+      }
+    }
+    consumeOfflineRegistryQuota()
+    const searchNeedle = (normalizedQuery || OFFLINE_BUILDING.address).toLowerCase()
+    const allCandidates = createDemoRegistryCandidates()
+    const matched =
+      searchNeedle.includes('sõpruse') ||
+      searchNeedle.includes('sopruse') ||
+      searchNeedle.includes('tallinn') ||
+      searchNeedle.includes('kristiine')
+        ? allCandidates
+        : allCandidates.filter(
+            (c) =>
+              c.address.toLowerCase().includes(searchNeedle) ||
+              c.code.toLowerCase().includes(searchNeedle),
+          )
+    return {
+      candidates: JSON.parse(JSON.stringify(matched.slice(0, 10))),
+    }
+  }
+
+  if (pathname === '/property/building/registry/proposal' && method === 'POST') {
+    if (user.building_role !== 'CHAIRMAN') {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only chairman can fetch a building register proposal.')
+    }
+    const code = typeof body?.code === 'string' ? body.code.trim() : ''
+    if (!REGISTRY_CODE_PATTERN.test(code)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Building register code must be 6–12 digits.')
+    }
+    consumeOfflineRegistryQuota()
+    const nowIso = new Date().toISOString()
+    const nextFacts = createDemoEeBuildingFactsForCode(code, nowIso)
+    if (!nextFacts) {
+      throw makeOfflineError(404, 'REGISTRY_BUILDING_NOT_FOUND', 'Building code not found in register.')
+    }
+    offlineRegistryState.proposal = nextFacts
+    offlineRegistryState.proposal_fetched_at = nowIso
+    return JSON.parse(JSON.stringify(offlineRegistryState))
+  }
+
+  if (pathname === '/property/building/registry/accept' && method === 'POST') {
+    if (user.building_role !== 'CHAIRMAN') {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only chairman can accept a building register proposal.')
+    }
+    if (!offlineRegistryState.proposal) {
+      throw makeOfflineError(409, 'NO_REGISTRY_PROPOSAL', 'No waiting register proposal to accept.')
+    }
+    const nowIso = new Date().toISOString()
+    offlineRegistryState.accepted = JSON.parse(JSON.stringify(offlineRegistryState.proposal))
+    offlineRegistryState.accepted_at = nowIso
+    offlineRegistryState.proposal = null
+    offlineRegistryState.proposal_fetched_at = null
+    return JSON.parse(JSON.stringify(offlineRegistryState))
+  }
+
+  if (pathname === '/property/building/registry' && method === 'DELETE') {
+    if (user.building_role !== 'CHAIRMAN') {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only chairman can remove building register data.')
+    }
+    offlineRegistryState.accepted = null
+    offlineRegistryState.accepted_at = null
+    offlineRegistryState.proposal = null
+    offlineRegistryState.proposal_fetched_at = null
+    return null
   }
 
   // 3b. GET /property/apartments & GET /property/apartments/:id (E8/P1)
@@ -2650,11 +2803,11 @@ export async function resolveOfflineDemoRequest(
     if (method === 'PUT') {
       const reqBody = typeof body === 'string' ? JSON.parse(body || '{}') : body || {}
       const changes = Array.isArray(reqBody.preferences) ? reqBody.preferences : []
-      if (changes.length < 1 || changes.length > 52) {
+      if (changes.length < 1 || changes.length > 56) {
         throw makeOfflineError(
           422,
           'VALIDATION_ERROR',
-          'Provide between 1 and 52 preference changes.',
+          'Provide between 1 and 56 preference changes.',
         )
       }
       for (const chg of changes) {
@@ -2712,11 +2865,13 @@ export async function resolveOfflineDemoRequest(
                 ? 'ISSUE_STATUS_CHANGED'
                 : lower.includes('storage')
                   ? 'STORAGE_ALMOST_FULL'
-                  : lower.includes('board')
-                    ? 'APARTMENT_MESSAGE_TO_BOARD'
-                    : lower.includes('message')
-                      ? 'APARTMENT_MESSAGE'
-                      : 'READING_DEADLINE'
+                  : lower.includes('energy') || lower.includes('certificate')
+                    ? 'ENERGY_CERTIFICATE_EXPIRING'
+                    : lower.includes('board')
+                      ? 'APARTMENT_MESSAGE_TO_BOARD'
+                      : lower.includes('message')
+                        ? 'APARTMENT_MESSAGE'
+                        : 'READING_DEADLINE'
       const prefs = getOfflineUserPreferences(user.user_id)
       const match = prefs.find((p) => p.event_type === eventType && p.channel === 'email')
       if (match && !match.mandatory) {
@@ -5314,6 +5469,7 @@ const OFFLINE_NOTIFICATION_EVENTS = [
   'MAINTENANCE_DUE',
   'NOTICE_PUBLISHED',
   'STORAGE_ALMOST_FULL',
+  'ENERGY_CERTIFICATE_EXPIRING',
 ]
 const OFFLINE_NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
 
@@ -5328,7 +5484,8 @@ function getOfflineUserPreferences(userId) {
           event_type === 'ISSUE_REPORTED' ||
           event_type === 'MAINTENANCE_DUE'
             ? channel === 'in_app'
-            : event_type === 'STORAGE_ALMOST_FULL'
+            : event_type === 'STORAGE_ALMOST_FULL' ||
+                event_type === 'ENERGY_CERTIFICATE_EXPIRING'
               ? channel === 'in_app' || channel === 'email'
               : true
         list.push({
@@ -5458,6 +5615,19 @@ function getOfflineUserNotifications(userId) {
           entrance: 1,
         },
         created_at: '2026-10-25T08:15:00Z',
+        read_at: null,
+      })
+      base.splice(1, 0, {
+        id: '018f0000-0000-7000-8000-000000009111',
+        event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+        subject_type: 'building',
+        subject_id: BUILDING_ID,
+        params: {
+          valid_until: '2026-12-15',
+          days_left: 30,
+          threshold: 30,
+        },
+        created_at: '2026-11-15T08:00:00Z',
         read_at: null,
       })
     } else if (userId !== '018f0000-0000-7000-8000-000000000103') {

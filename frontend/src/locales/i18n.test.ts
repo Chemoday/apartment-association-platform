@@ -317,6 +317,54 @@ test('localizeError translates all #020 and #025 photo error codes and #021 rete
     assert.ok(i18n.global.t('forum.commentBodyTooLong', { max: 4000 }, { locale }).includes('4000'))
     assert.ok(i18n.global.t('forum.charsCounter', { count: 12, max: 255 }, { locale }).includes('12'))
     assert.ok(localizeError('EDIT_WINDOW_CLOSED', {}, locale).includes('24'))
+
+    // #034 Building Passport translations
+    assert.ok(i18n.global.t('nav.building', {}, { locale }).length > 1)
+    assert.ok(i18n.global.t('navDesc.building', {}, { locale }).length > 5)
+    assert.ok(i18n.global.t('buildingPassport.emptyTitle', {}, { locale }).length > 5)
+    assert.ok(i18n.global.t('buildingPassport.sections.energy.empty', {}, { locale }).length > 5)
+    assert.ok(
+      i18n.global
+        .t('buildingPassport.sourceLine', { attribution: 'Ehitisregister', fetchedAt: '2026-11-15' }, { locale })
+        .includes('Ehitisregister'),
+    )
+
+    // #035 & #037 Building Register Chairman workflow error codes & strings
+    for (const regErr of [
+      'REGISTRY_NOT_ENABLED',
+      'REGISTRY_BUILDING_NOT_FOUND',
+      'NO_REGISTRY_PROPOSAL',
+      'REGISTRY_UNAVAILABLE',
+      'REGISTRY_RATE_LIMITED',
+    ]) {
+      const msg = localizeError(regErr, {}, locale)
+      assert.ok(msg.length > 5, `Empty translation for ${locale}.errors.${regErr}`)
+      assert.notEqual(msg, defaultText, `${locale}.errors.${regErr} fell back to DEFAULT`)
+    }
+    assert.notEqual(
+      localizeError('REGISTRY_RATE_LIMITED', {}, locale),
+      localizeError('RATE_LIMITED', { reason: 'DAILY_LIMIT' }, locale),
+      'Register daily quota copy must be distinct from photo upload daily quota copy',
+    )
+    assert.ok(
+      i18n.global
+        .t('notifications.events.ENERGY_CERTIFICATE_EXPIRING', { valid_until: '15 Dec 2026', days_left: 30 }, { locale })
+        .includes('30'),
+    )
+    assert.ok(i18n.global.t('notifications.events.ENERGY_CERTIFICATE_EXPIRING_TODAY', {}, { locale }).length > 5)
+    assert.ok(
+      i18n.global
+        .t('notifications.events.ENERGY_CERTIFICATE_EXPIRING_EXPIRED', { valid_until: '10 Nov 2026' }, { locale })
+        .includes('10 Nov 2026'),
+    )
+    assert.ok(i18n.global.t('notifications.events.ENERGY_CERTIFICATE_EXPIRING_GENERIC', {}, { locale }).length > 5)
+    assert.ok(i18n.global.t('notificationSettings.events.ENERGY_CERTIFICATE_EXPIRING.title', {}, { locale }).length > 3)
+    assert.ok(i18n.global.t('notificationSettings.events.ENERGY_CERTIFICATE_EXPIRING.description', {}, { locale }).length > 5)
+    assert.ok(i18n.global.t('unsubscribe.offByEvent.ENERGY_CERTIFICATE_EXPIRING', {}, { locale }).length > 5)
+    assert.ok(i18n.global.t('associationSettings.registry.title', {}, { locale }).length > 2)
+    assert.ok(i18n.global.t('associationSettings.registry.findBtn', {}, { locale }).length > 2)
+    assert.ok(i18n.global.t('associationSettings.registry.acceptBtn', {}, { locale }).length > 2)
+    assert.ok(i18n.global.t('associationSettings.registry.removeConfirmBody', {}, { locale }).length > 5)
   }
 })
 

@@ -15,6 +15,7 @@ import DashboardQuickActions from './components/DashboardQuickActions.vue'
 import DashboardCommunityPulse from './components/DashboardCommunityPulse.vue'
 import DashboardHouseCalendar from './components/DashboardHouseCalendar.vue'
 import DashboardHouseDirectory from './components/DashboardHouseDirectory.vue'
+import DashboardBuildingCard from './components/DashboardBuildingCard.vue'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
@@ -370,6 +371,9 @@ const quickActionMonthLabel = computed(() =>
 
           <!-- House Directory (Emergency & Key Association Contacts) -->
           <DashboardHouseDirectory />
+
+          <!-- Public Register Building Passport Entry Card (#034; visible when registry_facts is accepted) -->
+          <DashboardBuildingCard />
 
           <!-- Communal Property Snapshot (Collapsible Building Passport & Architecture) -->
           <div class="bg-surface-container-lowest rounded-xl p-space-md sm:p-space-lg shadow-xs border border-surface-container">

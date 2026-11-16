@@ -12,6 +12,7 @@ export const NOTIFICATION_EVENTS = [
   'MAINTENANCE_DUE',
   'NOTICE_PUBLISHED',
   'STORAGE_ALMOST_FULL',
+  'ENERGY_CERTIFICATE_EXPIRING',
 ]
 
 export const NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
@@ -27,6 +28,7 @@ export const NOTIFICATION_CHANNELS = ['in_app', 'email', 'telegram', 'webpush']
  * - MAINTENANCE_DUE is shown only to CHAIRMAN and BOARD (and ADMIN).
  * - NOTICE_PUBLISHED is shown to everyone with an apartment, and to CHAIRMAN and BOARD (and ADMIN).
  * - STORAGE_ALMOST_FULL is shown only to CHAIRMAN and BOARD (and ADMIN).
+ * - ENERGY_CERTIFICATE_EXPIRING is shown only to CHAIRMAN and BOARD (and ADMIN).
  * @param {string} [buildingRole]
  * @param {boolean} [hasApartment]
  * @returns {import('../api/schema').NotificationEventType[]}
@@ -48,6 +50,7 @@ export function visibleNotificationEvents(buildingRole, hasApartment) {
     if (ev === 'MAINTENANCE_DUE') return isBoardOrChairman
     if (ev === 'NOTICE_PUBLISHED') return isBoardOrChairman || effectiveHasApartment
     if (ev === 'STORAGE_ALMOST_FULL') return isBoardOrChairman
+    if (ev === 'ENERGY_CERTIFICATE_EXPIRING') return isBoardOrChairman
     return true
   })
 }

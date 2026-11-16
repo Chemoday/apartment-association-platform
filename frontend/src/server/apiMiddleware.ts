@@ -114,6 +114,15 @@ import {
   validateChatLimitParam,
   validateChatMessageInput,
 } from '../utils/chat.js';
+import {
+  createDemoEeBuildingFacts,
+  createDemoEeBuildingFactsForCode,
+  createDemoRegistryCandidates,
+  normalizeRegistrySearchQuery,
+  REGISTRY_CODE_PATTERN,
+  REGISTRY_QUERY_MAX_LENGTH,
+  REGISTRY_QUERY_MIN_LENGTH,
+} from '../utils/buildingPassport.js';
 
 const BUILDING_ID = '018f0000-0000-7000-8000-000000000001';
 
@@ -1221,6 +1230,20 @@ function getInitialNotificationsForUser(userId: string): MockNotification[] {
       created_at: '2026-10-25T08:15:00Z',
       read_at: null,
     });
+    base.splice(1, 0, {
+      id: `018f0000-0000-7000-8000-000000009111`,
+      user_id: userId,
+      event_type: 'ENERGY_CERTIFICATE_EXPIRING',
+      subject_type: 'building',
+      subject_id: BUILDING_ID,
+      params: {
+        valid_until: '2026-12-15',
+        days_left: 30,
+        threshold: 30,
+      },
+      created_at: '2026-11-15T08:00:00Z',
+      read_at: null,
+    });
   } else if (userId !== '018f0000-0000-7000-8000-000000000103') {
     base.splice(1, 0, {
       id: `018f0000-0000-7000-8000-000000009108`,
@@ -1270,6 +1293,7 @@ const EVENT_TYPES: Array<MockPreference['event_type']> = [
   'MAINTENANCE_DUE',
   'NOTICE_PUBLISHED',
   'STORAGE_ALMOST_FULL',
+  'ENERGY_CERTIFICATE_EXPIRING',
 ];
 const CHANNELS: Array<'in_app' | 'email' | 'telegram' | 'webpush'> = [
   'in_app',
@@ -1291,7 +1315,7 @@ function getUserPreferences(userId: string): MockPreference[] {
           ev === 'ISSUE_REPORTED' ||
           ev === 'MAINTENANCE_DUE'
             ? ch === 'in_app'
-            : ev === 'STORAGE_ALMOST_FULL'
+            : ev === 'STORAGE_ALMOST_FULL' || ev === 'ENERGY_CERTIFICATE_EXPIRING'
               ? ch === 'in_app' || ch === 'email'
               : true;
         list.push({
@@ -3402,7 +3426,7 @@ export function createApiMiddleware() {
       return sendJson(res, 200, { locale: nextLocale });
     }
 
-    // 2b. GET /api/v1/property/building (Added in PR #31)
+    // 2b. GET /api/v1/property/building (Added in PR #31, updated #034/#035)
     if (pathname === '/api/v1/property/building' && method === 'GET') {
       return sendJson(res, 200, {
         building_id: BUILDING_ID,
@@ -3419,7 +3443,131 @@ export function createApiMiddleware() {
         entrances_count: 2,
         total_entrances: 2,
         heated_area_m2: '329.20',
+        registry_facts: buildingRegistryState.accepted
+          ? JSON.parse(JSON.stringify(buildingRegistryState.accepted))
+          : null,
       });
+    }
+
+    // 2b-reg. Building register endpoints (#035 E12/X1-X2)
+    if (pathname === '/api/v1/property/building/registry' && method === 'GET') {
+      if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+        return sendError(res, 403, 'FORBIDDEN', 'Only chairman and board members can view building register state.');
+      }
+      return sendJson(res, 200, JSON.parse(JSON.stringify(buildingRegistryState)));
+    }
+
+    if (pathname === '/api/v1/property/building/registry/search' && method === 'POST') {
+      if (user.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Only chairman can search the building register.');
+      }
+      const body = await readBody(req);
+      let normalizedQuery = '';
+      if (body && body.query !== undefined && body.query !== null) {
+        if (typeof body.query !== 'string') {
+          return sendError(res, 422, 'VALIDATION_ERROR', 'Search query must be a string or null.');
+        }
+        normalizedQuery = normalizeRegistrySearchQuery(body.query);
+        if (
+          normalizedQuery.length < REGISTRY_QUERY_MIN_LENGTH ||
+          normalizedQuery.length > REGISTRY_QUERY_MAX_LENGTH
+        ) {
+          return sendError(
+            res,
+            422,
+            'VALIDATION_ERROR',
+            'Search query must be between 3 and 200 characters.',
+          );
+        }
+      }
+      const quotaErr = checkAndConsumeRegistryQuota();
+      if (quotaErr) {
+        return sendError(
+          res,
+          429,
+          'RATE_LIMITED',
+          'Daily building register lookup limit reached.',
+          {
+            reason: 'DAILY_LIMIT',
+            retry_after_seconds: quotaErr.retry_after_seconds,
+          },
+        );
+      }
+      const searchNeedle = (normalizedQuery || 'Sõpruse pst 12, Kristiine, Tallinn').toLowerCase();
+      const allCandidates = createDemoRegistryCandidates();
+      const matched =
+        searchNeedle.includes('sõpruse') ||
+        searchNeedle.includes('sopruse') ||
+        searchNeedle.includes('tallinn') ||
+        searchNeedle.includes('kristiine')
+          ? allCandidates
+          : allCandidates.filter(
+              (c) =>
+                c.address.toLowerCase().includes(searchNeedle) ||
+                c.code.toLowerCase().includes(searchNeedle),
+            );
+      return sendJson(res, 200, {
+        candidates: JSON.parse(JSON.stringify(matched.slice(0, 10))),
+      });
+    }
+
+    if (pathname === '/api/v1/property/building/registry/proposal' && method === 'POST') {
+      if (user.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Only chairman can fetch a building register proposal.');
+      }
+      const body = await readBody(req);
+      const code = typeof body?.code === 'string' ? body.code.trim() : '';
+      if (!REGISTRY_CODE_PATTERN.test(code)) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Building register code must be 6–12 digits.');
+      }
+      const quotaErr = checkAndConsumeRegistryQuota();
+      if (quotaErr) {
+        return sendError(
+          res,
+          429,
+          'RATE_LIMITED',
+          'Daily building register lookup limit reached.',
+          {
+            reason: 'DAILY_LIMIT',
+            retry_after_seconds: quotaErr.retry_after_seconds,
+          },
+        );
+      }
+      const nowIso = new Date().toISOString();
+      const nextFacts = createDemoEeBuildingFactsForCode(code, nowIso);
+      if (!nextFacts) {
+        return sendError(res, 404, 'REGISTRY_BUILDING_NOT_FOUND', 'Building code not found in register.');
+      }
+      buildingRegistryState.proposal = nextFacts;
+      buildingRegistryState.proposal_fetched_at = nowIso;
+      return sendJson(res, 200, JSON.parse(JSON.stringify(buildingRegistryState)));
+    }
+
+    if (pathname === '/api/v1/property/building/registry/accept' && method === 'POST') {
+      if (user.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Only chairman can accept a building register proposal.');
+      }
+      if (!buildingRegistryState.proposal) {
+        return sendError(res, 409, 'NO_REGISTRY_PROPOSAL', 'No waiting register proposal to accept.');
+      }
+      const nowIso = new Date().toISOString();
+      buildingRegistryState.accepted = JSON.parse(JSON.stringify(buildingRegistryState.proposal));
+      buildingRegistryState.accepted_at = nowIso;
+      buildingRegistryState.proposal = null;
+      buildingRegistryState.proposal_fetched_at = null;
+      return sendJson(res, 200, JSON.parse(JSON.stringify(buildingRegistryState)));
+    }
+
+    if (pathname === '/api/v1/property/building/registry' && method === 'DELETE') {
+      if (user.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Only chairman can remove building register data.');
+      }
+      buildingRegistryState.accepted = null;
+      buildingRegistryState.accepted_at = null;
+      buildingRegistryState.proposal = null;
+      buildingRegistryState.proposal_fetched_at = null;
+      res.statusCode = 204;
+      return res.end();
     }
 
     // 2c. GET /api/v1/property/apartments & GET /api/v1/property/apartments/{apartment_id} (E8/P1)
@@ -6321,12 +6469,12 @@ export function createApiMiddleware() {
     if (pathname === '/api/v1/notifications/preferences' && method === 'PUT') {
       const body = await readBody(req);
       const changes = Array.isArray(body.preferences) ? body.preferences : [];
-      if (changes.length < 1 || changes.length > 52) {
+      if (changes.length < 1 || changes.length > 56) {
         return sendError(
           res,
           422,
           'VALIDATION_ERROR',
-          'Provide between 1 and 52 preference changes.'
+          'Provide between 1 and 56 preference changes.'
         );
       }
       const prefs = getUserPreferences(user.user_id);
@@ -6412,11 +6560,13 @@ export function createApiMiddleware() {
                   ? 'ISSUE_STATUS_CHANGED'
                   : lower.includes('storage')
                     ? 'STORAGE_ALMOST_FULL'
-                    : lower.includes('board')
-                      ? 'APARTMENT_MESSAGE_TO_BOARD'
-                      : lower.includes('message')
-                        ? 'APARTMENT_MESSAGE'
-                        : 'READING_DEADLINE';
+                    : lower.includes('energy') || lower.includes('certificate')
+                      ? 'ENERGY_CERTIFICATE_EXPIRING'
+                      : lower.includes('board')
+                        ? 'APARTMENT_MESSAGE_TO_BOARD'
+                        : lower.includes('message')
+                          ? 'APARTMENT_MESSAGE'
+                          : 'READING_DEADLINE';
         const prefs = getUserPreferences(user.user_id);
         const match = prefs.find((p) => p.event_type === eventType && p.channel === 'email');
         if (match && !match.mandatory) {
@@ -8059,6 +8209,43 @@ let chatMessagesStore: any[] = [];
 let chatNextId = 1;
 let chatPostTimestampsByUser: Record<string, number[]> = {};
 
+function createInitialServerRegistryState() {
+  return {
+    accepted: createDemoEeBuildingFacts('2026-11-15T09:00:00Z') as ReturnType<typeof createDemoEeBuildingFacts> | null,
+    accepted_at: '2026-11-15T09:05:00Z' as string | null,
+    proposal: null as ReturnType<typeof createDemoEeBuildingFacts> | null,
+    proposal_fetched_at: null as string | null,
+  };
+}
+
+let buildingRegistryState = createInitialServerRegistryState();
+const REGISTRY_CALLS_PER_DAY = 10;
+let registryDailyCalls = { date: '', count: 0 };
+
+function checkAndConsumeRegistryQuota(): { retry_after_seconds: number } | null {
+  const nowMs = Date.now();
+  const todayUtc = new Date(nowMs).toISOString().slice(0, 10);
+  if (registryDailyCalls.date !== todayUtc) {
+    registryDailyCalls = { date: todayUtc, count: 0 };
+  }
+  if (registryDailyCalls.count >= REGISTRY_CALLS_PER_DAY) {
+    const now = new Date(nowMs);
+    const nextMidnightMs = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + 1,
+      0,
+      0,
+      0,
+    );
+    return {
+      retry_after_seconds: Math.max(1, Math.ceil((nextMidnightMs - nowMs) / 1000)),
+    };
+  }
+  registryDailyCalls.count += 1;
+  return null;
+}
+
 export function resetApiMiddlewareStateForTest() {
   postsStore.splice(0, postsStore.length, ...createDefaultServerPosts());
   associationSettingsStore = cloneDefaultAssociationSettings();
@@ -8081,4 +8268,6 @@ export function resetApiMiddlewareStateForTest() {
   chatMessagesStore = [];
   chatNextId = 1;
   chatPostTimestampsByUser = {};
+  buildingRegistryState = createInitialServerRegistryState();
+  registryDailyCalls = { date: '', count: 0 };
 }

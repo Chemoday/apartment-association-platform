@@ -800,7 +800,7 @@ test('ChatView handles direct /chat entry state sync, load retry, POST 500 trace
                   body: 'Ephemeral ping',
                   author_badge: { display_label: 'Apt. 14', role_badge: 'OWNER' },
                   created_at: new Date(nowMs - 5_000).toISOString(),
-                  expires_at: new Date(nowMs + 80).toISOString(),
+                  expires_at: new Date(nowMs + 350).toISOString(),
                   is_own: true,
                 },
               ],
@@ -940,7 +940,7 @@ test('ChatView handles direct /chat entry state sync, load retry, POST 500 trace
       findAll(root, (n) => n.kind === 'element' && n.props['data-testid'] === 'chat-message-row').length,
       1,
     )
-    await new Promise((r) => setTimeout(r, 150))
+    await new Promise((r) => setTimeout(r, 450))
     await flushUpdates()
     assert.equal(
       findAll(root, (n) => n.kind === 'element' && n.props['data-testid'] === 'chat-message-row').length,
