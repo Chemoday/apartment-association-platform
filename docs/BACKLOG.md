@@ -312,7 +312,7 @@ notifications only, and the external channels are verified by automated tests.
 ## B-8. Installer and e-mail for self-hosting
 
 - **Status:** open, design notes. Related to B-7 (real login). Raised 2026-10-31. The installer
-  is task R5 of epic E13 ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md), the simple install
+  is task R5a of epic E13 ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md), the simple install
   on a clean VPS); e-mail by audience is in its section 6 (owner, 2026-11-18).
 
 ### Installer

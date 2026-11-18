@@ -97,7 +97,7 @@ the backend. Secrets stay in `/opt/aap/<env>/.env`.
   environment runs without demo mode and without the seed. The local `docker-compose.yml` stays a
   demo out of the box (`INSTANCE_ID` `local`).
 - **`ENVIRONMENT`** is the name of the environment (`dev`, `prod`), set by `deploy.sh`. A demo on
-  an association's own VPS (the installer of task R5) runs as `prod`, like the public demo on
+  an association's own VPS (the installer of task R5a) runs as `prod`, like the public demo on
   prod: uploads (`FILES_IN_DEMO`) and sign-in mail in demo mode (`AUTH_MAIL_IN_DEMO`) are allowed
   only for `ENVIRONMENT` local, dev or test, so in such a demo they stay off.
 - **The seed:** at startup, after the migrations and the marker check, `entrypoint.sh` runs
