@@ -284,6 +284,100 @@ seconds. Then add a line to `deploy/HOST_CHANGELOG.md`.
   (pushes and pull requests of the Frontend sync workflow must start CI).
 - Environments: `dev`, and `production` restricted to the `main` branch.
 
+## The simple install on an association's own VPS (`install/`)
+
+Epic E13, task R5a (docs/epics/E13_ROLLOUT.md sections 3 and 4). Everything above this section is
+the project's own VPS; this section is the install an association runs on its own server. The
+guide for its administrator is `install/README.md`. The install reuses the deployment of the
+project instead of copying it: one environment named `site`, deployed by `deploy/deploy.sh`.
+
+### What gets downloaded
+- **A commit of `main`, not a version yet** (versions come with R5b): `--ref <full sha>`, by
+  default the head of `main` from the GitHub API. Its image `ghcr.io/<repo>:<sha>` (public, built
+  by CI for every commit of `main`) and its source archive from `codeload.github.com`, of which
+  only `deploy/` and `install/` are kept, in `/opt/aap/releases/<sha>/`. Config and image always
+  come from the same commit, as on the project's VPS.
+
+### The three phases of `install.sh`
+1. **Prepare, without questions:** refuses unless run as root on x86_64 Debian or Ubuntu with the
+   ports 80 and 443 free (or held by this installation's own proxy); installs Docker from
+   Docker's apt repository when it is missing, and `curl`, `openssl`, `flock` when missing;
+   downloads the release and pulls its image.
+2. **The questions** (`install/README.md`), or their flags with `--yes`. The building's address
+   is looked up with `find-building` (docs/API.md section 1) run in the downloaded image, so the
+   installer uses the platform's own register provider.
+3. **Install, unattended:** the layout below, secrets, the edge proxy, a swap file of 2 GB when the
+   server has none and less than 4 GB of memory, the disk check timer, the deploy through
+   `deploy.sh site <sha>` (health check and automatic rollback), then for a real installation
+   `create-building` and `create-chairman --print-link` in the running backend.
+
+### Layout (`/opt/aap`)
+
+| Path | Contents |
+| :--- | :--- |
+| `aap.conf` | `AAP_ROOT`, `REPO`, `IMAGE`, `DISK_BUDGET_GB`, `ENVIRONMENTS=site` |
+| `site/.env` (600) | Secrets: `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `AUTH_HASH_SECRET`, `NOTIFICATIONS_HASH_SECRET` (hex, generated once, never rotated by a re-run) and `SMTP_PASSWORD` in single quotes, which Docker Compose takes literally (so a password may not contain `'`, `\` or a line break) |
+| `site/settings.env` (644) | The answers and the backend settings, no secrets (below) |
+| `site/files/` | Uploaded files, owned by uid 1000, mode 700 |
+| `site/current_sha`, `previous_sha`, `history` | Deploy state, as on the project's VPS |
+| `releases/<sha>/deploy/`, `releases/<sha>/install/` | The current and the previous release |
+| `edge/` | The edge proxy: `deploy/edge/docker-compose.yml`, `caddy/Caddyfile` from `install/Caddyfile`, `caddy/environment.caddy`, `.env` (`SITE_HOST`, `HTTPS_PORT=443`, `TLS_MODE`) |
+| `bin/` | `install.sh`, `update.sh`, `uninstall.sh` (from the current release), `aap-disk-check` |
+| `install.log` | One line per step of every install and update (below) |
+
+`site/settings.env` (every value shell-quoted, read by `deploy.sh` with `source`) holds:
+`SITE_HOST`, `SITE_MODE` (`demo` or `real`; not `MODE`, which `deploy.sh` uses itself),
+`PUBLIC_IP`, `INSTANCE_ID` (a random UUID, written once), `TLS_MODE`, `ENVIRONMENT=prod`,
+`DEMO_MODE_ENABLED` and `SEED_DEMO_DATA` (both `true` in a demo, both `false` otherwise),
+`FILES_IN_DEMO=false`, `ENABLED_PLUGINS` (`common.csv_export`, plus
+`countries.ee.building_registry` for a building in Estonia, plus `common.email_smtp` with SMTP),
+`PUBLIC_BASE_URL=https://<SITE_HOST>`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM`,
+`SMTP_TLS` (`starttls`, or `tls` on 465), `COUNTRY`.
+
+### Shared with the project's deployment
+- **`deploy/deploy.sh`:** the settings of an environment come from `$ENV_DIR/settings.env` when
+  that file exists, otherwise from the release's `environments/<env>.env` (dev and prod). The deploy
+  compose file passes `ENVIRONMENT` (default: the environment's name), `PUBLIC_BASE_URL`, the
+  `SMTP_*` settings and `NOTIFICATIONS_HASH_SECRET` on, all empty unless set.
+- **`deploy/cleanup.sh`** keeps the releases of the environments in `ENVIRONMENTS` of `aap.conf`
+  (default `dev prod`).
+- **The edge proxy:** the `(environment)` snippet (upload limits, timeouts) moves to
+  `deploy/edge/environment.caddy`, imported by `deploy/edge/Caddyfile` and by
+  `install/Caddyfile`; the edge compose file takes `SITE_HOST` besides `PROD_HOST` and `DEV_HOST`,
+  none of them required by the compose file (each Caddyfile is validated before it is used).
+  `TLS_MODE=internal` (the flag `--tls-internal`) makes Caddy use its own certificate authority,
+  only for tests in containers that the internet cannot reach; it is kept on every re-run and
+  update, and only `uninstall.sh --delete-data` leaves it.
+- **The disk check** `deploy/host/aap-disk-check.*`, with `DISK_BUDGET_GB=15`.
+
+### Running it again, updates and refusals
+- **A re-run** reads `site/settings.env` as the defaults of the questions, keeps every secret,
+  the `INSTANCE_ID` and the data, writes the new settings and deploys the same commit again (or
+  `--ref`). The building is created only until it exists (`site/.building-done`); the chairman
+  is invited on the first run and again only with `--invite-chairman` or a yes to that question
+  (`site/.chairman-invited`), never because `--chairman-email` is repeated.
+- **Demo and real never switch on the same data:** before writing anything, the installer refuses
+  an answer that differs from the previous `SITE_MODE` while the database volume exists, and points to
+  `install/uninstall.sh --delete-data`, which starts over. Should the settings and the data still
+  disagree, the backend's own marker check refuses to start (`DEMO_ON_REAL_DATA`,
+  `REAL_ON_DEMO_DATA`) and `deploy.sh` rolls back.
+- **`update.sh <sha>`** moves forward only (a failed deploy rolls back by itself through
+  `deploy.sh`; a commit older than the install has no installer and is refused). It downloads
+  that commit's release like phase 1 and runs that release's own
+  `install.sh --yes --ref <sha>`: a re-run without questions, which keeps the answers, the public
+  IP found before and an unchanged hostname without checking DNS again, copies the new scripts
+  to `bin/` and deploys through `deploy.sh site <sha>`.
+- **Refusals** print one line saying what to fix and exit non-zero: not root, not x86_64, not
+  Debian or Ubuntu, a port in use, an own hostname that does not resolve to the server (with
+  `--yes`; interactively the question is asked again), an invalid answer.
+
+### The install log and the screen
+`/opt/aap/install.log` (600) gets one line per step: time, step and outcome, for example
+`2026-11-18T10:00:00Z install deploy ok sha=<sha>`. It never holds a secret, the SMTP password,
+the chairman's e-mail, the chairman's link or the address of the building. The SMTP password is
+read without echo or from `--smtp-password-file`, never from the command line. The chairman's
+link is printed to the terminal once, like `create-chairman --print-link`.
+
 ## Notes
 
 - `DEMO_MODE_ENABLED=true` in both environments (`deploy/environments/<env>.env`), so reviewers
