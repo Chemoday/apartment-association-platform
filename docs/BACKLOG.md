@@ -108,7 +108,8 @@ cannot be deleted.
 ## B-3. Database backups and durable storage
 
 - **Status:** open, not part of the MVP. Target: before the first real association uses the
-  platform. Designed further on 2026-11-12 (below); nothing is set up yet.
+  platform. Designed further on 2026-11-12 (below); nothing is set up yet. Scheduled as task R6
+  of epic E13 ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md)).
 - **Raised:** 2026-10-25.
 
 ### Problem
@@ -217,7 +218,9 @@ what follows.
 ## B-4. A database must belong to exactly one environment
 
 - **Status:** open, not part of the MVP. Related to B-3 (restores and moved data directories are
-  exactly when this goes wrong).
+  exactly when this goes wrong). The installation marker is scheduled as task R1 of epic E13
+  ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md)); one installation per association settles
+  the open point below: an `INSTANCE_ID` is needed, and R1 marks the files directory too.
 - **Raised:** 2026-10-25.
 
 ### Problem
@@ -304,7 +307,9 @@ notifications only, and the external channels are verified by automated tests.
 
 ## B-8. Installer and e-mail for self-hosting
 
-- **Status:** open, design notes. Related to B-7 (real login). Raised 2026-10-31.
+- **Status:** open, design notes. Related to B-7 (real login). Raised 2026-10-31. E-mail waits
+  (owner, 2026-11-18); the installation part is task R5 of epic E13
+  ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md)).
 
 ### Installer
 `deploy/bootstrap.sh` already sets up the user, directories, database secrets and Caddy with HTTPS.
