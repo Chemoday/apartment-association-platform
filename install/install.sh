@@ -715,6 +715,10 @@ invite_chairman() {
     fi
     CHAIRMAN_LINK=$(printf '%s\n' "$output" | sed -n 's/^link: //p' | tail -n 1)
     [[ "$output" == *"invitation e-mail sent"* ]] && CHAIRMAN_MAILED=true
+    if [[ "$output" == *"could not be sent"* ]]; then
+        say "note: the mail server did not take the chairman's e-mail; check the e-mail settings (the link below works anyway)."
+        log_line "chairman mail failed"
+    fi
     touch "$SITE_DIR/.chairman-invited"
     log_line "chairman invited"
 }

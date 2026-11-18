@@ -1759,6 +1759,10 @@ chair@example.com`.
 - **No mail:** when mail cannot go out (no e-mail plugin, or demo mode without
   `AUTH_MAIL_IN_DEMO`), it warns. With `--print-link`, it prints the invitation link to the
   operator's terminal instead, and to nowhere else.
+- **A failed send:** it says `invitation e-mail sent` only when the mail server accepted the
+  e-mail; when the server refuses it or cannot be reached, it warns `the invitation e-mail could not
+  be sent` (the invitation stays valid; `--print-link` shows the link). The exit code is 0 either
+  way, because the invitation exists.
 
 ### Error codes of this section
 | Status | `error_code` |

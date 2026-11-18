@@ -1021,6 +1021,43 @@ async def test_the_first_chairman_command(
     assert row is not None and row.building_role == "CHAIRMAN"
 
 
+async def test_the_first_chairman_command_says_whether_the_mail_went_out(
+    world: World, db_session: AsyncSession, mail_settings: Settings, smtp_server: SmtpServer
+) -> None:
+    """Epic E13 R5a: the installer trusts this output, so a failed send must not say "sent"."""
+    import io
+    import socket
+    from contextlib import asynccontextmanager
+
+    from src.modules.auth.__main__ import create_chairman
+    from src.plugins.registry import build_plugin_registry
+
+    @asynccontextmanager
+    async def factory():
+        yield db_session
+
+    async def run(settings: Settings, email: str) -> str:
+        out = io.StringIO()
+        code = await create_chairman(
+            factory, settings, build_plugin_registry(settings),
+            email=email, force=True, print_link=False, out=out,
+        )  # fmt: skip
+        assert code == 0  # the invitation exists either way
+        return out.getvalue()
+
+    sent_to = unique("chair-sent")
+    assert "invitation e-mail sent" in await run(mail_settings, sent_to)
+    assert links_sent(smtp_server, sent_to)
+
+    with socket.socket() as probe:  # a port where nothing listens
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    unreachable = Settings(**{**mail_settings.model_dump(), "SMTP_PORT": closed_port})
+    output = await run(unreachable, unique("chair-unreachable"))
+    assert "warning: the invitation e-mail could not be sent" in output
+    assert "invitation e-mail sent" not in output
+
+
 async def test_no_e_mail_token_or_name_in_logs_or_spans(
     client: AsyncClient,
     world: World,
