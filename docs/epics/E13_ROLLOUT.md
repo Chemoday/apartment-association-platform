@@ -70,19 +70,49 @@ wants the platform on its own server.
 - **Hostnames stay on Caddy,** not nginx: it obtains and renews certificates itself and already
   holds the upload limits and timeouts.
 
+### The installer (owner, 2026-11-18, while planning R5)
+- **The questions** of section 4 are approved, with the expected form of the address explained
+  on the screen.
+- **The building comes from the register first:** the installer looks up the address in the
+  public building register of the country where a provider exists (Estonia: In-ADS and EHR,
+  epic E12) and proposes the normalised address. When the register cannot be reached or finds
+  nothing, it asks for the address and the registry code by hand. The association's name is always
+  typed, because the building register does not hold it.
+- **Invitations without mail are queued:** while the installation has no working e-mail, the
+  board still invites residents; the invitations wait and go out as soon as SMTP is set, with a
+  fresh link. Nobody sees a link (the login promise of section 6 holds). Part of R4.
+- **SMTP can be set later in two ways:** now by a command on the server (running the installer
+  again, the password stays in the server's environment file), and later in the app's building
+  settings (R9, its own task: a secret in the database needs encryption and its own screen).
+- **The rename of the project's own deployment** is split off from R5 as R5c: the install does not
+  need it, and it rebuilds CD.
+
 ## 4. The simple install
 
-### What "simple" means (the acceptance criteria of R5)
+### What "simple" means (the acceptance criteria of R5a)
 - **One command** as root on a clean Debian or Ubuntu server: download the `install/` archive of
-  a release and run `install.sh`. No git, no clone of the repository, no editing of files.
+  a release and run `install.sh`. No git, no clone of the repository, no editing of files. Until
+  versioned releases exist (R5b), the archive and the image are those of a commit of `main`.
 - **The server is checked first:** the installer stops at once with a clear message on anything
   but an x86_64 (amd64) server, because the image is built for amd64 only; otherwise Docker would
   pull it and fail with an unclear `exec format error`. ARM images wait for a real request
   (owner, 2026-11-18).
-- **At most five questions:** the address (an own domain, or none and then
-  `<ip-with-dashes>.sslip.io`), the chairman's e-mail, demo or a real installation, SMTP (may be
-  skipped), the name of the building. Everything else is automatic: Docker, secrets, Caddy,
-  HTTPS, timers.
+- **At most five questions,** all asked first, then the install runs on its own. Everything
+  else is automatic: Docker, secrets, `INSTANCE_ID`, Caddy, HTTPS, timers.
+  1. **The address of the site.** An own hostname, for example `kyhistu.example.ee` or
+     `example.ee`: only the name, without `https://`, a port or a path. One DNS record (`A`) must
+     point it at this server's public IP, which the installer shows; it checks that the name
+     resolves to that IP and explains what to fix otherwise (certificates fail without it).
+     Enter alone means no own domain: the address becomes `<ip-with-dashes>.sslip.io`.
+  2. **Demo or a real installation.** A demo skips questions 3 to 5: the demo building is seeded
+     and no mail is sent at all.
+  3. **The building:** its address, looked up in the register first (see section 3), the name of
+     the association and, optionally, its registry code. Country `EE` and the reading deadline
+     day 4 are defaults.
+  4. **The chairman's e-mail.**
+  5. **E-mail (SMTP):** host, port, user name, password (read without echo) and the sender address.
+     It may be skipped: the chairman's link is then printed to the terminal only, and invitations
+     wait until SMTP is set (R4).
 - **About 15 minutes** from a clean VPS to the chairman's link in the terminal.
 - **Running it again is safe:** existing secrets and data are kept. Switching from a demo to a
   real installation needs a fresh database (the seed only fills an empty one); the installer
@@ -106,7 +136,7 @@ wants the platform on its own server.
   are reused, not copied.
 - **The project's own deployment** (today `deploy/`) is renamed, for example to
   `deploy/project-vps/`, so that nobody takes it for the public install. The exact names are
-  settled in R5.
+  settled in R5c.
 - **Renaming without breaking CD or rollback:** the ssh gate on the project's VPS checks for
   `deploy/deploy.sh` in a release, extracts only `*/deploy/*` from it and runs that script, and a
   rollback in `deploy.sh` runs the previous release's own script. A plain rename would stop
@@ -116,11 +146,11 @@ wants the platform on its own server.
   it. Shared parts (the Caddy snippet, the health check and rollback) sit where both the gate's
   extraction and the `install/` archive include them.
 - **Versions and the existing state:** today `current_sha`, `previous_sha`, `releases/<sha>` and
-  `deploy/cleanup.sh` know only commit SHAs and only the environments `dev` and `prod`. R5 maps a
+  `deploy/cleanup.sh` know only commit SHAs and only the environments `dev` and `prod`. R5b maps a
   version to its release directory and rollback state, and cleanup reads the environments from
   the configuration and removes old version images too, so the disk growth of B-11 does not
   return.
-- **Host Configuration as Code** (AGENTS.md) gets narrower wording in R5: it applies to the
+- **Host Configuration as Code** (AGENTS.md) gets narrower wording in R5a: it applies to the
   project's own hosts (the renamed directory, its host files and `HOST_CHANGELOG.md`). An
   association's VPS is configured only by `install.sh` and `update.sh` from a release; their log
   stays on that host, never in this repository.
@@ -138,7 +168,7 @@ wants the platform on its own server.
 | Stage | Who | What | Exists | Missing |
 | :--- | :--- | :--- | :--- | :--- |
 | 0. Platform ready for real data | developers, once | demo mode a choice of each installation; the database and the files directory know which installation they belong to; versioned releases; backups | public image, chat off by default | R1, R5b, R6 |
-| 1. The install | the association's administrator, about 15 min | `install.sh` on a clean VPS: Docker, secrets, Caddy, HTTPS, empty building, first chairman's link | most of it in `bootstrap.sh`, `create-chairman` | R2, R5 |
+| 1. The install | the association's administrator, about 15 min | `install.sh` on a clean VPS: Docker, secrets, Caddy, HTTPS, empty building, first chairman's link | most of it in `bootstrap.sh`, `create-chairman` | R2, R5a |
 | 2a. The building is filled (first associations) | chairman fills a template, administrator imports | apartments (number, entrance, floor, area) and meters (apartment or none for a building meter, resource, unit, serial number, location label, initial value, limit) | nothing | R3 |
 | 2b. The same in the app (later) | chairman | the setup wizard: details from the register, apartments (by hand, CSV or the register's proposal), meters, review, start | the register lookup (E12) | R7 |
 | 3. The team | chairman | invites the board and the accountant, uploads the articles and house rules, chooses settings | everything | - |
@@ -171,12 +201,14 @@ wants the platform on its own server.
 | R1 ([#158](https://github.com/Chemoday/apartment-association-platform/issues/158)) | Demo mode as a choice of each installation: the flags come from its settings instead of being fixed to `true` in `deploy/docker-compose.deploy.yml`; `docker compose up` stays a demo out of the box. What already holds: no notifications in demo mode, sign-in mail and uploads in demo only on `ENVIRONMENT` local, dev or test. New: the `ENVIRONMENT` of a demo installed on a VPS (and so whether it allows uploads), the plugin and `FILES_IN_DEMO` switches that `deploy.sh` fixes for dev and prod moved into each installation's settings. The installation marker with an `INSTANCE_ID` in the database and in the files directory (B-4, S-7). Settled in R1: the settings of dev and prod in `deploy/environments/<env>.env`; a demo on a VPS runs as `ENVIRONMENT` `prod`, so without uploads and sign-in mail, like the public demo; demo mode is refused on the data of a real installation (docs/DEPLOYMENT.md "Demo mode and the installation marker") | S | no |
 | R2 ([#159](https://github.com/Chemoday/apartment-association-platform/issues/159)) | Operator command `create-building`: name, address, register code, country, reading deadline day; refuses when a building exists | S | no |
 | R3 | Operator command `import-building --file <csv> [--dry-run]`: apartments and meters from a template, all checked first, written in one transaction or not at all. It lives outside the modules (like `src/core/seed.py`) and writes only through the services of `property` and `meters` on one shared session | M | approve the template |
-| R4 | Invitations by e-mail from the same template | S | a mailbox for the pilot |
-| R5 | The simple install (section 4): `install/` with `install.sh` and `update.sh` from a clean Debian or Ubuntu server, one environment, no CI key, Docker installed when missing; the project's own deployment renamed without breaking CD; tried on a throw-away clean VPS | M | approve the questions of the installer |
+| R4 | Invitations by e-mail from the same template; invitations made while the installation has no working e-mail wait and go out with a fresh link once SMTP is set (section 3) | S | a mailbox for the pilot |
+| R5a ([#162](https://github.com/Chemoday/apartment-association-platform/issues/162)) | The simple install (section 4): `install/` with `install.sh` and `update.sh` from a clean Debian or Ubuntu server, one environment, no CI key, Docker installed when missing, the questions answered by flags too (for tests); the operator command that looks a building up in the register; SMTP set again by running the installer; tried in throw-away system containers and finally on a freshly reinstalled test VPS | M | done: the questions (owner, 2026-11-18) |
+| R5c | The project's own deployment renamed (for example `deploy/project-vps/`) without breaking CD or rollback (section 4, "Renaming") | S | no |
 | R5b | Versioned releases: an image tag `v0.x.y` built from a git tag, and the `install/` archive attached to the release; an installation follows a version, not `main` | S | no |
 | R6 | Backups (B-3), switched on by the installer | M | where backups are kept, off the VPS |
 | R7 | The setup wizard in the app (stage 2b) with the register's apartment list (E12 X3) | L | yes, its own planning session |
 | R8 | Running administration: replace a meter, add an apartment, change an area | M | no |
+| R9 | SMTP in the app's building settings, for the chairman: the password encrypted in the database, a test mail, the server's settings as the fallback | M | yes |
 
 R1-R5b need no deep involvement of the owner. R1-R6 are done before the pilot (B-3 is due
 before the first real association). One branch and one pull request per part of the epic, one

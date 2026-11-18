@@ -407,6 +407,21 @@ class RegistrySearchRequest(BaseModel):
     )
 
 
+class RegistryLookup(BaseModel):
+    """The operator command find-building (docs/API.md section 1): the address as `query` above."""
+
+    address: Annotated[str, AfterValidator(_clean_query)] = Field(max_length=REGISTRY_QUERY_MAX)
+    country_code: str = "EE"
+
+    @field_validator("country_code", mode="after")
+    @classmethod
+    def _country(cls, value: str) -> str:
+        code = value.strip()
+        if not _COUNTRY_CODE.fullmatch(code):
+            raise ValueError("two letters (ISO 3166-1 alpha-2)")
+        return code.upper()
+
+
 class RegistryProposalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

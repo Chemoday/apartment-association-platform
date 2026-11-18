@@ -15,44 +15,9 @@
 	}
 }
 
-# One environment behind the edge: {args[0]} is the backend's alias on the aap-edge network.
-# Request bodies are limited here: 1 MB (decimal) for everything, raised only on the upload routes
-# (E11). The backend never receives more than the limit; the client gets a bare 413 (docs/API.md,
-# section 0). Refusing a large Content-Length before reading is the upload route's own job.
-(environment) {
-	encode zstd gzip
-
-	# Photos of issue reports (E11 F2): JPEG of at most 2560 px, scaled by the client.
-	@photo_upload {
-		method POST
-		path_regexp ^/api/v1/issues/[^/]+/photos$
-	}
-	handle @photo_upload {
-		request_body {
-			max_size 4MB
-		}
-		reverse_proxy {args[0]}:8000
-	}
-
-	# Documents of the association (E11 F3): PDF of at most 20 MB, uploaded by staff.
-	@document_upload {
-		method POST
-		path /api/v1/documents
-	}
-	handle @document_upload {
-		request_body {
-			max_size 20MB
-		}
-		reverse_proxy {args[0]}:8000
-	}
-
-	handle {
-		request_body {
-			max_size 1MB
-		}
-		reverse_proxy {args[0]}:8000
-	}
-}
+# The snippet (environment) of one environment behind the edge, shared with the install on an
+# association's own VPS (install/Caddyfile).
+import /etc/caddy/environment.caddy
 
 # Caddy's automatic HTTP->HTTPS redirect drops a non-default https_port, so redirect explicitly.
 # ACME HTTP-01 challenges on port 80 are still answered before this route.

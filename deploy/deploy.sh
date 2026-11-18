@@ -24,9 +24,12 @@ export IMAGE_REF="$IMAGE:$SHA"
 export APP_ENV="$ENV_NAME"
 export AAP_ROOT
 # Settings of the environment (docs/DEPLOYMENT.md "Demo mode and the installation marker"): demo
-# mode, the seed, uploads in demo, the plugins and the INSTANCE_ID. Not secrets, so they come with
-# the release; the compose file passes them on and defaults to a real installation without them.
-SETTINGS_FILE="$RELEASE_DIR/environments/$ENV_NAME.env"
+# mode, the seed, uploads in demo, the plugins and the INSTANCE_ID. Not secrets. On the project's
+# VPS they come with the release; an association's own VPS keeps them in $ENV_DIR/settings.env,
+# written by install/install.sh ("The simple install"). The compose file passes them on and
+# defaults to a real installation without them.
+SETTINGS_FILE="$ENV_DIR/settings.env"
+[[ -f "$SETTINGS_FILE" ]] || SETTINGS_FILE="$RELEASE_DIR/environments/$ENV_NAME.env"
 [[ -f "$SETTINGS_FILE" ]] || { log "no settings for $ENV_NAME: $SETTINGS_FILE is missing"; exit 2; }
 set -a
 # shellcheck source=/dev/null

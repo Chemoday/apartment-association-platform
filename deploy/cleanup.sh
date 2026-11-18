@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # shellcheck source=/dev/null
-source "${AAP_CONF:-/opt/aap/aap.conf}"  # AAP_ROOT, IMAGE
+source "${AAP_CONF:-/opt/aap/aap.conf}"  # AAP_ROOT, IMAGE, ENVIRONMENTS (optional)
 
 log() { echo "[cleanup $(date -u +%H:%M:%S)] $*"; }
 
@@ -29,7 +29,8 @@ if ! flock -x -n 8; then
 fi
 
 declare -A keep=()
-for env_name in dev prod; do
+# The environments of this host: dev and prod on the project's VPS, site on an association's own.
+for env_name in ${ENVIRONMENTS:-dev prod}; do
     for state in current_sha previous_sha; do
         sha=$(cat "$AAP_ROOT/$env_name/$state" 2>/dev/null || true)
         [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && keep[$sha]=1

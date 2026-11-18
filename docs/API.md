@@ -238,6 +238,21 @@ chairman.
   publishes no events; the period opener opens the current month's reading period for the new
   building within 10 minutes (section 2, "Monthly periods").
 
+### Looking a building up in the register (epic E13, task R5a)
+An operator command for the installer, not an endpoint: `uv run python -m src.modules.property
+find-building --address "Näide tn 5, Tallinn" [--country EE]`. It asks the register provider of
+the country (section 1, "Building register facts"; enabled through `ENABLED_PLUGINS`) for the
+buildings matching the address and prints one line of JSON. It needs no database and stores
+nothing; it does not count against `REGISTRY_CALLS_PER_DAY`, which limits the chairman's lookups.
+- `--address`: at most 200 characters, spaces collapsed, then at least 3, as `query` of the search
+  endpoint below; `--country`: two ASCII letters, default `EE`.
+- **Output and exit codes:**
+  - `{"status": "found", "candidates": [{"code": "101036416", "address": "Harju maakond, ..."}]}`
+    and 0, at most 10 candidates, possibly none;
+  - `{"status": "unavailable"}` and 3 when the register does not answer usably;
+  - `{"status": "no_provider"}` and 4 when no provider of that country is enabled;
+  - an invalid option: `error: <option> <what is wrong>` and 2.
+
 ### Apartment cards (epic E8, task P1)
 (Requires role: `CHAIRMAN` or `BOARD`.) The board looks after an apartment without seeing who
 lives there: residents appear only as their relation to the apartment, never with a user id, name,
@@ -1744,6 +1759,10 @@ chair@example.com`.
 - **No mail:** when mail cannot go out (no e-mail plugin, or demo mode without
   `AUTH_MAIL_IN_DEMO`), it warns. With `--print-link`, it prints the invitation link to the
   operator's terminal instead, and to nowhere else.
+- **A failed send:** it says `invitation e-mail sent` only when the mail server accepted the
+  e-mail; when the server refuses it or cannot be reached, it warns `the invitation e-mail could not
+  be sent` (the invitation stays valid; `--print-link` shows the link). The exit code is 0 either
+  way, because the invitation exists.
 
 ### Error codes of this section
 | Status | `error_code` |

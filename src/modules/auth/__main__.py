@@ -19,7 +19,7 @@ from pydantic import TypeAdapter, ValidationError
 from src.core.config import Settings, get_settings
 from src.core.domain_events import SessionFactory
 from src.modules.auth.invitations import InvitationService
-from src.modules.auth.mail import mail_allowed, send_auth_mails
+from src.modules.auth.mail import mail_allowed, send_auth_email
 from src.modules.auth.policies import validate_auth_settings
 from src.modules.auth.schemas import EmailAddress
 from src.modules.property.service import PropertyService
@@ -59,8 +59,19 @@ async def create_chairman(
     print(f"invitation {invitation_id} created", file=out)
     can_mail = plugins.channel("email") is not None and mail_allowed(settings, canonical)
     if can_mail:
-        await send_auth_mails(plugins, settings, [mail])
-        print("invitation e-mail sent", file=out)
+        sent = await send_auth_email(
+            plugins,
+            settings,
+            email=mail.email,
+            locale=mail.locale,
+            kind=mail.kind,
+            link=mail.link,
+            **mail.values,
+        )
+        if sent:
+            print("invitation e-mail sent", file=out)
+        else:  # refused or unreachable: the reason is in the log, never the address
+            print("warning: the invitation e-mail could not be sent", file=out)
     else:
         print("warning: no e-mail can go out (no e-mail plugin, or demo mode)", file=out)
     if print_link:

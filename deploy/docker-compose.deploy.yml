@@ -58,7 +58,8 @@ services:
     logging: *logging
     environment:
       DATABASE_URL: postgresql+asyncpg://app:${POSTGRES_PASSWORD}@db:5432/app
-      ENVIRONMENT: ${APP_ENV:?set by deploy.sh}
+      # The environment's name (dev, prod); an association's own VPS sets prod (install/).
+      ENVIRONMENT: ${ENVIRONMENT:-${APP_ENV:?set by deploy.sh}}
       # Demo mode and the seed per environment (docs/DEPLOYMENT.md "Demo mode and the installation
       # marker"); off unless the settings of the environment turn them on.
       DEMO_MODE_ENABLED: ${DEMO_MODE_ENABLED:-false}
@@ -71,6 +72,16 @@ services:
       # Plugins per environment (dev: + the Estonian building register, E12).
       ENABLED_PLUGINS: ${ENABLED_PLUGINS:-common.csv_export}
       LOG_LEVEL: INFO
+      # E-mail (an association's own VPS, install/; empty on the project's VPS): the site's address
+      # for the links in mail, the SMTP account and the key of the unsubscribe links.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-starttls}
+      NOTIFICATIONS_HASH_SECRET: ${NOTIFICATIONS_HASH_SECRET:-}
       # Uploaded files (epic E11): /opt/aap/<env>/files, created by bootstrap.sh. Uploads in demo
       # mode only where the settings of the environment allow them (dev).
       FILES_DIR: /data/files
