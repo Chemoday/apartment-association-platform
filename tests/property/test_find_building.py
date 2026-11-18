@@ -121,3 +121,35 @@ def test_the_command_runs_alone_without_a_database() -> None:
     )
 
     assert (result.returncode, result.stdout) == (4, '{"status": "no_provider"}\n')
+
+
+async def test_at_most_ten_candidates_with_only_a_code_and_an_address(register) -> None:
+    """docs/API.md section 1: at most 10 candidates; a building, never the people in it."""
+    register(lambda request: streamed(200, json_body=buildings(15)))
+
+    code, out = await run()
+
+    assert code == 0
+    body = json.loads(out)
+    assert body["status"] == "found"
+    assert len(body["candidates"]) == 10
+    assert all(set(candidate) == {"code", "address"} for candidate in body["candidates"])
+
+
+async def test_control_characters_from_the_register_stay_escaped_on_one_line(register) -> None:
+    """The installer reads the last line of the output: a line break must not split it."""
+    hostile = {
+        "addresses": [
+            {"liikVal": "EHITISHOONE", "tunnus": "101036416", "taisaadress": "Näidise\ntn\r1\t\x1b"}
+        ]
+    }
+    register(lambda request: streamed(200, json_body=hostile))
+
+    code, out = await run()
+
+    assert code == 0
+    assert out.count("\n") == 1 and out.endswith("\n")
+    assert "\r" not in out and "\t" not in out and "\x1b" not in out
+    [candidate] = json.loads(out)["candidates"]
+    assert candidate["code"] == "101036416"
+    assert "\n" not in candidate["address"]
