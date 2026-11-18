@@ -90,9 +90,10 @@ wants the platform on its own server.
 ## 4. The simple install
 
 ### What "simple" means (the acceptance criteria of R5a)
-- **One command** as root on a clean Debian or Ubuntu server: download the `install/` archive of
-  a release and run `install.sh`. No git, no clone of the repository, no editing of files. Until
-  versioned releases exist (R5b), the archive and the image are those of a commit of `main`.
+- **One command** as root on a clean Debian or Ubuntu server: download the installer of a release
+  and run `install.sh`. No git, no clone of the repository, no editing of files. Since R5b the
+  installer, the archive and the image are those of a version (docs/DEPLOYMENT.md "Versions and
+  releases"); a commit of `main` can still be installed with `--ref`, for testing.
 - **The server is checked first:** the installer stops at once with a clear message on anything
   but an x86_64 (amd64) server, because the image is built for amd64 only; otherwise Docker would
   pull it and fail with an unclear `exec format error`. ARM images wait for a real request
@@ -145,11 +146,12 @@ wants the platform on its own server.
   applied on the host first (with an entry in `HOST_CHANGELOG.md`), and the rename is merged after
   it. Shared parts (the Caddy snippet, the health check and rollback) sit where both the gate's
   extraction and the `install/` archive include them.
-- **Versions and the existing state:** today `current_sha`, `previous_sha`, `releases/<sha>` and
-  `deploy/cleanup.sh` know only commit SHAs and only the environments `dev` and `prod`. R5b maps a
-  version to its release directory and rollback state, and cleanup reads the environments from
-  the configuration and removes old version images too, so the disk growth of B-11 does not
-  return.
+- **Versions and the existing state:** `current_sha`, `previous_sha`, `releases/<sha>` and
+  `deploy/cleanup.sh` know commit SHAs; cleanup reads the environments from the configuration
+  since R5a. Settled in R5b: a version is a tag on a commit, its release directory stays
+  `releases/<sha>/` with a `VERSION` file, and the image is pulled by its commit tag, so the deploy
+  state, the rollback and the clean-up stay as they are and no version image piles up on the
+  server (B-11).
 - **Host Configuration as Code** (AGENTS.md) gets narrower wording in R5a: it applies to the
   project's own hosts (the renamed directory, its host files and `HOST_CHANGELOG.md`). An
   association's VPS is configured only by `install.sh` and `update.sh` from a release; their log
@@ -204,7 +206,7 @@ wants the platform on its own server.
 | R4 | Invitations by e-mail from the same template; invitations made while the installation has no working e-mail wait and go out with a fresh link once SMTP is set (section 3) | S | a mailbox for the pilot |
 | R5a ([#162](https://github.com/Chemoday/apartment-association-platform/issues/162)) | The simple install (section 4): `install/` with `install.sh` and `update.sh` from a clean Debian or Ubuntu server, one environment, no CI key, Docker installed when missing, the questions answered by flags too (for tests); the operator command that looks a building up in the register; SMTP set again by running the installer; tried in throw-away system containers and finally on a freshly reinstalled test VPS | M | done: the questions (owner, 2026-11-18) |
 | R5c | The project's own deployment renamed (for example `deploy/project-vps/`) without breaking CD or rollback (section 4, "Renaming") | S | no |
-| R5b | Versioned releases: an image tag `v0.x.y` built from a git tag, and the `install/` archive attached to the release; an installation follows a version, not `main` | S | no |
+| R5b ([#164](https://github.com/Chemoday/apartment-association-platform/issues/164)) | Versioned releases: an image tag `v0.x.y` built from a git tag, and the `install/` archive attached to the release; an installation follows a version, not `main`. Settled in R5b: the tag `vX.Y.Z` on a commit of `main` is the owner's decision; the release workflow re-tags the image CI built for that commit (no rebuild) and publishes `install.sh` and `aap-release.tar.gz` with the version baked in; `update.sh` takes the latest or a given version and refuses an older one without `--allow-downgrade` (docs/DEPLOYMENT.md "Versions and releases") | S | no |
 | R6 | Backups (B-3), switched on by the installer | M | where backups are kept, off the VPS |
 | R7 | The setup wizard in the app (stage 2b) with the register's apartment list (E12 X3) | L | yes, its own planning session |
 | R8 | Running administration: replace a meter, add an apartment, change an area | M | no |
