@@ -280,7 +280,7 @@ def test_bin_gets_the_new_scripts_only_after_a_healthy_deploy(tmp_path: Path) ->
             (root / "releases" / sha / "install" / name).write_text(f"# {mark}\n")
     (root / "bin").mkdir()
     (root / "bin/install.sh").write_text("# old\n")
-    layout = f"load_previous; {answers()}; REF={new}; write_layout"
+    layout = f"load_previous; {answers()}; APP_UID=$(id -u); REF={new}; write_layout"
 
     assert bash(root, layout).returncode == 0
     assert (root / "bin/install.sh").read_text() == "# old\n"
@@ -304,7 +304,7 @@ def test_the_first_install_gets_its_scripts_before_the_deploy(tmp_path: Path) ->
     for name in ("install.sh", "update.sh", "uninstall.sh"):
         (release / name).write_text("#\n")
 
-    result = bash(root, f"{answers()}; REF={OLD}; write_layout")
+    result = bash(root, f"{answers()}; APP_UID=$(id -u); REF={OLD}; write_layout")
 
     assert result.returncode == 0, result.stderr
     assert sorted(p.name for p in (root / "bin").iterdir()) == [
