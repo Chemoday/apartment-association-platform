@@ -75,6 +75,10 @@ wants the platform on its own server.
 ### What "simple" means (the acceptance criteria of R5)
 - **One command** as root on a clean Debian or Ubuntu server: download the `install/` archive of
   a release and run `install.sh`. No git, no clone of the repository, no editing of files.
+- **The server is checked first:** the installer stops at once with a clear message on anything
+  but an x86_64 (amd64) server, because the image is built for amd64 only; otherwise Docker would
+  pull it and fail with an unclear `exec format error`. ARM images wait for a real request
+  (owner, 2026-11-18).
 - **At most five questions:** the address (an own domain, or none and then
   `<ip-with-dashes>.sslip.io`), the chairman's e-mail, demo or a real installation, SMTP (may be
   skipped), the name of the building. Everything else is automatic: Docker, secrets, Caddy,
