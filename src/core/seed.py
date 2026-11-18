@@ -1,8 +1,9 @@
 """Demo building "KÜ Sõpruse 12" for local runs and the public demo (docs/TASKS.md, Task 7).
 
 Run by entrypoint.sh after the migrations:  python -m src.core.seed
-It only seeds when SEED_DEMO_DATA is true, and only into an EMPTY database (no building yet), so it
-never mixes demo residents into a real association. Running it again, or from two containers at
+It only seeds when SEED_DEMO_DATA is true, only into an EMPTY database (no building yet) and never
+into one whose installation marker says it is real (src/core/instance.py), so it never mixes demo
+residents into a real association. Running it again, or from two containers at
 once (an advisory lock serializes them), changes nothing.
 
 Like models_registry.py this is a composition root: it writes the models of several modules
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.database import build_engine, transaction
+from src.core.instance import is_real_installation
 from src.core.telemetry import configure_logging
 from src.core.validation import canonical_email
 from src.modules.communication.models import Comment, Post
@@ -823,6 +825,10 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
     The caller commits (use `transaction(session)`).
     """
     await session.execute(select(func.pg_advisory_xact_lock(SEED_LOCK_KEY)))
+    if await is_real_installation(session):
+        # The marker says a real association lives here (src/core/instance.py): never seed it.
+        logger.info("seed_skipped", reason="real_installation")
+        return False
     if await session.scalar(select(Building.id).limit(1)) is not None:
         demo = await session.get(Building, DEMO_BUILDING_ID)
         if demo is not None and demo.registry_code is None:

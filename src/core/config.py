@@ -7,6 +7,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Environments where test-only switches may be on (FILES_IN_DEMO, AUTH_MAIL_IN_DEMO, sessionless
+# tokens, demo data without demo mode): an allowlist, so an unknown name fails closed.
+NON_PRODUCTION_ENVIRONMENTS = frozenset({"local", "dev", "test"})
+
 # HS256 keys shorter than the hash output are brute-forceable (RFC 7518, section 3.2).
 MIN_JWT_SECRET_BYTES = 32
 
@@ -26,6 +30,10 @@ class Settings(BaseSettings):
     # Seed the demo building "KÜ Sõpruse 12" into an EMPTY database at startup (src/core/seed.py).
     # Off unless enabled explicitly: a real association must never get fictitious residents.
     SEED_DEMO_DATA: bool = False
+    # Which installation the database and the files belong to (epic E13 R1, src/core/instance.py):
+    # lowercase letters, digits and "-", 3 to 64 characters. Required by the startup check in
+    # entrypoint.sh; empty here only so that tools and tests importing the settings still work.
+    INSTANCE_ID: str = ""
 
     # Required: the app refuses to start without it (src/modules/auth/policies.py,
     # validate_auth_settings). Empty here only so that tools importing the settings still work.

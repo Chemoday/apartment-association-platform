@@ -354,9 +354,9 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 
 ---
 
-## 6. Core infrastructure (`src/core`): durable domain events
+## 6. Core infrastructure (`src/core`): durable domain events and the installation marker
 
-*`src/core/` holds no domain models, but it owns this infrastructure table: the persistent part of the event outbox (docs/BACKEND_CONVENTIONS.md 2.B). Its model lives in `src/core/` and is listed in `src/core/models_registry.py`.*
+*`src/core/` holds no domain models, but it owns these infrastructure tables: the persistent part of the event outbox (docs/BACKEND_CONVENTIONS.md 2.B) and the installation marker (epic E13, task R1). Their models live in `src/core/` and are listed in `src/core/models_registry.py`.*
 
 ### Table: `core_domain_events`
 *(Every domain event, written in the same transaction as the change that caused it. Payloads carry ids, codes and values only, never names, e-mails, phones, titles or bodies.)*
@@ -378,6 +378,18 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 - `ix_core_domain_events_building_time`: `(building_id, occurred_at)`, for statistics.
 - **Retention:** the relay deletes published rows older than `DOMAIN_EVENTS_RETENTION_DAYS` (default 365; `0` keeps them forever). Unpublished and failed rows are kept for investigation.
 - Seeding (`src/core/seed.py`) writes no events.
+
+### Table: `core_instance` (epic E13, task R1; migration 030)
+*(Which installation the database belongs to (docs/BACKLOG.md B-4). At most one row, written by the startup check `python -m src.core.instance` (docs/ARCHITECTURE.md section 14) when it first meets the database, never changed by the application afterwards. Holds no personal data.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `SMALLINT` | `PK, CHECK (id = 1)` | Always 1, so the table holds one row at most |
+| `instance_id` | `VARCHAR(64)` | `NOT NULL` | The `INSTANCE_ID` of the installation that first started on this database |
+| `demo` | `BOOLEAN` | `NOT NULL` | `true` when the database was first started in demo mode or with the demo seed (`DEMO_MODE_ENABLED` or `SEED_DEMO_DATA`): its people are fictitious. Demo mode is refused on a database with `false`, and outside `ENVIRONMENT` local, dev and test running without demo mode on a database with `true` |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL, DEFAULT now()` | When the marker was written |
+
+- The files directory carries the same id in the file `FILES_DIR/INSTANCE` (docs/DEPLOYMENT.md "Demo mode and the installation marker").
+- A database that existed before migration 030 gets its marker on its first start after it, with the settings of that start (dev and prod: demo).
 
 ---
 

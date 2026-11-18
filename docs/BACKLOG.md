@@ -219,10 +219,12 @@ what follows.
 
 ## B-4. A database must belong to exactly one environment
 
-- **Status:** open, not part of the MVP. Related to B-3 (restores and moved data directories are
-  exactly when this goes wrong). The installation marker is scheduled as task R1 of epic E13
-  ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md)); one installation per association settles
-  the open point below: an `INSTANCE_ID` is needed, and R1 marks the files directory too.
+- **Status:** points 1, 2 and 4 done by task R1 of epic E13
+  ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md), 2026-11-18): an `INSTANCE_ID` per
+  installation in `core_instance` and in `FILES_DIR/INSTANCE`, checked at startup
+  (docs/DEPLOYMENT.md "Demo mode and the installation marker"). Open: point 3 (a command to move
+  data on purpose) and anonymising a copy. Related to B-3 (restores and moved data directories
+  are exactly when this goes wrong).
 - **Raised:** 2026-10-25.
 
 ### Problem

@@ -23,16 +23,15 @@ log() { echo "[deploy $ENV_NAME $(date -u +%H:%M:%S)] $*"; }
 export IMAGE_REF="$IMAGE:$SHA"
 export APP_ENV="$ENV_NAME"
 export AAP_ROOT
-# Uploads in demo mode (epic E11): dev only, so the client can be tried there (owner decision).
-if [[ "$ENV_NAME" == dev ]]; then export FILES_IN_DEMO=true; else export FILES_IN_DEMO=false; fi
-# Plugins per environment (not secrets, so here and not in .env). The Estonian building register
-# (epic E12) on dev only, to try it with the demo building; prod keeps the default until promoted
-# on the owner's request (owner, 2026-11-15).
-if [[ "$ENV_NAME" == dev ]]; then
-    export ENABLED_PLUGINS=common.csv_export,countries.ee.building_registry
-else
-    export ENABLED_PLUGINS=common.csv_export
-fi
+# Settings of the environment (docs/DEPLOYMENT.md "Demo mode and the installation marker"): demo
+# mode, the seed, uploads in demo, the plugins and the INSTANCE_ID. Not secrets, so they come with
+# the release; the compose file passes them on and defaults to a real installation without them.
+SETTINGS_FILE="$RELEASE_DIR/environments/$ENV_NAME.env"
+[[ -f "$SETTINGS_FILE" ]] || { log "no settings for $ENV_NAME: $SETTINGS_FILE is missing"; exit 2; }
+set -a
+# shellcheck source=/dev/null
+source "$SETTINGS_FILE"
+set +a
 
 compose() {
     docker compose -p "aap-$ENV_NAME" \

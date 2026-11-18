@@ -3,6 +3,8 @@
 set -e
 
 python -m src.core.migrations
+# The installation marker: never start on the data of another installation (src/core/instance.py).
+python -m src.core.instance
 # Demo building into an empty database, only when SEED_DEMO_DATA=true (src/core/seed.py).
 python -m src.core.seed
 

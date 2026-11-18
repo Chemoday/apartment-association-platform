@@ -7,6 +7,8 @@ one user's address right before sending, keeps it in memory for that send, and n
 stores it.
 """
 
+import re
+import unicodedata
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -19,10 +21,13 @@ from pydantic import (
     ConfigDict,
     Field,
     PlainSerializer,
+    ValidationInfo,
     WithJsonSchema,
+    field_validator,
+    model_validator,
 )
 
-from src.core.validation import clean_text
+from src.core.validation import clean_required_text, clean_text
 from src.plugins.registry import RegistryFacts
 
 
@@ -197,6 +202,62 @@ AreaAmount = Annotated[
         mode="serialization",
     ),
 ]
+
+
+_COUNTRY_CODE = re.compile(r"[A-Za-z]{2}")
+_REGISTRY_CODE = re.compile(r"(?=.*[A-Za-z0-9])[A-Za-z0-9-]{1,20}")
+# Single-line fields: no control characters (Cc: C0 and C1, tab and line breaks included), no
+# invisible format characters (Cf: a right-to-left override, a zero-width space) and no line or
+# paragraph separators (Zl, Zp).
+_NOT_ONE_LINE = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_ESTONIAN_REGISTRY_CODE = re.compile(r"[0-9]{8}")
+
+
+class NewBuilding(BaseModel):
+    """The building of a new installation (operator command create-building, docs/API.md 1)."""
+
+    name: str
+    address: str
+    country_code: str = "EE"
+    registry_code: str | None = None
+    reading_deadline_day: int = Field(default=4, ge=1, le=31)
+
+    @field_validator("name", "address", mode="after")
+    @classmethod
+    def _required_text(cls, value: str, info: ValidationInfo) -> str:
+        cleaned = clean_required_text(value)
+        if any(unicodedata.category(char) in _NOT_ONE_LINE for char in cleaned):
+            raise ValueError("one line of visible text")
+        limit = 255 if info.field_name == "name" else 500
+        if len(cleaned) > limit:
+            raise ValueError(f"at most {limit} characters")
+        return cleaned
+
+    @field_validator("country_code", mode="after")
+    @classmethod
+    def _country(cls, value: str) -> str:
+        code = value.strip()
+        if not _COUNTRY_CODE.fullmatch(code):  # ASCII only, before upper() ("ß" is not "SS")
+            raise ValueError("two letters (ISO 3166-1 alpha-2)")
+        return code.upper()
+
+    @field_validator("registry_code", mode="after")
+    @classmethod
+    def _registry_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        code = value.strip()
+        if not _REGISTRY_CODE.fullmatch(code):
+            raise ValueError("1 to 20 letters, digits or '-', at least one letter or digit")
+        return code
+
+    @model_validator(mode="after")
+    def _estonian_registry_code(self) -> "NewBuilding":
+        code = self.registry_code
+        if code is not None and self.country_code == "EE":
+            if not _ESTONIAN_REGISTRY_CODE.fullmatch(code):
+                raise ValueError("registry_code: an Estonian registry code has exactly 8 digits")
+        return self
 
 
 class BuildingResponse(BaseModel):
