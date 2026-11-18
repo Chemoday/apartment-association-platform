@@ -205,6 +205,39 @@ codes it knows and shows `label_et` otherwise.
 | 429 | `RATE_LIMITED` (search and proposal) |
 | 503 | `REGISTRY_UNAVAILABLE` |
 
+### The building of a new installation (epic E13, task R2)
+An operator command, not an endpoint: `uv run python -m src.modules.property create-building
+--name "KÜ Näide 5" --address "Näide tn 5, Tallinn" [--registry-code 80123456] [--country EE]
+[--reading-deadline-day 4]`. It creates the installation's building without the demo seed, so
+that `create-chairman` (section 7, "First chairman of a new installation") can invite its first
+chairman.
+- **Fields** (`property_buildings`, docs/SCHEMA.md section 2), each trimmed, all checked before
+  anything is written:
+  - `--name`: 1 to 255 characters; `--address`: 1 to 500 characters; each one line of visible
+    text (no control characters, tab or line break included, no line or paragraph separator,
+    and no invisible format characters such as a right-to-left override or a zero-width space);
+  - `--country`: two ASCII letters, stored in upper case, default `EE`; meant as ISO 3166-1
+    alpha-2, not checked against the list;
+  - `--registry-code`: optional (leave the option out when there is none; an empty value is an
+    error); 1 to 20 letters, digits or `-` with at least one letter or digit, and for `EE`
+    exactly 8 digits;
+  - `--reading-deadline-day`: 1 to 31 (the day of the next month until which readings are open;
+    a day past a month's end is its last day), default 4.
+- **When it refuses** (no changes then):
+  - the installation marker (docs/SCHEMA.md section 6, `core_instance`) does not say a real
+    installation: there is no marker yet (start the backend once first) or it says `demo`. In a
+    demo anyone could act as the new building's chairman, and the seed never fills a real
+    installation, so the two never race;
+  - the installation already has a building (one building per installation, docs/BACKLOG.md
+    B-1). Two runs at once create one building (an advisory lock).
+- **Output and exit codes** (all on standard output): `building <id> created` and 0; an invalid
+  field: `error: <option> <what is wrong>` and 2; not a real installation: `error: the
+  installation is not marked as a real one ...` and 1; a building exists: `error: the
+  installation already has a building` and 1. A missing required option is reported by the
+  argument parser on standard error, also with 2. The command
+  publishes no events; the period opener opens the current month's reading period for the new
+  building within 10 minutes (section 2, "Monthly periods").
+
 ### Apartment cards (epic E8, task P1)
 (Requires role: `CHAIRMAN` or `BOARD`.) The board looks after an apartment without seeing who
 lives there: residents appear only as their relation to the apartment, never with a user id, name,
