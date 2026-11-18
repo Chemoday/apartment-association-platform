@@ -9,6 +9,8 @@ direction. Phase 1 tasks live in [TASKS.md](TASKS.md); phases in [ROADMAP_MVP.md
 ## B-1. Several buildings and management companies
 
 - **Status:** open, design only. Target: Phase 3 (together with the managed cloud plane).
+  Hosting many associations goes into a separate private repository (owner, 2026-11-18; epic
+  E13 section 8).
 - **Raised:** 2026-10-25, during Task 5.
 
 ### Problem
@@ -307,9 +309,9 @@ notifications only, and the external channels are verified by automated tests.
 
 ## B-8. Installer and e-mail for self-hosting
 
-- **Status:** open, design notes. Related to B-7 (real login). Raised 2026-10-31. E-mail waits
-  (owner, 2026-11-18); the installation part is task R5 of epic E13
-  ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md)).
+- **Status:** open, design notes. Related to B-7 (real login). Raised 2026-10-31. The installer
+  is task R5 of epic E13 ([docs/epics/E13_ROLLOUT.md](epics/E13_ROLLOUT.md), the simple install
+  on a clean VPS); e-mail by audience is in its section 6 (owner, 2026-11-18).
 
 ### Installer
 `deploy/bootstrap.sh` already sets up the user, directories, database secrets and Caddy with HTTPS.
@@ -333,6 +335,8 @@ the incoming HTTPS that Caddy already serves (Telegram webhooks accept ports 443
   without one).
 
 ### Several associations on one server (Phase 3 managed cloud)
+Decided on 2026-11-18: this goes into a separate private repository, not this one (epic E13
+section 8).
 One SMTP account and one Telegram bot shared by all instances (a shared delivery service) instead
 of one per association.
 
