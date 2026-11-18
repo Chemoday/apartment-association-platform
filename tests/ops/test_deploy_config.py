@@ -109,15 +109,33 @@ def test_database_caps_its_write_ahead_log_and_temp_files() -> None:
     assert db["mem_limit"] == "384m"
 
 
-def test_edge_limits_request_bodies_and_raises_them_only_on_upload_routes() -> None:
-    caddyfile = (DEPLOY / "edge" / "Caddyfile").read_text()
+INSTALL = DEPLOY.parent / "install"
 
-    assert re.findall(r"max_size (\S+)", caddyfile) == ["4MB", "20MB", "1MB"]
-    assert "path_regexp ^/api/v1/issues/[^/]+/photos$" in caddyfile
-    assert "read_body 3m" in caddyfile
-    # Both environments go through the same limits.
+
+def test_edge_limits_request_bodies_and_raises_them_only_on_upload_routes() -> None:
+    snippet = (DEPLOY / "edge" / "environment.caddy").read_text()
+    caddyfile = (DEPLOY / "edge" / "Caddyfile").read_text()
+    site = (INSTALL / "Caddyfile").read_text()
+
+    assert re.findall(r"max_size (\S+)", snippet) == ["4MB", "20MB", "1MB"]
+    assert "path_regexp ^/api/v1/issues/[^/]+/photos$" in snippet
+    # Every environment of both kinds of server goes through the same limits and timeouts.
+    for edge in (caddyfile, site):
+        assert "import /etc/caddy/environment.caddy" in edge
+        assert "max_size" not in edge
+        assert (
+            _timeouts(edge)
+            == _timeouts(caddyfile)
+            == ["read_header 10s", "read_body 3m", "idle 2m"]
+        )
     assert "import environment aap-prod-backend" in caddyfile
     assert "import environment aap-dev-backend" in caddyfile
+    assert "import environment aap-site-backend" in site
+
+
+def _timeouts(caddyfile: str) -> list[str]:
+    block = caddyfile.split("timeouts {", 1)[1].split("}", 1)[0]
+    return [line.strip() for line in block.splitlines() if line.strip()]
 
 
 @pytest.mark.parametrize("script", sorted(p.name for p in DEPLOY.rglob("*.sh")))
@@ -373,12 +391,11 @@ def _docker_works() -> bool:
 
 
 @pytest.mark.skipif(not _docker_works(), reason="needs a running docker daemon")
-def test_caddyfile_validates_with_the_pinned_caddy() -> None:
-    result = subprocess.run(
+def _caddy_validate(etc_caddy: Path, *env: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [
-            "docker", "run", "--rm", "-v", f"{DEPLOY / 'edge'}:/etc/caddy:ro",
-            "-e", "HTTPS_PORT=8443", "-e", "PROD_HOST=prod.example.test",
-            "-e", "DEV_HOST=dev.example.test", "caddy:2.8.4-alpine",
+            "docker", "run", "--rm", "-v", f"{etc_caddy}:/etc/caddy:ro",
+            *[arg for pair in env for arg in ("-e", pair)], "caddy:2.8.4-alpine",
             "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile",
         ],
         capture_output=True,
@@ -386,5 +403,26 @@ def test_caddyfile_validates_with_the_pinned_caddy() -> None:
         timeout=300,
     )  # fmt: skip
 
+
+def test_caddyfile_validates_with_the_pinned_caddy() -> None:
+    result = _caddy_validate(
+        DEPLOY / "edge",
+        "HTTPS_PORT=8443",
+        "PROD_HOST=prod.example.test",
+        "DEV_HOST=dev.example.test",
+    )
+
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Valid configuration" in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(not _docker_works(), reason="needs a running docker daemon")
+@pytest.mark.parametrize("tls_mode", ["acme", "internal"])
+def test_the_caddyfile_of_an_installation_validates(tmp_path: Path, tls_mode: str) -> None:
+    """As install.sh lays it out: install/Caddyfile next to the shared snippet."""
+    shutil.copy(INSTALL / "Caddyfile", tmp_path / "Caddyfile")
+    shutil.copy(DEPLOY / "edge" / "environment.caddy", tmp_path / "environment.caddy")
+
+    result = _caddy_validate(tmp_path, "SITE_HOST=kyhistu.example.test", f"TLS_MODE={tls_mode}")
+
+    assert result.returncode == 0, result.stdout + result.stderr

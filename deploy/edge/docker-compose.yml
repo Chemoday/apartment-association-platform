@@ -1,5 +1,7 @@
-# The only containers of this project that bind host ports. Started by bootstrap.sh as project
-# "aap-edge"; settings (HTTPS_PORT, PROD_HOST, DEV_HOST) come from /opt/aap/edge/.env.
+# The only containers of this project that bind host ports. Started as project "aap-edge" by
+# bootstrap.sh on the project's VPS (PROD_HOST, DEV_HOST) and by install/install.sh on an
+# association's own VPS (SITE_HOST, TLS_MODE); settings come from /opt/aap/edge/.env. None of the
+# hosts is required here: each Caddyfile is validated before it is used.
 services:
   caddy:
     image: caddy:2.8.4-alpine
@@ -16,8 +18,10 @@ services:
       - "${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"
     environment:
       HTTPS_PORT: ${HTTPS_PORT:-443}
-      PROD_HOST: ${PROD_HOST:?set in /opt/aap/edge/.env}
-      DEV_HOST: ${DEV_HOST:?set in /opt/aap/edge/.env}
+      PROD_HOST: ${PROD_HOST:-}
+      DEV_HOST: ${DEV_HOST:-}
+      SITE_HOST: ${SITE_HOST:-}
+      TLS_MODE: ${TLS_MODE:-acme}
     volumes:
       # A directory, not a single-file mount: replacing the file on the host changes its inode,
       # and a file mount would keep showing the old content to the running container.

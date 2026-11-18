@@ -123,7 +123,7 @@ if ! validate_output=$(docker run --rm -v "$HERE/edge:/etc/caddy:ro" -e HTTPS_PO
     exit 1
 fi
 install -m 644 "$HERE/edge/docker-compose.yml" "$AAP_ROOT/edge/"
-install -m 644 "$HERE/edge/Caddyfile" "$AAP_ROOT/edge/caddy/Caddyfile"
+install -m 644 "$HERE/edge/Caddyfile" "$HERE/edge/environment.caddy" "$AAP_ROOT/edge/caddy/"
 rm -f "$AAP_ROOT/edge/Caddyfile"  # pre-directory-mount layout
 cat > "$AAP_ROOT/edge/.env" <<EOF
 HTTPS_PORT=$HTTPS_PORT
