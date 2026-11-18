@@ -1,6 +1,8 @@
 # One environment (dev or prod) on the VPS. Started by deploy.sh as Compose project "aap-<env>":
-#   IMAGE_REF, APP_ENV, FILES_IN_DEMO, ENABLED_PLUGINS come from deploy.sh; POSTGRES_PASSWORD from
-#   /opt/aap/<env>/.env.
+#   IMAGE_REF and APP_ENV come from deploy.sh, the settings of the environment (demo mode, the seed,
+#   FILES_IN_DEMO, ENABLED_PLUGINS, INSTANCE_ID) from deploy/environments/<env>.env through
+#   deploy.sh, POSTGRES_PASSWORD and the other secrets from /opt/aap/<env>/.env. Without its
+#   settings an environment is a real installation: no demo mode, no seed.
 # No host ports are published: Caddy (deploy/edge) reaches the backend over the "aap-edge" network.
 #
 # Limits (docs/DEPLOYMENT.md "Resource limits"): several instances and unrelated services share
@@ -57,18 +59,20 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://app:${POSTGRES_PASSWORD}@db:5432/app
       ENVIRONMENT: ${APP_ENV:?set by deploy.sh}
-      # Public demo: graders switch roles via X-Demo-User-Id. Seeded data only, no real residents.
-      DEMO_MODE_ENABLED: "true"
+      # Demo mode and the seed per environment (docs/DEPLOYMENT.md "Demo mode and the installation
+      # marker"); off unless the settings of the environment turn them on.
+      DEMO_MODE_ENABLED: ${DEMO_MODE_ENABLED:-false}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+      # Which installation the database and the files belong to (src/core/instance.py).
+      INSTANCE_ID: ${INSTANCE_ID:?set in deploy/environments/<env>.env}
       # Login secrets from /opt/aap/<env>/.env (bootstrap.sh generates them); required at startup.
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set in /opt/aap/<env>/.env}
       AUTH_HASH_SECRET: ${AUTH_HASH_SECRET:?set in /opt/aap/<env>/.env}
-      # The demo building, seeded once into an empty database (src/core/seed.py).
-      SEED_DEMO_DATA: "true"
-      # Plugins per environment, set by deploy.sh (dev: + the Estonian building register, E12).
+      # Plugins per environment (dev: + the Estonian building register, E12).
       ENABLED_PLUGINS: ${ENABLED_PLUGINS:-common.csv_export}
       LOG_LEVEL: INFO
       # Uploaded files (epic E11): /opt/aap/<env>/files, created by bootstrap.sh. Uploads in demo
-      # mode only where deploy.sh allows them (dev).
+      # mode only where the settings of the environment allow them (dev).
       FILES_DIR: /data/files
       FILES_IN_DEMO: ${FILES_IN_DEMO:-false}
     depends_on:

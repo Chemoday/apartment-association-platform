@@ -62,7 +62,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 from starlette.requests import ClientDisconnect
 
-from src.core.config import Settings
+from src.core.config import NON_PRODUCTION_ENVIRONMENTS, Settings
 from src.core.database import Base, DbSession, session_outbox, varchar_enum
 from src.core.domain_events import SessionFactory
 from src.core.event_bus import EventBus
@@ -74,7 +74,6 @@ from src.modules.property.schemas import BuildingRole, CurrentUserDTO
 
 logger = structlog.get_logger(__name__)
 
-NON_PRODUCTION_ENVIRONMENTS = frozenset({"local", "dev", "test"})
 MB = 1024 * 1024
 PURGE_DELAY = timedelta(days=14)
 TMP_MAX_AGE = timedelta(hours=1)

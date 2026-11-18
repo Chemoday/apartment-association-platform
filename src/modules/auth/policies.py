@@ -17,7 +17,7 @@ from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.core.config import Settings
+from src.core.config import NON_PRODUCTION_ENVIRONMENTS, Settings
 from src.modules.auth.schemas import DeviceKind, InvitationStatus, PasswordWeakness, StaffRole
 from src.modules.property.schemas import BuildingRole
 
@@ -29,7 +29,6 @@ REFRESH_TOKEN_BYTES = 32
 # Two tabs refreshing at once: the token just replaced still gets an access token (no cookie).
 REFRESH_GRACE = timedelta(seconds=60)
 # Environments that may run with test-only shortcuts (fail closed for any other name).
-NON_PRODUCTION_ENVIRONMENTS = frozenset({"local", "dev", "test"})
 REFRESH_COOKIE = "__Secure-refresh"
 REFRESH_COOKIE_PATH = "/api/v1/auth"
 CSRF_HEADER = "X-Requested-With"

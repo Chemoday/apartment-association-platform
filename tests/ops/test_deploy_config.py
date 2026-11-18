@@ -58,23 +58,47 @@ def test_backend_keeps_uploaded_files_in_the_host_directory_of_its_environment()
     assert mount["target"] == backend["environment"]["FILES_DIR"] == "/data/files"
     # A missing directory must fail the deploy, not become an empty root-owned one.
     assert mount["bind"]["create_host_path"] is False
-    assert backend["environment"]["FILES_IN_DEMO"] == "${FILES_IN_DEMO:-false}"
-    deploy_script = (DEPLOY / "deploy.sh").read_text()
-    assert 'if [[ "$ENV_NAME" == dev ]]; then export FILES_IN_DEMO=true' in deploy_script
 
 
-def test_the_building_register_plugin_runs_on_dev_only() -> None:
-    """Epic E12: countries.ee.building_registry on dev; prod keeps the default plugins."""
-    backend = _compose("docker-compose.deploy.yml")["services"]["backend"]
-    assert backend["environment"]["ENABLED_PLUGINS"] == "${ENABLED_PLUGINS:-common.csv_export}"
-    deploy_script = (DEPLOY / "deploy.sh").read_text()
+def _settings(env_name: str) -> dict[str, str]:
+    lines = (DEPLOY / "environments" / f"{env_name}.env").read_text().splitlines()
+    return dict(line.split("=", 1) for line in lines if line and not line.startswith("#"))
+
+
+def test_without_its_settings_an_environment_is_a_real_installation() -> None:
+    """Epic E13 R1: demo mode, the seed and uploads in demo only where the settings say so."""
+    environment = _compose("docker-compose.deploy.yml")["services"]["backend"]["environment"]
+
+    assert environment["DEMO_MODE_ENABLED"] == "${DEMO_MODE_ENABLED:-false}"
+    assert environment["SEED_DEMO_DATA"] == "${SEED_DEMO_DATA:-false}"
+    assert environment["FILES_IN_DEMO"] == "${FILES_IN_DEMO:-false}"
+    assert environment["ENABLED_PLUGINS"] == "${ENABLED_PLUGINS:-common.csv_export}"
+    assert environment["INSTANCE_ID"].startswith("${INSTANCE_ID:?")
+
+
+def test_dev_and_prod_are_the_public_demo_with_their_own_installation_ids() -> None:
+    dev, prod = _settings("dev"), _settings("prod")
+
     assert (
-        'if [[ "$ENV_NAME" == dev ]]; then\n'
-        "    export ENABLED_PLUGINS=common.csv_export,countries.ee.building_registry\n"
-        "else\n"
-        "    export ENABLED_PLUGINS=common.csv_export\n"
-        "fi\n"
-    ) in deploy_script, "the plugin on dev only, in the dev branch"
+        sorted(dev)
+        == sorted(prod)
+        == [
+            "DEMO_MODE_ENABLED",
+            "ENABLED_PLUGINS",
+            "FILES_IN_DEMO",
+            "INSTANCE_ID",
+            "SEED_DEMO_DATA",
+        ]
+    )
+    for settings in (dev, prod):
+        assert settings["DEMO_MODE_ENABLED"] == settings["SEED_DEMO_DATA"] == "true"
+        assert re.fullmatch(r"[a-z0-9][a-z0-9-]{2,63}", settings["INSTANCE_ID"])
+    assert (dev["INSTANCE_ID"], prod["INSTANCE_ID"]) == ("project-dev", "project-prod")
+    # Uploads in demo mode on dev only (epic E11).
+    assert (dev["FILES_IN_DEMO"], prod["FILES_IN_DEMO"]) == ("true", "false")
+    # Epic E12: countries.ee.building_registry on dev; prod keeps the default plugins.
+    assert dev["ENABLED_PLUGINS"] == "common.csv_export,countries.ee.building_registry"
+    assert prod["ENABLED_PLUGINS"] == "common.csv_export"
 
 
 def test_database_caps_its_write_ahead_log_and_temp_files() -> None:
@@ -102,8 +126,10 @@ def test_shell_scripts_parse(script: str) -> None:
     subprocess.run(["bash", "-n", str(path)], check=True)
 
 
-def test_host_files_hold_no_secrets() -> None:
-    for host_file in (DEPLOY / "hosts").glob("*.env"):
+def test_host_and_environment_files_hold_no_secrets() -> None:
+    files = [*(DEPLOY / "hosts").glob("*.env"), *(DEPLOY / "environments").glob("*.env")]
+    assert len(files) >= 3
+    for host_file in files:
         for line in host_file.read_text().splitlines():
             if line.startswith("#") or "=" not in line:
                 continue
@@ -150,7 +176,11 @@ def host(tmp_path: Path) -> dict:
         'if [[ "$1 $2" == "image ls" && "$*" == *"{{.Tag}}"* ]]; then\n'
         f"  printf '%s\\n' {' '.join(repr(t) for t in tags.split())}\n"
         "fi\n"
-        'if [[ "$1" == compose && "$*" == *" up "* && -n "${FAIL_UP:-}" ]]; then exit 1; fi\n',
+        'if [[ "$1" == compose && "$*" == *" up "* ]]; then\n'
+        f'  echo "settings $INSTANCE_ID $DEMO_MODE_ENABLED $SEED_DEMO_DATA $FILES_IN_DEMO'
+        f' $ENABLED_PLUGINS" >> {calls}\n'
+        '  [[ -z "${FAIL_UP:-}" ]] || exit 1\n'
+        "fi\n",
     )
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "AAP_CONF": str(conf)}
     return {"root": root, "releases": releases, "calls": calls, "env": env, "bin": bin_dir}
@@ -286,6 +316,45 @@ def test_a_healthy_deploy_records_the_release_and_then_cleans_up(host: dict) -> 
     assert _removed_images(host) == {SHA_DEV_PREVIOUS, SHA_OLD, SHA_OLDER}
     # The deploy released its shared lock before the clean-up took the exclusive one.
     assert "skipped" not in result.stdout
+
+
+@pytest.mark.parametrize("env_name", ["dev", "prod"])
+def test_a_deploy_starts_the_environment_with_its_settings(host: dict, env_name: str) -> None:
+    (host["root"] / env_name / ".env").write_text("")
+
+    result = subprocess.run(
+        ["bash", str(DEPLOY / "deploy.sh"), env_name, "f" * 40],
+        env=host["env"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    settings = _settings(env_name)
+    expected = " ".join(
+        settings[key]
+        for key in (
+            "INSTANCE_ID",
+            "DEMO_MODE_ENABLED",
+            "SEED_DEMO_DATA",
+            "FILES_IN_DEMO",
+            "ENABLED_PLUGINS",
+        )
+    )
+    assert f"settings {expected}" in host["calls"].read_text().splitlines()
+
+
+def test_a_deploy_without_settings_for_its_environment_starts_nothing(host: dict) -> None:
+    result = subprocess.run(
+        ["bash", str(DEPLOY / "deploy.sh"), "staging", "f" * 40],
+        env=host["env"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "no settings for staging" in result.stdout
+    assert not host["calls"].exists()
 
 
 def test_a_failed_deploy_never_cleans_up(host: dict) -> None:
