@@ -8,21 +8,30 @@ installation").
 It creates the building of a new installation without the demo seed, so that
 `python -m src.modules.auth create-chairman` can invite its first chairman. Every field is checked
 before anything is written; it refuses when the installation already has a building.
+
+    uv run python -m src.modules.property find-building --address "Näide tn 5, Tallinn"
+        [--country EE]
+
+It asks the register provider of the country for matching buildings and prints one line of JSON
+(docs/API.md section 1, "Looking a building up in the register"), for the installer. No database.
 """
 
 import argparse
 import asyncio
+import json
 import sys
 from collections.abc import Callable
 from typing import TextIO
 
 from pydantic import ValidationError
 
+from src.core.config import Settings, get_settings
 from src.core.database import transaction
 from src.core.domain_events import SessionFactory
 from src.core.exceptions import DomainError
-from src.modules.property.schemas import NewBuilding
+from src.modules.property.schemas import NewBuilding, RegistryLookup
 from src.modules.property.service import PropertyService
+from src.plugins.registry import RegistryUnavailable, build_plugin_registry
 
 # The command's option for each field, so that an error names what the operator typed.
 _OPTION = {
@@ -84,6 +93,27 @@ async def create_building(
     return 0
 
 
+async def find_building(settings: Settings, *, address: str, country: str, out: TextIO) -> int:
+    """Returns the exit code: 0 found (maybe nothing), 2 invalid, 3 unavailable, 4 no provider."""
+    try:
+        lookup = RegistryLookup(address=address, country_code=country)
+    except ValidationError as error:
+        print(_first_error(error), file=out)
+        return 2
+    provider = build_plugin_registry(settings).building_registry(lookup.country_code)
+    if provider is None:
+        print(json.dumps({"status": "no_provider"}), file=out)
+        return 4
+    try:
+        candidates = await provider.search(lookup.address)
+    except RegistryUnavailable:
+        print(json.dumps({"status": "unavailable"}), file=out)
+        return 3
+    found = [{"code": c.code, "address": c.address} for c in candidates[:10]]
+    print(json.dumps({"status": "found", "candidates": found}, ensure_ascii=False), file=out)
+    return 0
+
+
 def main(
     argv: list[str] | None = None,
     session_factory: Callable[[], SessionFactory] | None = None,
@@ -97,7 +127,17 @@ def main(
     create.add_argument("--registry-code")
     # Read as text: NewBuilding checks it, so its error looks like those of the other fields.
     create.add_argument("--reading-deadline-day", default="4")
+    find = commands.add_parser("find-building", help="look a building up in the register")
+    find.add_argument("--address", required=True)
+    find.add_argument("--country", default="EE")
     args = parser.parse_args(argv)
+
+    if args.command == "find-building":
+        return asyncio.run(
+            find_building(
+                get_settings(), address=args.address, country=args.country, out=sys.stdout
+            )
+        )
 
     if session_factory is None:
         from src.core.database import async_session_factory
