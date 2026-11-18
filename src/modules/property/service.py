@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import DbSession
 from src.core.exceptions import DomainError
+from src.core.instance import is_real_installation
 from src.core.validation import canonical_email
 from src.modules.property.models import (
     Apartment,
@@ -47,6 +48,7 @@ from src.modules.property.schemas import (
     MembershipRefDTO,
     MembershipView,
     MeResponse,
+    NewBuilding,
     PersonDTO,
     PersonMembershipDTO,
     PrivacyUpdateResponse,
@@ -90,6 +92,10 @@ _APARTMENT_ORDER = (Apartment.entrance, func.length(Apartment.number), Apartment
 # Ended memberships are history: every query that resolves people filters them
 # (docs/ARCHITECTURE.md 4.3).
 ACTIVE_MEMBERSHIP = ApartmentMembership.ended_at.is_(None)
+
+
+# Serializes create_first_building, so two runs at once create one building.
+FIRST_BUILDING_LOCK_KEY = 7_202_611_002
 
 
 class PropertyService:
@@ -605,6 +611,27 @@ class PropertyService:
 
     # --- Accounts and memberships for module auth (docs/ARCHITECTURE.md 4.2) --------------------
     # System-level: no CurrentUserDTO; module auth checks who may call them.
+
+    async def create_first_building(self, building: NewBuilding) -> uuid.UUID:
+        """The building of a new installation (operator command create-building). The caller
+        commits. Refuses, writing nothing, unless the installation marker says a real
+        installation (src/core/instance.py; never a building in a demo, where anyone can act as
+        its chairman, and the seed skips a real one) and the installation has no building yet."""
+        await self.session.execute(select(func.pg_advisory_xact_lock(FIRST_BUILDING_LOCK_KEY)))
+        if not await is_real_installation(self.session):
+            raise DomainError(409, "NOT_A_REAL_INSTALLATION", "Not a real installation.")
+        if await self.session.scalar(select(Building.id).limit(1)) is not None:
+            raise DomainError(409, "BUILDING_EXISTS", "The installation already has a building.")
+        row = Building(
+            name=building.name,
+            address=building.address,
+            country_code=building.country_code,
+            registry_code=building.registry_code,
+            reading_deadline_day=building.reading_deadline_day,
+        )
+        self.session.add(row)
+        await self.session.flush()
+        return row.id
 
     async def building_ids(self) -> list[uuid.UUID]:
         """Every building of the installation (one per installation today; the operator
