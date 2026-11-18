@@ -53,6 +53,7 @@ pull request ──► CI: ruff + pytest (PostgreSQL service), frontend lint + t
    label deploy-dev ──► Deploy (dev, <head sha>) ──► smoke test via the public URL
 push to main ──► CI: ruff + pytest ──► image :<sha> and :main ──► Deploy (dev) ──► smoke test via the public URL
 manual       ──► Deploy (prod, <sha>) ──► smoke test via the public URL
+tag vX.Y.Z   ──► Release: checks ──► image :<sha> also tagged :vX.Y.Z ──► GitHub Release (install.sh, aap-release.tar.gz)
 ```
 
 - **`.github/workflows/ci.yml`** runs on every pull request and every push to `main`. Images are
@@ -64,6 +65,11 @@ manual       ──► Deploy (prod, <sha>) ──► smoke test via the public 
   frontend version shows up on dev before the merge (docs/FRONTEND_GIT_WORKFLOW.md). Dev shows
   whatever was deployed last; the next merge to `main` replaces a preview. Do not preview a pull
   request that changes database migrations.
+- **`.github/workflows/release.yml`** runs only on a pushed tag `v*` and deploys nothing: it tags
+  the image CI already built and publishes the release that associations install from (section
+  "Versions and releases (R5b)"). A tag push starts no CI run and no deploy, and the job holds no
+  deploy key: only the workflow's own token, with `contents: write` and `packages: write`.
+  Versions are tagged only on the owner's request.
 - **`.github/workflows/deploy.yml`** is reused by CI for dev and is the manual entry point for prod
   and rollbacks: *Actions → Deploy → Run workflow*, pick `prod`, paste the full commit SHA.
   The `production` environment only accepts runs from `main`.

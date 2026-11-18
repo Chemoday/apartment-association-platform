@@ -38,6 +38,10 @@ All AI coding, testing, and on-call agents operating in this repository MUST fol
   request (docs/DEPLOYMENT.md). To try a change on dev before merging, add the label
   `deploy-dev` to its pull request. (The `main` freeze during the course review ended on
   2026-11-05; `develop` is no longer used.)
+- **Versions:** a tag `vX.Y.Z` on a commit of `main` publishes a release that associations
+  install (`.github/workflows/release.yml`, docs/DEPLOYMENT.md "Versions and releases"). Tag a
+  version only on the owner's request, on a commit that already ran on dev; never move or delete
+  a published version tag.
 - **CTO review before merge:** when a task is done and `pytest` is green, a fresh reviewer agent
   without the development context reviews only the branch commits (`git fetch` first, then `git diff origin/main...HEAD`) and
   the current code for quality, security, bugs and the guardrails above. The implementing agent
