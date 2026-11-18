@@ -423,7 +423,7 @@ section 12. Settings: docs/DEPLOYMENT.md "Uploaded files".
   everyone. Uploads stop when the disk of
   `FILES_DIR` has less than `FILES_MIN_FREE_MB` free.
 - **Demo mode:** uploads are refused (403 `UPLOADS_DISABLED`) unless `FILES_IN_DEMO` (only for
-  `ENVIRONMENT` local, dev or test; `deploy.sh` sets it for dev), which also caps the quota at
+  `ENVIRONMENT` local, dev or test; on for dev in `deploy/environments/dev.env`), which also caps the quota at
   `FILES_DEMO_QUOTA_MB` and the retention at `FILES_DEMO_RETENTION_HOURS`.
 - **Deleting:** a delete marks the row and hides the file; 14 days later the janitor erases the
   blob and then the row.
@@ -528,3 +528,28 @@ Design: docs/epics/E12_EXTERNAL_BUILDING_DATA.md. Table: docs/SCHEMA.md section 
   and 30 days before and on the day; `notifications` turns it into
   `ENERGY_CERTIFICATE_EXPIRING` for the chairman and the board.
 
+## 14. The installation marker (`src/core/instance.py`), epic E13 task R1
+
+*Data: docs/SCHEMA.md section 6 (`core_instance`). Operations, settings and reason codes:
+docs/DEPLOYMENT.md "Demo mode and the installation marker". Background: docs/BACKLOG.md B-4,
+security backlog S-7.*
+
+- **What it protects against:** the backend starting on the database or the files of another
+  installation (a backup restored into the wrong one, a wrong `DATABASE_URL`, a files directory
+  mounted for another environment), demo mode switched on over a real association's data,
+  where anyone could act as its chairman, and a real installation started on the fictitious
+  people of a demo.
+- **A startup step, not a request check:** `python -m src.core.instance` runs in `entrypoint.sh`
+  between the migrations and the seed, like them before the server starts. A refusal ends the
+  container, so a deploy fails its health check and rolls back. The app itself (`create_app`,
+  the tests) never reads the marker.
+- **Infrastructure of `src/core`:** like `src/core/seed.py` it may read tables of other parts
+  directly; it reads only whether `core_files` has a row. The seed reads the marker and never
+  seeds a database marked as a real installation.
+- **The first start writes, later starts compare:** the marker is written once, under
+  `pg_advisory_xact_lock`, in the transaction that checks it; the file `FILES_DIR/INSTANCE` is
+  written (atomically, by a rename) before that transaction commits, so a crash in between
+  leaves a file that the next start accepts.
+- **No personal data:** the marker holds an id, a flag and a time; the log line of a refusal holds
+  a reason code and, for a mismatch, the installation id found (only when it is a valid id), never
+  other data.

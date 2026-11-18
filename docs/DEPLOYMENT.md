@@ -77,13 +77,76 @@ manual       ──► Deploy (prod, <sha>) ──► smoke test via the public 
 - The short-lived `GITHUB_TOKEN` used to pull the image goes over stdin into a throwaway Docker
   config and is never written to the server.
 
-## Demo data
+## Demo mode and the installation marker
 
-Both environments run with `DEMO_MODE_ENABLED=true` and `SEED_DEMO_DATA=true`
-(`deploy/docker-compose.deploy.yml`). At startup, after the migrations, `entrypoint.sh` runs
-`python -m src.core.seed`: it seeds the demo building into an **empty** database once and does
-nothing on every later start, or when the database already has a building. To start the demo
-over on dev, the dev database has to be emptied; prod is never reset by a deploy.
+Whether an environment is a demo is its own setting (epic E13, task R1), not something fixed in
+the deploy files. The settings of each environment on the project's VPS live in
+`deploy/environments/<env>.env`: in the repository, no secrets. `deploy.sh` reads the file of the
+release it deploys and exports its values, and `deploy/docker-compose.deploy.yml` passes them to
+the backend. Secrets stay in `/opt/aap/<env>/.env`.
+
+| Variable | Compose default | dev | prod | Meaning |
+| :--- | :--- | :--- | :--- | :--- |
+| `DEMO_MODE_ENABLED` | `false` | `true` | `true` | Anyone can act as anyone (`X-Demo-User-Id`) |
+| `SEED_DEMO_DATA` | `false` | `true` | `true` | The demo building into an empty database |
+| `FILES_IN_DEMO` | `false` | `true` | `false` | Uploads in demo mode (section "Uploaded files") |
+| `ENABLED_PLUGINS` | `common.csv_export` | `common.csv_export,countries.ee.building_registry` | `common.csv_export` | Plugins of the environment |
+| `INSTANCE_ID` | none, required | `project-dev` | `project-prod` | Which installation the data belong to (below) |
+
+- **The deploy compose file defaults to a real installation:** without its settings an
+  environment runs without demo mode and without the seed. The local `docker-compose.yml` stays a
+  demo out of the box (`INSTANCE_ID` `local`).
+- **`ENVIRONMENT`** is the name of the environment (`dev`, `prod`), set by `deploy.sh`. A demo on
+  an association's own VPS (the installer of task R5) runs as `prod`, like the public demo on
+  prod: uploads (`FILES_IN_DEMO`) and sign-in mail in demo mode (`AUTH_MAIL_IN_DEMO`) are allowed
+  only for `ENVIRONMENT` local, dev or test, so in such a demo they stay off.
+- **The seed:** at startup, after the migrations and the marker check, `entrypoint.sh` runs
+  `python -m src.core.seed`. It seeds the demo building into an **empty** database once and does
+  nothing on every later start, when the database already has a building, or when the marker says
+  the database belongs to a real installation. To start the demo over on dev, the dev database
+  has to be emptied; prod is never reset by a deploy.
+
+### The installation marker
+
+Every installation has an `INSTANCE_ID` (3 to 64 characters: lowercase letters, digits and
+`-`, starting with a letter or a digit; not a secret). Its database and its files directory carry
+it (docs/BACKLOG.md B-4): the table `core_instance` (docs/SCHEMA.md section 6) and the file
+`FILES_DIR/INSTANCE`. After the migrations `entrypoint.sh` runs `python -m src.core.instance`,
+which under an advisory lock:
+
+1. refuses to start without a valid `INSTANCE_ID`;
+2. on a database without a marker (a new installation, or one from before task R1) writes the
+   marker with this `INSTANCE_ID` and with `demo` = `DEMO_MODE_ENABLED` or `SEED_DEMO_DATA`, and
+   writes `FILES_DIR/INSTANCE`, unless that file names another installation. A database from
+   before the marker is claimed even when it has files and the directory has no `INSTANCE` yet
+   (dev and prod on their first start after R1); rule 5 applies from then on;
+3. on a database with a marker refuses to start when the marker names another installation, or
+   when demo mode is on and the marker says the database belongs to a real installation (anyone
+   could act as its chairman);
+4. refuses to start with demo mode off on demo data (the marker says `demo`, or this first start
+   would write it so because of the seed) unless `ENVIRONMENT` is local, dev or test: a real
+   association never starts on the fictitious people of a demo, and a demo database never
+   becomes a real one. Locally and on dev it is allowed (a test of the e-mails with the seeded
+   building) and logged as a warning;
+5. refuses to start when `FILES_DIR/INSTANCE` names another installation or cannot be read, or is
+   missing while the database has files (the files directory of another installation, or an
+   empty one); a missing file next to a database without files is written.
+
+Nothing is written unless every rule passes. When several fail, the reason reported is the
+first in this order: rule 1, a files marker of another installation (rule 5), rule 3, a missing
+files marker (rule 5), then rule 4.
+
+A refusal ends the container with one log line `instance_check_refused` and a reason code
+(`INSTANCE_ID_MISSING`, `INSTANCE_ID_INVALID`, `DATABASE_OF_ANOTHER_INSTANCE`,
+`DEMO_ON_REAL_DATA`, `REAL_ON_DEMO_DATA`, `FILES_OF_ANOTHER_INSTANCE`, `FILES_MARKER_MISSING`)
+and, for a mismatch, the installation id found (only when it is a valid id), never with other
+data. The deploy's health check then fails and `deploy.sh` rolls back.
+`python -m src.core.instance show` prints the marker as JSON (`instance_id`, `demo`,
+`created_at`, `files_instance_id`), for the installer and for a look by hand, on a migrated
+database (in the running container: `docker compose exec backend python -m src.core.instance
+show`). The first three are `null` before the first start; `files_instance_id` is `null` without
+the file and `""` when the file holds no valid id. Moving data on
+purpose (a prod copy into dev) has no command yet (B-4, point 3).
 
 ## Resource limits and disk hygiene
 
@@ -125,7 +188,7 @@ mounted at `/data/files` in the backend (`FILES_DIR`). Settings, all in the envi
 | `FILES_QUOTA_MB` | 2048 | Quota per association (E11 section 6: about 0.5 GB + 25 MB per apartment) |
 | `FILES_USER_MB_PER_DAY` | 20 | Stored bytes per user and day |
 | `FILES_MIN_FREE_MB` | 5120 | Uploads stop below this free space on the disk of `FILES_DIR` |
-| `FILES_IN_DEMO` | `false` | Uploads in demo mode; only for `ENVIRONMENT` local, dev or test. `deploy.sh` sets it to `true` for dev and `false` for prod |
+| `FILES_IN_DEMO` | `false` | Uploads in demo mode; only for `ENVIRONMENT` local, dev or test. `true` for dev and `false` for prod (`deploy/environments/<env>.env`) |
 | `FILES_DEMO_QUOTA_MB`, `FILES_DEMO_RETENTION_HOURS` | 100, 24 | The quota and the retention while in demo mode |
 | `FILES_JANITOR_ENABLED` | `true` | The hourly clean-up loop |
 | `REGISTRY_CALLS_PER_DAY` | 10 | Calls to the public building register per installation and UTC day (epic E12, S-10) |
@@ -223,20 +286,24 @@ seconds. Then add a line to `deploy/HOST_CHANGELOG.md`.
 
 ## Notes
 
-- `DEMO_MODE_ENABLED=true` in both environments, so reviewers can switch roles with
-  `X-Demo-User-Id`. The deployed databases contain seeded demo data only.
+- `DEMO_MODE_ENABLED=true` in both environments (`deploy/environments/<env>.env`), so reviewers
+  can switch roles with `X-Demo-User-Id`. The deployed databases contain seeded demo data only,
+  and their markers say so.
 - **E-mail:** the backend is only an SMTP client of an external provider; no mail server runs in
   the image or on the VPS, and environments share nothing. When e-mail goes live (after a real
   login, docs/BACKLOG.md B-7), each environment gets its own `SMTP_*` values, `SMTP_FROM`,
   `PUBLIC_BASE_URL`, `NOTIFICATIONS_HASH_SECRET` (at least 32 bytes; it signs the unsubscribe
   links since N8, and the backend refuses to start without it) and `common.email_smtp` added to
-  that environment's `ENABLED_PLUGINS` in `deploy.sh` (not in `.env`: the backend reads
-  `ENABLED_PLUGINS` only from what `deploy.sh` exports; docs/epics/E1_NOTIFICATIONS.md 6.1). The provider must sign
+  that environment's `ENABLED_PLUGINS` in `deploy/environments/<env>.env` (not in `.env`: the
+  backend reads `ENABLED_PLUGINS` only from what `deploy.sh` exports;
+  docs/epics/E1_NOTIFICATIONS.md 6.1). Prod without demo mode needs a fresh database: on the
+  seeded one, marked `demo`, it refuses to start (`REAL_ON_DEMO_DATA`). The provider must sign
   the mail with DKIM, or large mail services ignore the one-click unsubscribe headers.
 - **Building register (epic E12):** an Estonian association gets its building passport with
   `countries.ee.building_registry` in `ENABLED_PLUGINS`. `ENABLED_PLUGINS` is not a secret, so
-  `deploy.sh` sets it per environment (dev: `common.csv_export,countries.ee.building_registry`
-  since 2026-11-15; prod: `common.csv_export`) and the compose file passes it on. The plugin calls
+  it is set per environment in `deploy/environments/<env>.env` (dev:
+  `common.csv_export,countries.ee.building_registry` since 2026-11-15; prod: `common.csv_export`)
+  and the compose file passes it on. The plugin calls
   only the public In-ADS address service (`inaadress.maaamet.ee`) and the building register
   (`livekluster.ehr.ee`) over HTTPS, without a key; the host needs outbound HTTPS to them.
 - **Login secrets (epic E7):** the backend refuses to start without `JWT_SECRET_KEY` and
