@@ -23,6 +23,14 @@ if ! $DELETE; then
     exit 2
 fi
 [[ $EUID -eq 0 ]] || { echo "uninstall: run as root" >&2; exit 1; }
+# Only ever this installation's own directory: an AAP_ROOT that holds no installation (a typo, a
+# variable left over from something else) is refused, never deleted.
+conf=""
+[[ -f "$AAP_ROOT/aap.conf" ]] && conf=$(< "$AAP_ROOT/aap.conf")
+if [[ ! -f "$AAP_ROOT/site/settings.env" || $'\n'"$conf"$'\n' != *$'\n'ENVIRONMENTS=site$'\n'* ]]; then
+    echo "uninstall: $AAP_ROOT holds no installation made by install.sh; nothing was changed" >&2
+    exit 1
+fi
 if ! $YES; then
     read -r -p "This deletes the site and all its data for good. Type delete to go on: " answer < /dev/tty
     [[ "$answer" == delete ]] || { echo "Nothing was changed."; exit 0; }

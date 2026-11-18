@@ -9,6 +9,9 @@
 # questions (or their flags), then the install on its own. Re-running keeps every secret and all
 # data. The install log never holds a secret, an e-mail address, a link or the building's address.
 set -euo pipefail
+# Files this script writes without an explicit mode (edge/.env, the apt source) stay private to
+# root even under a loose umask; secrets get 077 on their own.
+umask 022
 
 AAP_ROOT=${AAP_ROOT:-/opt/aap}
 # The repository the installation was made from (aap.conf) wins on a re-run or an update.
@@ -17,6 +20,10 @@ if [[ -f "$AAP_ROOT/aap.conf" ]]; then
     INSTALLED_REPO=$(sed -n 's/^REPO=//p' "$AAP_ROOT/aap.conf" | head -n 1)
 fi
 REPO=${AAP_REPO:-${INSTALLED_REPO:-Chemoday/apartment-association-platform}}
+if [[ ! "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+    echo "install: the repository must look like owner/name" >&2
+    exit 2
+fi
 ENV_NAME=site
 SITE_DIR="$AAP_ROOT/$ENV_NAME"
 SETTINGS_FILE="$SITE_DIR/settings.env"
@@ -153,6 +160,22 @@ ask() {  # <var> <prompt> [default]
     printf -v "$var" '%s' "${reply:-$default}"
 }
 
+# One line of printable text: no control characters (a line break in an answer would split it in
+# settings.env when a re-run reads it back).
+one_line() {
+    [[ "$1" != *[[:cntrl:]]* ]]
+}
+
+valid_ipv4() {
+    local IFS=. part
+    # shellcheck disable=SC2206
+    local parts=($1)
+    [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ && ${#parts[@]} -eq 4 ]] || return 1
+    for part in "${parts[@]}"; do
+        [[ $((10#$part)) -le 255 ]] || return 1
+    done
+}
+
 valid_hostname() {
     [[ ${#1} -le 253 && "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]
 }
@@ -228,6 +251,7 @@ ensure_docker() {
 
 resolve_ref() {
     if [[ -z "$REF" && -n "$P_SHA" ]]; then
+        [[ "$P_SHA" =~ ^[0-9a-f]{40}$ ]] || die "release: $SITE_DIR/current_sha is not a commit id"
         REF=$P_SHA  # a re-run keeps the installed commit; update.sh passes --ref
     fi
     if [[ -z "$REF" ]]; then
@@ -247,11 +271,15 @@ fetch_release() {
     fi
     local tmp
     tmp=$(mktemp -d "$AAP_ROOT/releases/.incoming.XXXXXX")
-    if ! curl -fsSL --retry 3 "https://codeload.github.com/$REPO/tar.gz/$REF" \
-        | tar -xz -C "$tmp" --strip-components=1 --wildcards '*/deploy/*' '*/install/*'; then
+    if ! curl -fsSL --retry 3 -o "$tmp/.archive.tar.gz" "https://codeload.github.com/$REPO/tar.gz/$REF" \
+        || ! tar -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards '*/deploy/*'; then
         rm -rf "$tmp"
         die "release: cannot download commit $REF"
     fi
+    # A commit older than the install has no install/: tar fails on the missing pattern, which
+    # is told apart below instead of being reported as a failed download.
+    tar -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards '*/install/*' 2> /dev/null || true
+    rm -f "$tmp/.archive.tar.gz"
     if [[ ! -f "$tmp/install/install.sh" ]]; then
         rm -rf "$tmp"
         die "release: commit $REF has no installer (it is older than the install); pick a newer commit"
@@ -269,19 +297,22 @@ pull_image() {
 }
 
 detect_public_ip() {
-    [[ -n "$A_PUBLIC_IP" ]] && { PUBLIC_IP=$A_PUBLIC_IP; return 0; }
+    if [[ -n "$A_PUBLIC_IP" ]]; then
+        valid_ipv4 "$A_PUBLIC_IP" || die "network: --public-ip must be an IPv4 address"
+        PUBLIC_IP=$A_PUBLIC_IP
+        return 0
+    fi
     # A re-run without questions (update.sh) keeps the address it found before: no outside call.
     $YES && [[ -n "$P_PUBLIC_IP" ]] && { PUBLIC_IP=$P_PUBLIC_IP; return 0; }
     PUBLIC_IP=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2> /dev/null \
         || curl -4 -fsS --max-time 10 https://ifconfig.me 2> /dev/null || true)
-    [[ "$PUBLIC_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] \
-        || die "network: cannot find the server's public IP; pass --public-ip"
+    valid_ipv4 "$PUBLIC_IP" || die "network: cannot find the server's public IP; pass --public-ip"
 }
 
 # --- Phase 2: the questions -----------------------------------------------------------------------
 
 resolves_here() {  # <host>
-    getent ahostsv4 "$1" 2> /dev/null | awk '{print $1}' | grep -qx "$PUBLIC_IP"
+    getent ahostsv4 "$1" 2> /dev/null | awk '{print $1}' | grep -qxF -- "$PUBLIC_IP"
 }
 
 ask_host() {
@@ -350,7 +381,7 @@ candidates_of() {  # <json>
     docker run --rm -i --entrypoint python "$IMAGE:$REF" -c '
 import json, sys
 for c in json.loads(sys.stdin.read()).get("candidates", []):
-    print(c["code"] + "\t" + c["address"])' <<< "$1"
+    print(c["code"] + "\t" + c["address"])' <<< "$1" | tr -d '\000-\010\013-\037\177'
 }
 
 ask_building() {
@@ -368,6 +399,7 @@ ask_building() {
     local address=$A_ADDRESS json status=0 chosen=""
     while true; do
         ask address "   The building's address (street, number, town)" "$address"
+        one_line "$address" || die "building: the address must be one line of text"
         [[ ${#address} -ge 3 ]] && break
         $YES && die "building: --building-address is required for a real installation"
     done
@@ -418,10 +450,12 @@ ask_building() {
     fi
     while true; do
         ask ASSOCIATION_NAME "   The association's name (for example KÜ Näide 5)" "$A_NAME"
+        one_line "$ASSOCIATION_NAME" || die "building: the name must be one line of text"
         [[ -n "${ASSOCIATION_NAME// /}" ]] && break
         $YES && die "building: --association-name is required for a real installation"
     done
     ask REGISTRY_CODE "   Its registry code (optional, Enter to skip)" "$A_REGISTRY_CODE"
+    one_line "$REGISTRY_CODE" || die "building: the registry code must be one line of text"
 }
 
 ask_chairman() {
@@ -470,11 +504,15 @@ ask_smtp() {
     [[ "$SMTP_PORT" =~ ^[0-9]+$ && $SMTP_PORT -ge 1 && $SMTP_PORT -le 65535 ]] \
         || die "smtp: '$SMTP_PORT' is not a port"
     ask SMTP_USERNAME "   User name" "${A_SMTP_USER:-$P_SMTP_USERNAME}"
+    if [[ -z "$SMTP_USERNAME" || "$SMTP_USERNAME" == *[[:space:][:cntrl:]]* ]]; then
+        die "smtp: the user name must be one word without spaces"
+    fi
     ask SMTP_FROM "   Sender address" "${A_SMTP_FROM:-${P_SMTP_FROM:-$SMTP_USERNAME}}"
     valid_email "$SMTP_FROM" || die "smtp: the sender '$SMTP_FROM' is not an e-mail address"
     if [[ -n "$A_SMTP_PASSWORD_FILE" ]]; then
         [[ -r "$A_SMTP_PASSWORD_FILE" ]] || die "smtp: cannot read --smtp-password-file"
         SMTP_PASSWORD_NEW=$(head -n 1 "$A_SMTP_PASSWORD_FILE")
+        SMTP_PASSWORD_NEW=${SMTP_PASSWORD_NEW%$'\r'}  # a file saved on Windows
     elif ! $YES; then
         local hint="Password (not shown)"
         grep -q '^SMTP_PASSWORD=.' "$SECRETS_FILE" 2> /dev/null && hint="Password (not shown; Enter keeps the saved one)"

@@ -110,7 +110,7 @@ def test_bad_options_stop_before_anything_happens(tmp_path: Path, args: list[str
     [
         ("kyhistu.example.ee", True),
         ("example.ee", True),
-        ("212-95-32-148.sslip.io", True),
+        ("203-0-113-7.sslip.io", True),
         ("localhost", False),
         ("https://example.ee", False),
         ("example.ee/path", False),

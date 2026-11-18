@@ -11,7 +11,7 @@ docs/epics/E13_ROLLOUT.md; the technical contract is docs/DEPLOYMENT.md, "The si
 - `root` access over SSH.
 - Ports **80 and 443** free on the server (the installer stops if another program uses them).
 - Optional: an own address such as `kyhistu.example.ee`. Without one, the site gets an address
-  of the form `212-95-32-148.sslip.io`, which works at once.
+  of the form `203-0-113-7.sslip.io`, which works at once.
 - Optional: a mailbox that can send mail over SMTP (an app password of a regular mailbox is fine).
   Without it the platform works, but residents cannot be invited by e-mail until it is set.
 

@@ -361,15 +361,19 @@ project instead of copying it: one environment named `site`, deployed by `deploy
   `install/uninstall.sh --delete-data`, which starts over. Should the settings and the data still
   disagree, the backend's own marker check refuses to start (`DEMO_ON_REAL_DATA`,
   `REAL_ON_DEMO_DATA`) and `deploy.sh` rolls back.
-- **`update.sh <sha>`** moves forward only (a failed deploy rolls back by itself through
-  `deploy.sh`; a commit older than the install has no installer and is refused). It downloads
+- **`update.sh <sha>`** is meant to move forward: going back is the automatic rollback of
+  `deploy.sh` after a failed deploy, and a commit older than the install has no installer and is
+  refused. It downloads
   that commit's release like phase 1 and runs that release's own
   `install.sh --yes --ref <sha>`: a re-run without questions, which keeps the answers, the public
   IP found before and an unchanged hostname without checking DNS again, copies the new scripts
   to `bin/` and deploys through `deploy.sh site <sha>`.
 - **Refusals** print one line saying what to fix and exit non-zero: not root, not x86_64, not
   Debian or Ubuntu, a port in use, an own hostname that does not resolve to the server (with
-  `--yes`; interactively the question is asked again), an invalid answer.
+  `--yes`; interactively the question is asked again), an invalid answer (every text answer is
+  one line without control characters; `--public-ip` an IPv4 address).
+- **`uninstall.sh --delete-data`** refuses a directory that holds no installation made by
+  `install.sh` (`aap.conf` with `ENVIRONMENTS=site` and `site/settings.env`).
 
 ### The install log and the screen
 `/opt/aap/install.log` (600) gets one line per step: time, step and outcome, for example
