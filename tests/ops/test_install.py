@@ -82,14 +82,23 @@ def test_help_lists_every_option() -> None:
     result = subprocess.run(["bash", str(SCRIPT), "--help"], capture_output=True, text=True)
 
     assert result.returncode == 0
-    for option in ("--yes", "--ref", "--host", "--no-domain", "--mode", "--building-address",
-                   "--association-name", "--chairman-email", "--smtp-password-file", "--no-smtp",
-                   "--tls-internal"):  # fmt: skip
+    for option in ("--yes", "--version", "--ref", "--allow-downgrade", "--host", "--no-domain",
+                   "--mode", "--building-address", "--association-name", "--chairman-email",
+                   "--smtp-password-file", "--no-smtp", "--tls-internal"):  # fmt: skip
         assert option in result.stdout
 
 
 @pytest.mark.parametrize(
-    "args", [["--smtp-password", "x"], ["--smtp-password=x"], ["--ref", "abc"], ["--bogus"]]
+    "args",
+    [
+        ["--smtp-password", "x"],
+        ["--smtp-password=x"],
+        ["--ref", "abc"],
+        ["--version", "1.2.3"],
+        ["--version", "v1.2"],
+        ["--version", "v1.2.3", "--ref", "a" * 40],
+        ["--bogus"],
+    ],
 )
 def test_bad_options_stop_before_anything_happens(tmp_path: Path, args: list[str]) -> None:
     result = subprocess.run(
@@ -408,8 +417,11 @@ def test_with_yes_an_unchanged_hostname_is_not_checked_again(tmp_path: Path) -> 
 # --- update.sh and uninstall.sh ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("args", [[], ["abc"], ["a" * 40, "extra"]])
-def test_update_needs_one_full_commit(tmp_path: Path, args: list[str]) -> None:
+@pytest.mark.parametrize(
+    "args",
+    [["abc"], ["a" * 40, "extra"], ["v1.2"], ["1.2.3"], ["v1.2.3", "v1.2.4"], ["--force"]],
+)
+def test_update_needs_a_version_or_one_full_commit(tmp_path: Path, args: list[str]) -> None:
     result = subprocess.run(
         ["bash", str(INSTALL / "update.sh"), *args],
         env={**os.environ, "AAP_ROOT": str(tmp_path)},

@@ -34,6 +34,10 @@ BACKEND="aap-${ENV_NAME}-backend-1"
 APP_UID=1000  # the backend's user in its image; it owns the files directory
 DISK_BUDGET_GB=15
 CADDY_IMAGE=caddy:2.8.4-alpine
+# The version this installer belongs to: .github/scripts/build-release.sh sets it in the installer
+# of a release; empty in the repository (docs/DEPLOYMENT.md "Versions and releases").
+RELEASE_VERSION=""
+RELEASE_ARCHIVE=aap-release.tar.gz
 
 # --- Output and the log ---------------------------------------------------------------------------
 
@@ -56,8 +60,10 @@ Usage: bash install.sh [--yes] [options]
 
   --yes                     ask nothing: take the answers from the options and, on a re-run,
                             from the previous install
-  --ref <sha>               the commit of main to install (default: the latest commit of main,
-                            or on a re-run the one already installed)
+  --version <vX.Y.Z>        the version to install (default: the version of this installer,
+                            else the latest one; on a re-run the one already installed)
+  --ref <sha>               a commit of main instead of a version, for testing
+  --allow-downgrade         allow --version to go below the installed version
   --host <name>             the site's own hostname, e.g. kyhistu.example.ee
   --no-domain               no own hostname: <ip-with-dashes>.sslip.io
   --public-ip <ip>          the server's public IPv4 address (default: detected)
@@ -82,6 +88,8 @@ EOF
 YES=false
 RUN_KIND=install
 REF=""
+A_VERSION="" ALLOW_DOWNGRADE=false
+VERSION=""  # the version of the release being installed; empty for a commit
 A_HOST="" A_NO_DOMAIN=false A_PUBLIC_IP=""
 A_MODE=""
 A_ADDRESS="" A_BUILDING_CODE="" A_NAME="" A_REGISTRY_CODE="" A_COUNTRY=""
@@ -93,7 +101,9 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --yes) YES=true; shift ;;
+            --version) A_VERSION=${2:?--version needs a version}; shift 2 ;;
             --ref) REF=${2:?--ref needs a commit}; shift 2 ;;
+            --allow-downgrade) ALLOW_DOWNGRADE=true; shift ;;
             --host) A_HOST=${2:?--host needs a name}; shift 2 ;;
             --no-domain) A_NO_DOMAIN=true; shift ;;
             --public-ip) A_PUBLIC_IP=${2:?--public-ip needs an address}; shift 2 ;;
@@ -121,6 +131,14 @@ parse_args() {
     done
     if [[ -n "$REF" && ! "$REF" =~ ^[0-9a-f]{40}$ ]]; then
         say "install: --ref must be a full 40-character commit id" >&2
+        exit 2
+    fi
+    if [[ -n "$A_VERSION" ]] && ! valid_version "$A_VERSION"; then
+        say "install: --version must look like v1.2.3" >&2
+        exit 2
+    fi
+    if [[ -n "$A_VERSION" && -n "$REF" ]]; then
+        say "install: give --version or --ref, not both" >&2
         exit 2
     fi
 }
@@ -175,6 +193,8 @@ valid_ipv4() {
         [[ $((10#$part)) -le 255 ]] || return 1
     done
 }
+
+valid_version() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
 valid_hostname() {
     [[ ${#1} -le 253 && "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]
@@ -249,22 +269,72 @@ ensure_docker() {
     log_line "docker installed"
 }
 
-resolve_ref() {
-    if [[ -z "$REF" && -n "$P_SHA" ]]; then
+# Which release (docs/DEPLOYMENT.md "What gets downloaded"): --ref or --version as given; on a
+# re-run the installed one (update.sh passes --ref), even when this installer is of another
+# version: a re-run changes the answers, update.sh changes the version; else the version of this
+# installer, else the latest version.
+resolve_release() {
+    [[ -n "$REF" || -n "$A_VERSION" ]] && return 0
+    if [[ -n "$P_SHA" ]]; then
         [[ "$P_SHA" =~ ^[0-9a-f]{40}$ ]] || die "release: $SITE_DIR/current_sha is not a commit id"
-        REF=$P_SHA  # a re-run keeps the installed commit; update.sh passes --ref
+        REF=$P_SHA
+        local installed
+        installed=$(release_version "$P_SHA")
+        if [[ -n "$RELEASE_VERSION" && "$RELEASE_VERSION" != "$installed" ]]; then
+            say "note: this installer is of $RELEASE_VERSION; the installation keeps $(describe_release "$P_SHA" "$installed")."
+            say "      To change the version: bash $AAP_ROOT/bin/update.sh $RELEASE_VERSION"
+        fi
+        return 0
     fi
-    if [[ -z "$REF" ]]; then
-        REF=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/commits/main" | grep -o '"sha": *"[0-9a-f]\{40\}"' \
-            | head -n 1 | grep -o '[0-9a-f]\{40\}') || true
-        [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || die "release: cannot find the latest commit of main (pass --ref)"
+    if [[ -n "$RELEASE_VERSION" ]]; then
+        A_VERSION=$RELEASE_VERSION
+    else
+        A_VERSION=$(latest_version)
     fi
 }
 
+latest_version() {
+    local version
+    version=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/$REPO/releases/latest" | grep -o '"tag_name": *"[^"]*"' \
+        | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/') || true
+    valid_version "$version" || die "release: cannot find the latest version of $REPO (give a version such as v0.2.0)"
+    printf '%s\n' "$version"
+}
+
+# The version of a downloaded release (its VERSION file); empty for a commit.
+release_version() {  # <sha>
+    local file="$AAP_ROOT/releases/$1/VERSION" version
+    [[ -f "$file" ]] || return 0
+    version=$(sed -n 's/^VERSION=//p' "$file" | head -n 1)
+    if valid_version "$version"; then printf '%s\n' "$version"; fi
+}
+
+describe_release() {  # <sha> <version>
+    if [[ -n "$2" ]]; then printf '%s\n' "$2"; else printf 'commit %s\n' "${1:0:12}"; fi
+}
+
+# Updates move forward (docs/DEPLOYMENT.md "Running it again"): a version below the installed
+# one needs --allow-downgrade, because migrations are never reversed. A commit is not compared.
+check_forward() {  # <version asked for>
+    local target=$1 installed
+    [[ -n "$target" && -n "$P_SHA" ]] || return 0
+    installed=$(release_version "$P_SHA")
+    [[ -n "$installed" && "$installed" != "$target" ]] || return 0
+    [[ "$(printf '%s\n%s\n' "$installed" "$target" | sort -V | head -n 1)" == "$target" ]] || return 0
+    $ALLOW_DOWNGRADE && return 0
+    die "release: $target is older than the installed $installed, and migrations are never reversed (--allow-downgrade only when the release notes say it is safe)"
+}
+
+# The release goes to releases/<commit>/: for a version its archive, whose VERSION file names the
+# commit; for a commit its source archive. Only deploy/, install/ and VERSION are kept.
 fetch_release() {
-    local release_dir="$AAP_ROOT/releases/$REF"
     install -d -m 755 "$AAP_ROOT" "$AAP_ROOT/releases"
+    if [[ -z "$REF" ]]; then
+        fetch_version
+        return 0
+    fi
+    local release_dir="$AAP_ROOT/releases/$REF"
     if [[ -f "$release_dir/deploy/deploy.sh" && -f "$release_dir/install/install.sh" ]]; then
         touch "$release_dir"  # keeps it from the clean-up while this run starts
         return 0
@@ -284,16 +354,52 @@ fetch_release() {
         rm -rf "$tmp"
         die "release: commit $REF has no installer (it is older than the install); pick a newer commit"
     fi
+    place_release "$tmp"
+}
+
+fetch_version() {
+    local tmp version commit
+    tmp=$(mktemp -d "$AAP_ROOT/releases/.incoming.XXXXXX")
+    say "downloading version $A_VERSION"
+    if ! curl -fsSL --retry 3 -o "$tmp/.archive.tar.gz" \
+            "https://github.com/$REPO/releases/download/$A_VERSION/$RELEASE_ARCHIVE" \
+        || ! tar -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards \
+            '*/deploy/*' '*/install/*' '*/VERSION'; then
+        rm -rf "$tmp"
+        die "release: cannot download version $A_VERSION (is it on the Releases page of $REPO?)"
+    fi
+    rm -f "$tmp/.archive.tar.gz"
+    version=$(sed -n 's/^VERSION=//p' "$tmp/VERSION" | head -n 1)
+    commit=$(sed -n 's/^COMMIT=//p' "$tmp/VERSION" | head -n 1)
+    if [[ "$version" != "$A_VERSION" || ! "$commit" =~ ^[0-9a-f]{40}$ \
+        || ! -f "$tmp/deploy/deploy.sh" || ! -f "$tmp/install/install.sh" ]]; then
+        rm -rf "$tmp"
+        die "release: the archive of $A_VERSION is not a release of that version"
+    fi
+    REF=$commit
+    # A release of the same commit installed with --ref has no VERSION file: it is replaced by the
+    # same files with VERSION, so the version shows from now on.
+    if [[ "$(release_version "$REF")" == "$A_VERSION" && -f "$AAP_ROOT/releases/$REF/install/install.sh" ]]; then
+        rm -rf "$tmp"
+        touch "$AAP_ROOT/releases/$REF"  # keeps it from the clean-up while this run starts
+        return 0
+    fi
+    place_release "$tmp"
+}
+
+place_release() {  # <downloaded directory>
+    local release_dir="$AAP_ROOT/releases/$REF"
     rm -rf "$release_dir"
-    mv "$tmp" "$release_dir"
+    mv "$1" "$release_dir"
     chmod 755 "$release_dir"
 }
 
 pull_image() {
     docker image inspect "$IMAGE:$REF" > /dev/null 2>&1 && return 0
-    say "downloading the platform (image $REF)"
-    docker pull --quiet "$IMAGE:$REF" > /dev/null \
-        || die "image: no image for commit $REF yet (CI builds it a few minutes after the merge)"
+    say "downloading the platform ($(describe_release "$REF" "$VERSION"))"
+    local hint="no image for commit $REF yet (CI builds it a few minutes after the merge)"
+    [[ -n "$VERSION" ]] && hint="cannot download the image of $VERSION ($IMAGE:$REF); check the server's connection to ghcr.io"
+    docker pull --quiet "$IMAGE:$REF" > /dev/null || die "image: $hint"
 }
 
 detect_public_ip() {
@@ -533,6 +639,7 @@ confirm() {
     $YES && return 0
     say ""
     say "Ready to install:"
+    say "  version    $(describe_release "$REF" "$VERSION")"
     say "  site       https://$SITE_HOST"
     say "  mode       $MODE"
     if [[ "$MODE" == real ]]; then
@@ -648,6 +755,13 @@ EOF
     chmod 644 "$AAP_ROOT/aap.conf"
     write_secrets
     write_settings
+    # The first install gets its scripts at once (uninstall.sh must work even if the deploy fails).
+    [[ -f "$AAP_ROOT/bin/install.sh" ]] || install_bin
+}
+
+# bin/ holds the scripts of the release that runs: after a failed deploy rolled back, a re-run of
+# bin/install.sh must not be the installer of the release that failed.
+install_bin() {
     local release="$AAP_ROOT/releases/$REF"
     install -m 755 "$release/install/install.sh" "$release/install/update.sh" \
         "$release/install/uninstall.sh" "$AAP_ROOT/bin/"
@@ -714,7 +828,7 @@ deploy_release() {
         printf '%s\n' "$output" | tail -n 30 >&2
         die "deploy: the site did not start; it runs the previous version if there was one"
     fi
-    log_line "deploy ok sha=$REF"
+    log_line "deploy ok sha=$REF version=$VERSION"
 }
 
 in_backend() { docker exec "$BACKEND" python -m "$@"; }
@@ -763,7 +877,7 @@ invite_chairman() {
 
 finish() {
     say ""
-    say "Done: https://$SITE_HOST"
+    say "Done: https://$SITE_HOST ($(describe_release "$REF" "$VERSION"))"
     if [[ "$MODE" == demo ]]; then
         say "This is a demo: open the site and pick a role at the top. No mail is sent."
     else
@@ -779,7 +893,8 @@ finish() {
         say "  2. The chairman checks the building's details and adds the apartments and meters."
         [[ -n "$SMTP_HOST" ]] || say "  3. Set the e-mail (run bash $AAP_ROOT/bin/install.sh again) so residents get their invitations."
     fi
-    say "  Updates: bash $AAP_ROOT/bin/update.sh <commit>. The log: $LOG_FILE"
+    say "  Updates: bash $AAP_ROOT/bin/update.sh (the latest version; read its release notes first)."
+    say "  The log: $LOG_FILE"
 }
 
 main() {
@@ -791,8 +906,10 @@ main() {
     check_ports
     ensure_packages
     ensure_docker
-    resolve_ref
+    resolve_release
+    check_forward "$A_VERSION"
     fetch_release
+    VERSION=$(release_version "$REF")
     pull_image
     detect_public_ip
 
@@ -821,6 +938,7 @@ main() {
     log_line "edge ok"
     say "starting the site (a few minutes on the first run)"
     deploy_release
+    install_bin
     create_building
     invite_chairman
     log_line "done"
