@@ -1,0 +1,32 @@
+# The edge proxy of an association's own VPS (docs/DEPLOYMENT.md "The simple install"), installed
+# by install.sh as /opt/aap/edge/caddy/Caddyfile next to deploy/edge/environment.caddy. One site,
+# SITE_HOST, on the default ports: certificates over port 80 (HTTP-01), Caddy's own redirect from
+# HTTP to HTTPS. Settings come from /opt/aap/edge/.env.
+{
+	servers {
+		protocols h1 h2
+		# The same timeouts as the project's edge (deploy/edge/Caddyfile): read_body must fit the
+		# largest upload on a slow mobile link (docs/epics/E11_FILE_STORAGE.md, section 4).
+		timeouts {
+			read_header 10s
+			read_body 3m
+			idle 2m
+		}
+	}
+}
+
+# TLS_MODE=acme (the default): a certificate from Let's Encrypt. TLS_MODE=internal: Caddy's own
+# authority, only for tests in containers that the internet cannot reach (--tls-internal).
+(tls_acme) {
+}
+
+(tls_internal) {
+	tls internal
+}
+
+import /etc/caddy/environment.caddy
+
+{$SITE_HOST} {
+	import tls_{$TLS_MODE:acme}
+	import environment aap-site-backend
+}
