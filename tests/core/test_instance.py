@@ -1,8 +1,9 @@
-"""The installation marker (src/core/instance.py; docs/DEPLOYMENT.md "Demo mode and the
+"""The installation marker (src/core/instance/; docs/DEPLOYMENT.md "Demo mode and the
 installation marker"): written on the first start, compared on every later one."""
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -26,6 +27,7 @@ from src.core.instance import (
     describe,
     run_check,
 )
+from src.core.instance import __main__ as command_line
 from src.core.migrations import alembic_config
 from src.core.seed import seed_demo_data
 from src.modules.property.models import Building
@@ -342,14 +344,14 @@ def test_the_startup_step_exits_non_zero_on_a_refusal(
     async def refuse(_settings: Settings) -> None:
         raise InstanceRefused(RefusalReason.DEMO_ON_REAL_DATA)
 
-    monkeypatch.setattr(instance, "run_check", refuse)
-    monkeypatch.setattr(instance, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(command_line, "run_check", refuse)
+    monkeypatch.setattr(command_line, "configure_logging", lambda **_kwargs: None)
 
-    assert instance.main([]) == 1
+    assert command_line.main([]) == 1
     logged = log_capture.raw
     assert "instance_check_refused" in logged
     assert "DEMO_ON_REAL_DATA" in logged
-    assert instance.main(["unknown"]) == 2
+    assert command_line.main(["unknown"]) == 2
 
 
 @pytest.mark.parametrize(
@@ -358,3 +360,48 @@ def test_the_startup_step_exits_non_zero_on_a_refusal(
 def test_the_startup_step_and_its_readers_import_alone(module: str) -> None:
     """entrypoint.sh imports src.core.instance first, without the order pytest happens to use."""
     subprocess.run([sys.executable, "-c", f"import {module}"], check=True)
+
+
+async def test_the_command_of_entrypoint_sh_runs_on_every_start(
+    database_url: str, tmp_path: Path
+) -> None:
+    """As entrypoint.sh runs it: `python -m src.core.instance` in a fresh interpreter, on the first
+    start (it writes the marker) and on every later one (it compares and imports src.core.files;
+    run as __main__ the model module once defined core_instance twice there)."""
+    async with scratch_database(database_url) as url:
+        await asyncio.to_thread(command.upgrade, alembic_config(url), "head")
+        env = {
+            **os.environ,
+            "DATABASE_URL": url,
+            "INSTANCE_ID": ID,
+            "FILES_DIR": str(tmp_path),
+            "DEMO_MODE_ENABLED": "true",
+            "SEED_DEMO_DATA": "true",
+            "LOG_JSON": "true",
+        }
+
+        def start(*argv: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [sys.executable, "-m", "src.core.instance", *argv],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+        first = await asyncio.to_thread(start)
+        second = await asyncio.to_thread(start)
+        (tmp_path / INSTANCE_FILE).unlink()  # a later start that also counts the stored files
+        third = await asyncio.to_thread(start)
+        shown = await asyncio.to_thread(start, "show")
+        env["INSTANCE_ID"] = OTHER
+        refused_start = await asyncio.to_thread(start)
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert '"instance_claimed"' in first.stdout
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert '"instance_checked"' in second.stdout
+    assert third.returncode == 0, third.stdout + third.stderr
+    assert files_marker(tmp_path) == ID
+    assert json.loads(shown.stdout.splitlines()[-1])["instance_id"] == ID
+    assert refused_start.returncode == 1
+    assert '"instance_check_refused"' in refused_start.stdout

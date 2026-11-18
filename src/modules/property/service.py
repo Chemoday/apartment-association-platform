@@ -615,7 +615,7 @@ class PropertyService:
     async def create_first_building(self, building: NewBuilding) -> uuid.UUID:
         """The building of a new installation (operator command create-building). The caller
         commits. Refuses, writing nothing, unless the installation marker says a real
-        installation (src/core/instance.py; never a building in a demo, where anyone can act as
+        installation (src/core/instance/; never a building in a demo, where anyone can act as
         its chairman, and the seed skips a real one) and the installation has no building yet."""
         await self.session.execute(select(func.pg_advisory_xact_lock(FIRST_BUILDING_LOCK_KEY)))
         if not await is_real_installation(self.session):

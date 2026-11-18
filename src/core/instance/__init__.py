@@ -1,6 +1,7 @@
 """The installation marker (epic E13 task R1; docs/ARCHITECTURE.md section 14).
 
 Run by entrypoint.sh after the migrations and before the seed:  python -m src.core.instance
+(the command lives in __main__.py, so that this module is never run as __main__).
 Every installation has an INSTANCE_ID. Its database (table core_instance) and its files directory
 (the file FILES_DIR/INSTANCE) carry it, so the backend never starts on the data of another
 installation, nor in demo mode on the data of a real association (docs/BACKLOG.md B-4, S-7).
@@ -12,10 +13,8 @@ Like seed.py this is infrastructure of src/core: it reads only whether core_file
 """
 
 import asyncio
-import json
 import os
 import re
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -26,9 +25,8 @@ from sqlalchemy import Boolean, CheckConstraint, DateTime, SmallInteger, String,
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.core.config import NON_PRODUCTION_ENVIRONMENTS, Settings, settings
+from src.core.config import NON_PRODUCTION_ENVIRONMENTS, Settings
 from src.core.database import Base, build_engine, transaction
-from src.core.telemetry import configure_logging
 
 INSTANCE_FILE = "INSTANCE"
 INSTANCE_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{2,63}")
@@ -194,28 +192,3 @@ async def describe(config: Settings) -> dict[str, object]:
         "created_at": record.created_at.isoformat() if record else None,
         "files_instance_id": on_file if on_file is None or is_valid_instance_id(on_file) else "",
     }
-
-
-def main(argv: list[str]) -> int:
-    configure_logging(level=settings.LOG_LEVEL, json_logs=settings.LOG_JSON)
-    if argv == ["show"]:
-        print(json.dumps(asyncio.run(describe(settings))))
-        return 0
-    if argv:
-        print("usage: python -m src.core.instance [show]", file=sys.stderr)
-        return 2
-    try:
-        marker = asyncio.run(run_check(settings))
-    except InstanceRefused as refused:
-        logger.error("instance_check_refused", reason=refused.reason.value, found=refused.found)
-        return 1
-    logger.info(
-        "instance_claimed" if marker.claimed_now else "instance_checked",
-        instance_id=marker.instance_id,
-        demo=marker.demo,
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
