@@ -2,7 +2,7 @@
 
 docs/SCHEMA.md section 6: core_instance holds at most one row, the INSTANCE_ID of the installation
 the database belongs to and whether its data are a demo. The startup check
-(src/core/instance.py) writes it; an existing database gets it on its first start after this.
+(src/core/instance/) writes it; an existing database gets it on its first start after this.
 
 Revision ID: 030
 Revises: 029

@@ -2,7 +2,7 @@
 
 Run by entrypoint.sh after the migrations:  python -m src.core.seed
 It only seeds when SEED_DEMO_DATA is true, only into an EMPTY database (no building yet) and never
-into one whose installation marker says it is real (src/core/instance.py), so it never mixes demo
+into one whose installation marker says it is real (src/core/instance/), so it never mixes demo
 residents into a real association. Running it again, or from two containers at
 once (an advisory lock serializes them), changes nothing.
 
@@ -826,7 +826,7 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
     """
     await session.execute(select(func.pg_advisory_xact_lock(SEED_LOCK_KEY)))
     if await is_real_installation(session):
-        # The marker says a real association lives here (src/core/instance.py): never seed it.
+        # The marker says a real association lives here (src/core/instance/): never seed it.
         logger.info("seed_skipped", reason="real_installation")
         return False
     if await session.scalar(select(Building.id).limit(1)) is not None:

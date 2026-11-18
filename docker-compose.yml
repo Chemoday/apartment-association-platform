@@ -27,7 +27,7 @@ services:
       # Local-only key of the notification hashes (chat ids, unsubscribe links).
       NOTIFICATIONS_HASH_SECRET: local-only-notifications-hash-secret-0123456789
       SEED_DEMO_DATA: "true"
-      # The installation marker of the local demo (src/core/instance.py).
+      # The installation marker of the local demo (src/core/instance/).
       INSTANCE_ID: local
       LOG_LEVEL: INFO
       # Uploaded files (epic E11) in a named volume; uploads work in the local demo.

@@ -63,7 +63,7 @@ services:
       # marker"); off unless the settings of the environment turn them on.
       DEMO_MODE_ENABLED: ${DEMO_MODE_ENABLED:-false}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
-      # Which installation the database and the files belong to (src/core/instance.py).
+      # Which installation the database and the files belong to (src/core/instance/).
       INSTANCE_ID: ${INSTANCE_ID:?set in deploy/environments/<env>.env}
       # Login secrets from /opt/aap/<env>/.env (bootstrap.sh generates them); required at startup.
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set in /opt/aap/<env>/.env}

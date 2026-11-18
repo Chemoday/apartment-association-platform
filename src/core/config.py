@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Seed the demo building "KÜ Sõpruse 12" into an EMPTY database at startup (src/core/seed.py).
     # Off unless enabled explicitly: a real association must never get fictitious residents.
     SEED_DEMO_DATA: bool = False
-    # Which installation the database and the files belong to (epic E13 R1, src/core/instance.py):
+    # Which installation the database and the files belong to (epic E13 R1, src/core/instance/):
     # lowercase letters, digits and "-", 3 to 64 characters. Required by the startup check in
     # entrypoint.sh; empty here only so that tools and tests importing the settings still work.
     INSTANCE_ID: str = ""

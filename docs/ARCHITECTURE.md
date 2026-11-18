@@ -528,7 +528,7 @@ Design: docs/epics/E12_EXTERNAL_BUILDING_DATA.md. Table: docs/SCHEMA.md section 
   and 30 days before and on the day; `notifications` turns it into
   `ENERGY_CERTIFICATE_EXPIRING` for the chairman and the board.
 
-## 14. The installation marker (`src/core/instance.py`), epic E13 task R1
+## 14. The installation marker (`src/core/instance/`), epic E13 task R1
 
 *Data: docs/SCHEMA.md section 6 (`core_instance`). Operations, settings and reason codes:
 docs/DEPLOYMENT.md "Demo mode and the installation marker". Background: docs/BACKLOG.md B-4,
