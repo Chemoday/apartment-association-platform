@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,15 +105,49 @@ class PropertyService:
     # --- Authentication support -----------------------------------------------------------------
 
     async def get_current_user(self, user_id: uuid.UUID) -> CurrentUserDTO | None:
-        """Load an active user with their memberships, or None if unknown or deactivated."""
-        user = await self.session.get(User, user_id)
-        if user is None or not user.is_active:
+        """Load an active user with their memberships, or None if unknown or deactivated.
+
+        Runs on every authenticated request, so it is one query (issue #168): the user's columns
+        it needs (never the name, e-mail or phone) and, outer-joined, the active memberships in
+        apartments of the user's own building, the same as _memberships_of.
+        """
+        rows = (
+            await self.session.execute(
+                select(
+                    User.id,
+                    User.building_id,
+                    User.building_role,
+                    User.is_active,
+                    ApartmentMembership,
+                    Apartment,
+                )
+                .outerjoin(
+                    ApartmentMembership,
+                    and_(ApartmentMembership.user_id == User.id, ACTIVE_MEMBERSHIP),
+                )
+                .outerjoin(
+                    Apartment,
+                    and_(
+                        Apartment.id == ApartmentMembership.apartment_id,
+                        Apartment.building_id == User.building_id,
+                    ),
+                )
+                .where(User.id == user_id)
+                .order_by(*_APARTMENT_ORDER)
+            )
+        ).all()
+        if not rows or not rows[0].is_active:
             return None
-        memberships = await self._memberships_of(user.id, user.building_id)
+        first = rows[0]
+        memberships = [
+            self._membership_dto(row.ApartmentMembership, row.Apartment)
+            for row in rows
+            if row.ApartmentMembership is not None and row.Apartment is not None
+        ]
         return CurrentUserDTO(
-            id=user.id,
-            building_id=user.building_id,
-            building_role=user.building_role,
+            id=first.id,
+            building_id=first.building_id,
+            building_role=first.building_role,
             privacy_display_mode=most_private_display_mode(
                 m.privacy_display_mode for m in memberships
             ),
@@ -1138,22 +1172,25 @@ class PropertyService:
             )
             .order_by(*_APARTMENT_ORDER)
         )
-        return [
-            ApartmentMembershipDTO(
-                membership_id=membership.id,
-                apartment_id=apartment.id,
-                apartment_number=apartment.number,
-                entrance=apartment.entrance,
-                floor=apartment.floor,
-                relation_type=membership.relation_type,
-                can_submit_readings=membership.can_submit_readings,
-                can_view_bills=membership.can_view_bills,
-                can_vote=membership.can_vote,
-                privacy_display_mode=membership.privacy_display_mode,
-                since=membership.started_at,
-            )
-            for membership, apartment in rows.all()
-        ]
+        return [self._membership_dto(membership, apartment) for membership, apartment in rows.all()]
+
+    @staticmethod
+    def _membership_dto(
+        membership: ApartmentMembership, apartment: Apartment
+    ) -> ApartmentMembershipDTO:
+        return ApartmentMembershipDTO(
+            membership_id=membership.id,
+            apartment_id=apartment.id,
+            apartment_number=apartment.number,
+            entrance=apartment.entrance,
+            floor=apartment.floor,
+            relation_type=membership.relation_type,
+            can_submit_readings=membership.can_submit_readings,
+            can_view_bills=membership.can_view_bills,
+            can_vote=membership.can_vote,
+            privacy_display_mode=membership.privacy_display_mode,
+            since=membership.started_at,
+        )
 
     async def _full_name_of(self, user_id: uuid.UUID) -> str:
         full_name = await self.session.scalar(select(User.full_name).where(User.id == user_id))

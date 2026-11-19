@@ -15,6 +15,7 @@ All AI coding, testing, and on-call agents operating in this repository MUST fol
 - [External data providers by country (epic E12)](docs/external_providers/README.md)
 - [Deployment, CD & Rollback](docs/DEPLOYMENT.md)
 - [Observability, Alerting & On-Call Agent](docs/OBSERVABILITY.md)
+- [Performance of one installation and load tests](docs/PERFORMANCE.md)
 
 ## 2. Agent Team Roles
 1. **System Architect Agent:** Maintains `docs/*.md`. Any schema or API change must be documented before implementation.

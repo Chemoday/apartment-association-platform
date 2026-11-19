@@ -1,0 +1,20 @@
+# Override of deploy/docker-compose.deploy.yml for a load-test target only (tests/load/README.md):
+# never used for a real installation. tests/load/target.sh passes it after the deploy file.
+#   - the database also loads pg_stat_statements, to find the costly queries under load;
+#   - the backend is published on LOAD_BIND:LOAD_PORT, so the load generator skips the edge proxy.
+# The database command repeats the deploy file's flags first (a test keeps them in sync).
+services:
+  db:
+    command:
+      - postgres
+      - -c
+      - max_wal_size=256MB
+      - -c
+      - temp_file_limit=512MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+  backend:
+    ports:
+      - "${LOAD_BIND:-127.0.0.1}:${LOAD_PORT:?set by tests/load/target.sh}:8000"

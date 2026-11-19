@@ -5,6 +5,7 @@ Apartments and author badges come from PropertyService; property models are neve
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -96,6 +97,44 @@ ESTIMATE_REASON = "3-month avg estimate"
 
 
 tracer = trace.get_tracer(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _PastReading:
+    period_code: str
+    value: Decimal
+    delta: Decimal
+    history: bool  # counts as consumption history (HISTORY_SOURCES, not a confirmed anomaly)
+
+
+class _MeterHistories:
+    """The readings of a few meters, newest period first, from one query (issue #168).
+
+    The dashboard used to ask per meter, in separate queries and some twice, for the previous
+    value, the previous delta and the last 3 history deltas. The answers are those of
+    `_previous_value` and `_history_deltas` for the same meter and period.
+    """
+
+    def __init__(self, rows: dict[uuid.UUID, list[_PastReading]]) -> None:
+        self._rows = rows
+
+    def _before(self, meter_id: uuid.UUID, period: ReadingPeriod | None) -> list[_PastReading]:
+        rows = self._rows.get(meter_id, [])
+        if period is None:
+            return rows
+        return [row for row in rows if row.period_code < period.period_code]
+
+    def previous_value(self, meter: MeterDevice, period: ReadingPeriod | None) -> Decimal:
+        before = self._before(meter.id, period)
+        return before[0].value if before else meter.initial_value
+
+    def previous_delta(self, meter_id: uuid.UUID, period: ReadingPeriod) -> Decimal | None:
+        before = self._before(meter_id, period)
+        return before[0].delta if before else None
+
+    def history_deltas(self, meter_id: uuid.UUID, period: ReadingPeriod) -> list[Decimal]:
+        deltas = [row.delta for row in self._before(meter_id, period) if row.history][:3]
+        return list(reversed(deltas))
 
 
 def _now() -> datetime:
@@ -511,17 +550,15 @@ class MetersService:
         # Where each meter's next reading goes, for the apartments the user may submit for.
         now = _now()
         submitters = {m.apartment_id for m in user.memberships if m.can_submit_readings}
+        # A target is always the previous or the current month: both come with one query.
+        recent = await self._recent_periods(user.building_id, now)
         targets = await self._targets(
-            user.building_id, [m.id for m in meters if m.apartment_id in submitters], now
+            user.building_id, [m.id for m in meters if m.apartment_id in submitters], now, recent
         )
         target_periods = {
-            period.period_code: period
-            for period in await self.session.scalars(
-                select(ReadingPeriod).where(
-                    ReadingPeriod.building_id == user.building_id,
-                    ReadingPeriod.period_code.in_({t.period_code for t in targets.values()}),
-                )
-            )
+            code: recent[code]
+            for code in {t.period_code for t in targets.values()}
+            if code in recent
         }
 
         if period_code is not None:
@@ -542,15 +579,18 @@ class MetersService:
                     )
                     .limit(1)
                 )
-        readings = await self._readings_by_meter(period) if period else {}
+        # Only the user's meters: the readings of the whole building are not needed here.
+        meter_ids = [meter.id for meter in meters]
+        readings = await self._readings_by_meter(period, meter_ids) if period else {}
         # The form of each meter works against its own target period, which may differ from the
         # period shown (one meter still due for last month, another already for this one).
         target_readings = {
             code: readings
             if period is not None and code == period.period_code
-            else await self._readings_by_meter(target_period)
+            else await self._readings_by_meter(target_period, meter_ids)
             for code, target_period in target_periods.items()
         }
+        histories = await self._meter_histories(meter_ids)
 
         apartments = []
         for membership in user.memberships:
@@ -567,12 +607,12 @@ class MetersService:
                         previous_value=(
                             reading.previous_value
                             if reading is not None
-                            else await self._previous_value(meter, period)
+                            else histories.previous_value(meter, period)
                         ),
-                        **(await self._consumption_hints(meter, period)),
+                        **self._consumption_hints(meter, period, histories),
                         reading=_summary(reading) if reading is not None else None,
-                        next_submission=await self._next_submission(
-                            meter, targets.get(meter.id), target_periods, target_readings
+                        next_submission=self._next_submission(
+                            meter, targets.get(meter.id), target_periods, target_readings, histories
                         ),
                     )
                 )
@@ -588,12 +628,13 @@ class MetersService:
             period=_period_dto(period) if period else None, apartments=apartments
         )
 
-    async def _next_submission(
-        self,
+    @staticmethod
+    def _next_submission(
         meter: MeterDevice,
         target: SubmissionTarget | None,
         periods: dict[str, ReadingPeriod],
         readings: dict[str, dict[uuid.UUID, MeterReading]],
+        histories: _MeterHistories,
     ) -> NextSubmission | None:
         """What the meter's form needs, computed against its target period; None when nothing
         can be submitted (no right, the period does not exist yet or is not open)."""
@@ -608,30 +649,21 @@ class MetersService:
             previous_value=(
                 reading.previous_value
                 if reading is not None
-                else await self._previous_value(meter, period)
+                else histories.previous_value(meter, period)
             ),
-            average_delta=rolling_average_delta(await self._history_deltas(meter.id, period)),
+            average_delta=rolling_average_delta(histories.history_deltas(meter.id, period)),
             reading=_summary(reading) if reading is not None else None,
         )
 
-    async def _consumption_hints(
-        self, meter: MeterDevice, period: ReadingPeriod | None
+    @staticmethod
+    def _consumption_hints(
+        meter: MeterDevice, period: ReadingPeriod | None, histories: _MeterHistories
     ) -> dict[str, Decimal | None]:
         if period is None:
             return {"average_delta": None, "previous_delta": None}
-        previous_delta = await self.session.scalar(
-            select(MeterReading.consumption_delta)
-            .join(ReadingPeriod, ReadingPeriod.id == MeterReading.period_id)
-            .where(
-                MeterReading.meter_id == meter.id,
-                ReadingPeriod.period_code < period.period_code,
-            )
-            .order_by(ReadingPeriod.period_code.desc())
-            .limit(1)
-        )
         return {
-            "average_delta": rolling_average_delta(await self._history_deltas(meter.id, period)),
-            "previous_delta": previous_delta,
+            "average_delta": rolling_average_delta(histories.history_deltas(meter.id, period)),
+            "previous_delta": histories.previous_delta(meter.id, period),
         }
 
     # --- Periods --------------------------------------------------------------------------------
@@ -1249,20 +1281,42 @@ class MetersService:
             raise _not_found("PERIOD_NOT_FOUND", f"Reading period {period_code} not found.")
         return period
 
+    async def _recent_periods(
+        self, building_id: uuid.UUID, now: datetime
+    ) -> dict[str, ReadingPeriod]:
+        """The periods of the previous and the current local month that exist, by code."""
+        current = period_code_of(now.astimezone(self.timezone).date())
+        periods = await self.session.scalars(
+            select(ReadingPeriod).where(
+                ReadingPeriod.building_id == building_id,
+                ReadingPeriod.period_code.in_([previous_period_code(current), current]),
+            )
+        )
+        return {period.period_code: period for period in periods}
+
     async def _targets(
-        self, building_id: uuid.UUID, meter_ids: list[uuid.UUID], now: datetime
+        self,
+        building_id: uuid.UUID,
+        meter_ids: list[uuid.UUID],
+        now: datetime,
+        recent: dict[str, ReadingPeriod] | None = None,
     ) -> dict[uuid.UUID, SubmissionTarget]:
-        """The period each meter's next resident reading goes to (docs/API.md section 2)."""
+        """The period each meter's next resident reading goes to (docs/API.md section 2).
+
+        `recent` (from _recent_periods) saves the query of the previous month's period."""
         if not meter_ids:
             return {}
         current = period_code_of(now.astimezone(self.timezone).date())
         previous_code = previous_period_code(current)
-        previous = await self.session.scalar(
-            select(ReadingPeriod).where(
-                ReadingPeriod.building_id == building_id,
-                ReadingPeriod.period_code == previous_code,
+        if recent is not None:
+            previous = recent.get(previous_code)
+        else:
+            previous = await self.session.scalar(
+                select(ReadingPeriod).where(
+                    ReadingPeriod.building_id == building_id,
+                    ReadingPeriod.period_code == previous_code,
+                )
             )
-        )
         if previous is None:
             no_previous = submission_target(now, self.timezone, None, has_previous_reading=False)
             return dict.fromkeys(meter_ids, no_previous)
@@ -1302,11 +1356,42 @@ class MetersService:
         )
         return later is not None
 
-    async def _readings_by_meter(self, period: ReadingPeriod) -> dict[uuid.UUID, MeterReading]:
-        readings = await self.session.scalars(
-            select(MeterReading).where(MeterReading.period_id == period.id)
-        )
+    async def _readings_by_meter(
+        self, period: ReadingPeriod, meter_ids: list[uuid.UUID] | None = None
+    ) -> dict[uuid.UUID, MeterReading]:
+        """The period's readings by meter; only those of `meter_ids` when given."""
+        statement = select(MeterReading).where(MeterReading.period_id == period.id)
+        if meter_ids is not None:
+            statement = statement.where(MeterReading.meter_id.in_(meter_ids))
+        readings = await self.session.scalars(statement)
         return {reading.meter_id: reading for reading in readings}
+
+    async def _meter_histories(self, meter_ids: list[uuid.UUID]) -> _MeterHistories:
+        """Every reading of the meters with its period, newest first (see _MeterHistories).
+
+        Unbounded on purpose, for the few meters of one user: one row per meter and month, so
+        about 120 rows per meter after ten years. Add a lower bound if that ever matters."""
+        rows: dict[uuid.UUID, list[_PastReading]] = {meter_id: [] for meter_id in meter_ids}
+        if not meter_ids:
+            return _MeterHistories(rows)
+        result = await self.session.execute(
+            select(
+                MeterReading.meter_id,
+                ReadingPeriod.period_code,
+                MeterReading.value,
+                MeterReading.consumption_delta,
+                MeterReading.source,
+                MeterReading.is_anomaly_confirmed,
+            )
+            .join(ReadingPeriod, ReadingPeriod.id == MeterReading.period_id)
+            .where(MeterReading.meter_id.in_(meter_ids))
+            .order_by(MeterReading.meter_id, ReadingPeriod.period_code.desc())
+        )
+        for meter_id, code, value, delta, source, confirmed in result:
+            rows[meter_id].append(
+                _PastReading(code, value, delta, source in HISTORY_SOURCES and not confirmed)
+            )
+        return _MeterHistories(rows)
 
     async def _previous_value(self, meter: MeterDevice, period: ReadingPeriod | None) -> Decimal:
         """The meter's reading in the latest earlier period, else its initial value."""
