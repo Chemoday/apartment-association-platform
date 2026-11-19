@@ -7,6 +7,7 @@ runs in throw-away system containers on the test VPS (docs/DEPLOYMENT.md).
 
 import json
 import os
+import re
 import shlex
 import stat
 import subprocess
@@ -19,13 +20,20 @@ SCRIPT = INSTALL / "install.sh"
 EMAIL = "chair.person@example.ee"
 ADDRESS = "Näidise tn 1, Tallinn"
 PASSWORD = "smtp-pass-Very$ecret 1"
+# The scripts get this environment, never the developer's tokens or keys: a failing assertion
+# that prints the environment must not show them.
+SAFE_ENV = {
+    name: value
+    for name, value in os.environ.items()
+    if not re.search(r"TOKEN|SECRET|PASSW|KEY|CREDENTIAL|AUTH", name, re.IGNORECASE)
+}
 
 
 def bash(root: Path, body: str, **env: str) -> subprocess.CompletedProcess[str]:
     """Run `body` after sourcing install.sh (main() does not run when sourced)."""
     return subprocess.run(
         ["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(SCRIPT))}; {body}"],
-        env={**os.environ, "AAP_ROOT": str(root), **env},
+        env={**SAFE_ENV, "AAP_ROOT": str(root), **env},
         capture_output=True,
         text=True,
     )
@@ -96,6 +104,7 @@ def test_help_lists_every_option() -> None:
         ["--ref", "abc"],
         ["--version", "1.2.3"],
         ["--version", "v1.2"],
+        ["--version", "v01.2.3"],
         ["--version", "v1.2.3", "--ref", "a" * 40],
         ["--bogus"],
     ],
@@ -103,7 +112,7 @@ def test_help_lists_every_option() -> None:
 def test_bad_options_stop_before_anything_happens(tmp_path: Path, args: list[str]) -> None:
     result = subprocess.run(
         ["bash", str(SCRIPT), *args],
-        env={**os.environ, "AAP_ROOT": str(tmp_path / "aap")},
+        env={**SAFE_ENV, "AAP_ROOT": str(tmp_path / "aap")},
         capture_output=True,
         text=True,
     )
@@ -419,12 +428,20 @@ def test_with_yes_an_unchanged_hostname_is_not_checked_again(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     "args",
-    [["abc"], ["a" * 40, "extra"], ["v1.2"], ["1.2.3"], ["v1.2.3", "v1.2.4"], ["--force"]],
+    [
+        ["abc"],
+        ["a" * 40, "extra"],
+        ["v1.2"],
+        ["1.2.3"],
+        ["v1.02.3"],
+        ["v1.2.3", "v1.2.4"],
+        ["--force"],
+    ],
 )
 def test_update_needs_a_version_or_one_full_commit(tmp_path: Path, args: list[str]) -> None:
     result = subprocess.run(
         ["bash", str(INSTALL / "update.sh"), *args],
-        env={**os.environ, "AAP_ROOT": str(tmp_path)},
+        env={**SAFE_ENV, "AAP_ROOT": str(tmp_path)},
         capture_output=True,
         text=True,
     )
@@ -436,7 +453,7 @@ def test_update_needs_a_version_or_one_full_commit(tmp_path: Path, args: list[st
 def test_update_needs_an_installation(tmp_path: Path) -> None:
     result = subprocess.run(
         ["bash", str(INSTALL / "update.sh"), "a" * 40],
-        env={**os.environ, "AAP_ROOT": str(tmp_path)},
+        env={**SAFE_ENV, "AAP_ROOT": str(tmp_path)},
         capture_output=True,
         text=True,
     )
@@ -450,7 +467,7 @@ def test_uninstall_deletes_nothing_without_its_flag(tmp_path: Path) -> None:
 
     result = subprocess.run(
         ["bash", str(INSTALL / "uninstall.sh")],
-        env={**os.environ, "AAP_ROOT": str(tmp_path)},
+        env={**SAFE_ENV, "AAP_ROOT": str(tmp_path)},
         capture_output=True,
         text=True,
     )

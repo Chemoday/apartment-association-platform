@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.ops.test_install import INSTALL, answers, bash
+from tests.ops.test_install import INSTALL, SAFE_ENV, answers, bash
 
 REPO_ROOT = INSTALL.parent
 BUILD = REPO_ROOT / ".github/scripts/build-release.sh"
@@ -76,6 +76,10 @@ def test_the_release_holds_deploy_install_and_its_version(
     assert version == f"VERSION=v0.3.0\nCOMMIT={commit}\n"
     tops = {name.split("/")[1] for name in names if "/" in name}
     assert tops == {"deploy", "install", "VERSION"}
+    # The files of the project's own VPS are no part of an install.
+    assert not any(
+        n.startswith(("aap-v0.3.0/deploy/hosts", "aap-v0.3.0/deploy/HOST_")) for n in names
+    )
     assert all(name.startswith("aap-v0.3.0") for name in names)
     assert "aap-v0.3.0/deploy/deploy.sh" in names
     assert all(m.uid == 0 and m.gid == 0 and not m.uname for m in members)
@@ -121,6 +125,7 @@ def test_the_release_holds_only_committed_files(source: tuple[Path, str], tmp_pa
     [
         ("0.3.0", None),
         ("v0.3", None),
+        ("v01.2.3", None),
         ("v0.3.0-rc1", None),
         ("v0.3.0", "abc"),
         ("v0.3.0", "c" * 40),
@@ -151,6 +156,10 @@ def test_the_workflow_runs_on_version_tags_and_keeps_the_tag_out_of_its_scripts(
     assert "build-release.sh" in text
     assert "imagetools create" in text  # the image CI built, never a rebuild
     assert "docker/build-push-action" not in text
+    release = workflow["jobs"]["release"]
+    assert "GH_TOKEN" not in release["env"]  # only the steps that call GitHub get the token
+    assert release["steps"][0]["with"]["persist-credentials"] is False
+    assert "git tag --points-at" in text  # one version per commit
     # The tag name reaches the shell only through the environment, after its check.
     scripts = [step["run"] for step in workflow["jobs"]["release"]["steps"] if "run" in step]
     assert len(scripts) == 5
@@ -220,7 +229,7 @@ def test_the_installer_of_a_release_installs_its_own_version(tmp_path: Path, rel
     script = shlex.quote(str(release / "install.sh"))
     result = subprocess.run(
         ["bash", "-c", f"source {script}; load_previous; resolve_release; echo $A_VERSION"],
-        env={**os.environ, **_curl(tmp_path, release, latest="v9.9.9"), "AAP_ROOT": str(tmp_path)},
+        env={**SAFE_ENV, **_curl(tmp_path, release, latest="v9.9.9"), "AAP_ROOT": str(tmp_path)},
         capture_output=True,
         text=True,
     )
@@ -235,7 +244,7 @@ def _baked(tmp_path: Path, release: Path, root: Path, body: str) -> subprocess.C
     script = shlex.quote(str(release / "install.sh"))
     return subprocess.run(
         ["bash", "-c", f"set -euo pipefail; source {script}; {body}"],
-        env={**os.environ, **_curl(tmp_path, release), "AAP_ROOT": str(root)},
+        env={**SAFE_ENV, **_curl(tmp_path, release), "AAP_ROOT": str(root)},
         capture_output=True,
         text=True,
     )
@@ -418,7 +427,7 @@ def _update(tmp_path: Path, root: Path, env: dict[str, str], *args: str):
     shutil.copy(INSTALL / "install.sh", root / "bin/install.sh")
     return subprocess.run(
         ["bash", str(INSTALL / "update.sh"), *args],
-        env={**os.environ, **env, "AAP_ROOT": str(root)},
+        env={**SAFE_ENV, **env, "AAP_ROOT": str(root)},
         capture_output=True,
         text=True,
     )
@@ -481,3 +490,13 @@ def test_update_refuses_an_older_version_before_downloading_it(
     assert result.returncode == 1
     assert "older than the installed v0.4.0" in result.stderr
     assert not (tmp_path / "curl.calls").exists()
+
+
+def test_a_release_is_unpacked_with_root_s_own_owners_and_modes() -> None:
+    """As root, tar would keep the owners and modes (a setuid bit too) of the archive."""
+    source = (INSTALL / "install.sh").read_text()
+
+    assert "UNTAR=(tar --no-same-owner --no-same-permissions)" in source
+    assert source.count('"${UNTAR[@]}" -xzf') == 3
+    assert "tar -xzf" not in source
+    assert source.count('--max-filesize "$MAX_DOWNLOAD_BYTES"') == 2
