@@ -9,6 +9,7 @@
 #   install.sh           the installer of this version
 #   aap-release.tar.gz   aap-<version>/ with deploy/, install/ and VERSION (VERSION=, COMMIT=)
 set -euo pipefail
+umask 022  # the modes in the archive never depend on the runner
 
 die() { printf 'build-release: %s\n' "$*" >&2; exit 1; }
 
@@ -19,14 +20,16 @@ fi
 VERSION=$1
 COMMIT=$2
 OUT=$3
-[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "the version must look like v1.2.3, not $VERSION"
+[[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "the version must look like v1.2.3, not $VERSION"
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "the commit must be a full 40-character commit id"
 git cat-file -e "$COMMIT^{commit}" 2> /dev/null || die "no commit $COMMIT in this repository"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 top="aap-$VERSION"
-git archive --format=tar --prefix="$top/" "$COMMIT" deploy install | tar -x -C "$work"
+# The files of the project's own VPS (deploy/hosts/, HOST_CHANGELOG.md) are no part of an install.
+git archive --format=tar --prefix="$top/" "$COMMIT" deploy install \
+    ':(exclude)deploy/hosts' ':(exclude)deploy/HOST_CHANGELOG.md' | tar -x --no-same-permissions -C "$work"
 
 installer="$work/$top/install/install.sh"
 [[ -f "$installer" && -f "$work/$top/deploy/deploy.sh" ]] || die "the commit has no installer"

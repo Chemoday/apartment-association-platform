@@ -305,8 +305,9 @@ migrations and `Z` for fixes only.
 - **Releasing** is the owner's decision (the agent tags only on request), for a commit of `main`
   that already ran on dev: `git tag -a v0.2.0 <sha> -m "v0.2.0"` and `git push origin v0.2.0`. The
   workflow `.github/workflows/release.yml` then:
-  1. refuses a tag that is not `vX.Y.Z`, a commit that is not on `main`, a version that is
-     published already, or a version that is not above every published release;
+  1. refuses a tag that is not `vX.Y.Z` (no leading zeros), a commit that is not on `main` or
+     is published already under another version, a version that is published already, or a
+     version that is not above every published release;
   2. waits (up to 40 minutes) until CI has pushed the image of that commit, `ghcr.io/<repo>:<sha>`,
      and adds the tag `vX.Y.Z` to that same image (no rebuild: the version runs the bits that ran
      on dev);
@@ -315,8 +316,9 @@ migrations and `Z` for fixes only.
      with notes generated from the merged pull requests and two files:
      - `install.sh`: `install/install.sh` with `RELEASE_VERSION="vX.Y.Z"`, so it installs the
        version it came with;
-     - `aap-release.tar.gz`: the top directory `aap-vX.Y.Z/` with `deploy/`, `install/` (the same
-       baked `install.sh`) and a `VERSION` file of two lines, `VERSION=vX.Y.Z` and
+     - `aap-release.tar.gz`: the top directory `aap-vX.Y.Z/` with `deploy/` (without the files
+       of the project's own VPS, `deploy/hosts/` and `deploy/HOST_CHANGELOG.md`), `install/` (the
+       same baked `install.sh`) and a `VERSION` file of two lines, `VERSION=vX.Y.Z` and
        `COMMIT=<sha>`.
 - **A published version is never moved or deleted:** installations refer to it. A broken version
   is followed by a new patch version. A release that failed before it was published (for example,
@@ -331,8 +333,10 @@ migrations and `Z` for fixes only.
   `https://github.com/<repo>/releases/latest/download/install.sh`, installs the version baked into
   it; `--version vX.Y.Z` picks another one. A copy of `install/install.sh` from the repository has
   no baked version and installs the latest release (`api.github.com/repos/<repo>/releases/latest`).
-  The installer downloads `releases/download/<version>/aap-release.tar.gz`, keeps only `deploy/`,
-  `install/` and `VERSION`, checks that `VERSION` names the version asked for and a full commit,
+  The installer downloads `releases/download/<version>/aap-release.tar.gz` (at most 200 MB),
+  unpacks it with root's own owners and modes (never the archive's), keeps only the top-level
+  `deploy/`, `install/` and `VERSION`, checks that `VERSION` is a plain file naming the version
+  asked for and a full commit (otherwise it refuses with one line),
   and puts the release in `/opt/aap/releases/<commit>/`. The image is pulled by its commit tag,
   `ghcr.io/<repo>:<commit>`, which is the same image as `:<version>`.
 - **A commit of `main`, for trying a change before it is released** (the test VPS): `--ref <full

@@ -38,6 +38,10 @@ CADDY_IMAGE=caddy:2.8.4-alpine
 # of a release; empty in the repository (docs/DEPLOYMENT.md "Versions and releases").
 RELEASE_VERSION=""
 RELEASE_ARCHIVE=aap-release.tar.gz
+MAX_DOWNLOAD_BYTES=$((200 * 1024 * 1024))  # a release is far smaller; a bigger download stops
+# As root, tar would keep the owners and modes of the archive's members; the release gets root's
+# own, under this script's umask.
+UNTAR=(tar --no-same-owner --no-same-permissions)
 
 # --- Output and the log ---------------------------------------------------------------------------
 
@@ -194,7 +198,8 @@ valid_ipv4() {
     done
 }
 
-valid_version() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+# vX.Y.Z without leading zeros, so that one version has one spelling.
+valid_version() { [[ "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
 
 valid_hostname() {
     [[ ${#1} -le 253 && "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]
@@ -341,15 +346,17 @@ fetch_release() {
     fi
     local tmp
     tmp=$(mktemp -d "$AAP_ROOT/releases/.incoming.XXXXXX")
-    if ! curl -fsSL --retry 3 -o "$tmp/.archive.tar.gz" "https://codeload.github.com/$REPO/tar.gz/$REF" \
-        || ! tar -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards '*/deploy/*'; then
+    if ! curl -fsSL --retry 3 --max-filesize "$MAX_DOWNLOAD_BYTES" -o "$tmp/.archive.tar.gz" \
+            "https://codeload.github.com/$REPO/tar.gz/$REF" \
+        || ! "${UNTAR[@]}" -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards '*/deploy/*'; then
         rm -rf "$tmp"
         die "release: cannot download commit $REF"
     fi
     # A commit older than the install has no install/: tar fails on the missing pattern, which
     # is told apart below instead of being reported as a failed download.
-    tar -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards '*/install/*' 2> /dev/null || true
+    "${UNTAR[@]}" -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards '*/install/*' 2> /dev/null || true
     rm -f "$tmp/.archive.tar.gz"
+    keep_release_parts "$tmp"
     if [[ ! -f "$tmp/install/install.sh" ]]; then
         rm -rf "$tmp"
         die "release: commit $REF has no installer (it is older than the install); pick a newer commit"
@@ -361,16 +368,20 @@ fetch_version() {
     local tmp version commit
     tmp=$(mktemp -d "$AAP_ROOT/releases/.incoming.XXXXXX")
     say "downloading version $A_VERSION"
-    if ! curl -fsSL --retry 3 -o "$tmp/.archive.tar.gz" \
+    if ! curl -fsSL --retry 3 --max-filesize "$MAX_DOWNLOAD_BYTES" -o "$tmp/.archive.tar.gz" \
             "https://github.com/$REPO/releases/download/$A_VERSION/$RELEASE_ARCHIVE" \
-        || ! tar -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards \
+        || ! "${UNTAR[@]}" -xzf "$tmp/.archive.tar.gz" -C "$tmp" --strip-components=1 --wildcards \
             '*/deploy/*' '*/install/*' '*/VERSION'; then
         rm -rf "$tmp"
         die "release: cannot download version $A_VERSION (is it on the Releases page of $REPO?)"
     fi
     rm -f "$tmp/.archive.tar.gz"
-    version=$(sed -n 's/^VERSION=//p' "$tmp/VERSION" | head -n 1)
-    commit=$(sed -n 's/^COMMIT=//p' "$tmp/VERSION" | head -n 1)
+    keep_release_parts "$tmp"
+    version="" commit=""
+    if [[ -f "$tmp/VERSION" && ! -L "$tmp/VERSION" ]]; then
+        version=$(sed -n 's/^VERSION=//p' "$tmp/VERSION" 2> /dev/null | head -n 1) || version=""
+        commit=$(sed -n 's/^COMMIT=//p' "$tmp/VERSION" 2> /dev/null | head -n 1) || commit=""
+    fi
     if [[ "$version" != "$A_VERSION" || ! "$commit" =~ ^[0-9a-f]{40}$ \
         || ! -f "$tmp/deploy/deploy.sh" || ! -f "$tmp/install/install.sh" ]]; then
         rm -rf "$tmp"
@@ -385,6 +396,13 @@ fetch_version() {
         return 0
     fi
     place_release "$tmp"
+}
+
+# The patterns of tar match at any depth (src/deploy/x, notes/VERSION): only the top-level
+# deploy/, install/ and VERSION are a release.
+keep_release_parts() {  # <downloaded directory>
+    find "$1" -mindepth 1 -maxdepth 1 ! -name deploy ! -name install ! -name VERSION \
+        -exec rm -rf -- {} +
 }
 
 place_release() {  # <downloaded directory>

@@ -25,16 +25,19 @@ jobs:
       packages: write # the version tag of the image
     env:
       VERSION: ${{ github.ref_name }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false # the repository is public; no token stays in .git/config
 
       - name: Check the tag
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+          # vX.Y.Z without leading zeros, as install/install.sh checks it.
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
             || { echo "::error::A version tag looks like v1.2.3, not $VERSION"; exit 1; }
           git fetch --force --tags origin
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -51,10 +54,17 @@ jobs:
             echo "::error::$VERSION is published already; a published version is never changed"
             exit 1
           fi
-          highest=$( (grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$published" || true; echo "$VERSION") \
+          highest=$( (grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' <<< "$published" || true; echo "$VERSION") \
             | sort -V | tail -n 1)
           [[ "$highest" == "$VERSION" ]] \
             || { echo "::error::$VERSION is not above every published version (the highest is $highest)"; exit 1; }
+          # One version per commit: an update between two names of one commit would do nothing.
+          for other in $(git tag --points-at "$commit"); do
+            if [[ "$other" != "$VERSION" ]] && grep -qxF "$other" <<< "$published"; then
+              echo "::error::$commit is published already as $other; tag a newer commit"
+              exit 1
+            fi
+          done
           # By its id: looking a release up by its tag does not find drafts. The tag stays.
           for id in $drafts; do
             echo "A draft of $VERSION from a failed run is deleted (release id $id)"
@@ -97,6 +107,8 @@ jobs:
         run: bash .github/scripts/build-release.sh "$VERSION" "$COMMIT" dist
 
       - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$VERSION" dist/install.sh dist/aap-release.tar.gz \
             --verify-tag --title "$VERSION" --generate-notes --latest

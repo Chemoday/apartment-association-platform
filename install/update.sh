@@ -25,7 +25,8 @@ for arg in "$@"; do
         *) [[ -z "$TARGET" ]] || usage; TARGET=$arg ;;
     esac
 done
-[[ -z "$TARGET" || "$TARGET" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$TARGET" =~ ^[0-9a-f]{40}$ ]] || usage
+[[ -z "$TARGET" || "$TARGET" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ \
+    || "$TARGET" =~ ^[0-9a-f]{40}$ ]] || usage
 if [[ ! -f "$AAP_ROOT/site/settings.env" ]]; then
     echo "update: no installation in $AAP_ROOT; run install.sh first" >&2
     exit 1
