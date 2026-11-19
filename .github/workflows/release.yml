@@ -1,0 +1,114 @@
+name: Release
+
+# A tag vX.Y.Z on a commit of main publishes that version (docs/DEPLOYMENT.md "Versions and
+# releases"): the image CI built for the commit gets the version tag (no rebuild), and a GitHub
+# Release carries install.sh and aap-release.tar.gz with the version baked in. A run that failed
+# before publishing (for example, the image never appeared) is retried with "Re-run jobs".
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release ${{ github.ref_name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write # the GitHub Release
+      packages: write # the version tag of the image
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false # the repository is public; no token stays in .git/config
+
+      - name: Check the tag
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # vX.Y.Z without leading zeros, as install/install.sh checks it.
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+            || { echo "::error::A version tag looks like v1.2.3, not $VERSION"; exit 1; }
+          git fetch --force --tags origin
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          commit=$(git rev-parse "refs/tags/$VERSION^{commit}")
+          git merge-base --is-ancestor "$commit" origin/main \
+            || { echo "::error::$VERSION points at $commit, which is not a commit of main"; exit 1; }
+          # Published releases only: a draft left by a failed run, or an unpublished tag, never
+          # blocks a re-run.
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | "\(.draft) \(.tag_name) \(.id)"')
+          published=$(awk '$1 == "false" {print $2}' <<< "$releases")
+          drafts=$(awk -v version="$VERSION" '$1 == "true" && $2 == version {print $3}' <<< "$releases")
+          if grep -qxF "$VERSION" <<< "$published"; then
+            echo "::error::$VERSION is published already; a published version is never changed"
+            exit 1
+          fi
+          highest=$( (grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' <<< "$published" || true; echo "$VERSION") \
+            | sort -V | tail -n 1)
+          [[ "$highest" == "$VERSION" ]] \
+            || { echo "::error::$VERSION is not above every published version (the highest is $highest)"; exit 1; }
+          # One version per commit: an update between two names of one commit would do nothing.
+          for other in $(git tag --points-at "$commit"); do
+            if [[ "$other" != "$VERSION" ]] && grep -qxF "$other" <<< "$published"; then
+              echo "::error::$commit is published already as $other; tag a newer commit"
+              exit 1
+            fi
+          done
+          # By its id: looking a release up by its tag does not find drafts. The tag stays.
+          for id in $drafts; do
+            echo "A draft of $VERSION from a failed run is deleted (release id $id)"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for the image of the commit
+        env:
+          IMAGE: ${{ steps.check.outputs.image }}
+          COMMIT: ${{ steps.check.outputs.commit }}
+        run: |
+          # CI pushes it a few minutes after the merge; a tag may come right after the merge.
+          for attempt in $(seq 1 40); do
+            docker buildx imagetools inspect "$IMAGE:$COMMIT" > /dev/null 2>&1 && exit 0
+            echo "waiting for CI to push $IMAGE:$COMMIT ($attempt/40)"
+            sleep 60
+          done
+          echo "::error::No image $IMAGE:$COMMIT: did CI of main pass for this commit?"
+          exit 1
+
+      - name: Tag the image with the version
+        env:
+          IMAGE: ${{ steps.check.outputs.image }}
+          COMMIT: ${{ steps.check.outputs.commit }}
+        run: docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE:$COMMIT"
+
+      - name: Build the release files
+        env:
+          COMMIT: ${{ steps.check.outputs.commit }}
+        run: bash .github/scripts/build-release.sh "$VERSION" "$COMMIT" dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" dist/install.sh dist/aap-release.tar.gz \
+            --verify-tag --title "$VERSION" --generate-notes --latest

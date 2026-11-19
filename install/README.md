@@ -20,9 +20,15 @@ docs/epics/E13_ROLLOUT.md; the technical contract is docs/DEPLOYMENT.md, "The si
 As `root` on the server:
 
 ```sh
-curl -fsSLo install.sh https://raw.githubusercontent.com/Chemoday/apartment-association-platform/main/install/install.sh
+curl -fsSLO https://github.com/Chemoday/apartment-association-platform/releases/latest/download/install.sh
 bash install.sh
 ```
+
+This installs the latest version of the platform. For a given version on a new server, download the
+installer of that release instead: `.../releases/download/v0.2.0/install.sh` (the releases and their
+notes are on the project's GitHub page, under Releases). On a server that runs the platform
+already, an installer only changes the answers and keeps the installed version; `update.sh`
+(below) changes the version.
 
 The installer first prepares the server without asking anything (2 to 3 minutes: it checks the
 server, installs Docker when it is missing and downloads the platform). Then it asks at most five
@@ -54,8 +60,13 @@ the invitation by e-mail.
 - **Run the installer again** at any time: it shows your previous answers as defaults (press Enter
   to keep them) and keeps every secret and all data. This is how you set or change the e-mail
   settings later. It never invites a chairman again unless you ask for it.
-- **Update** to a newer version: `bash /opt/aap/bin/update.sh <commit>`. A failed update rolls
-  back on its own.
+- **Update** to the latest version: `bash /opt/aap/bin/update.sh`, or to a given one:
+  `bash /opt/aap/bin/update.sh v0.3.0`. Read the notes of the release first. A failed update rolls
+  back on its own. Going back to an older version is refused: the database of a newer version may
+  not work with an older one (`--allow-downgrade` exists for the rare case when the release notes
+  say it is safe).
+- **Which version runs:** the last line of `/opt/aap/install.log` that says `deploy ok`, or
+  `cat /opt/aap/releases/$(cat /opt/aap/site/current_sha)/VERSION`.
 - **Where things are:** everything lives in `/opt/aap`. `/opt/aap/install.log` records what the
   installer and the updates did; it holds no passwords, no e-mail addresses and no links.
 - **Start over** (deletes all data of the site): `bash /opt/aap/bin/uninstall.sh --delete-data`.

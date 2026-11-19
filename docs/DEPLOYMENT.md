@@ -53,6 +53,7 @@ pull request ──► CI: ruff + pytest (PostgreSQL service), frontend lint + t
    label deploy-dev ──► Deploy (dev, <head sha>) ──► smoke test via the public URL
 push to main ──► CI: ruff + pytest ──► image :<sha> and :main ──► Deploy (dev) ──► smoke test via the public URL
 manual       ──► Deploy (prod, <sha>) ──► smoke test via the public URL
+tag vX.Y.Z   ──► Release: checks ──► image :<sha> also tagged :vX.Y.Z ──► GitHub Release (install.sh, aap-release.tar.gz)
 ```
 
 - **`.github/workflows/ci.yml`** runs on every pull request and every push to `main`. Images are
@@ -64,6 +65,11 @@ manual       ──► Deploy (prod, <sha>) ──► smoke test via the public 
   frontend version shows up on dev before the merge (docs/FRONTEND_GIT_WORKFLOW.md). Dev shows
   whatever was deployed last; the next merge to `main` replaces a preview. Do not preview a pull
   request that changes database migrations.
+- **`.github/workflows/release.yml`** runs only on a pushed tag `v*` and deploys nothing: it tags
+  the image CI already built and publishes the release that associations install from (section
+  "Versions and releases (R5b)"). A tag push starts no CI run and no deploy, and the job holds no
+  deploy key: only the workflow's own token, with `contents: write` and `packages: write`.
+  Versions are tagged only on the owner's request.
 - **`.github/workflows/deploy.yml`** is reused by CI for dev and is the manual entry point for prod
   and rollbacks: *Actions → Deploy → Run workflow*, pick `prod`, paste the full commit SHA.
   The `production` environment only accepts runs from `main`.
@@ -286,17 +292,62 @@ seconds. Then add a line to `deploy/HOST_CHANGELOG.md`.
 
 ## The simple install on an association's own VPS (`install/`)
 
-Epic E13, task R5a (docs/epics/E13_ROLLOUT.md sections 3 and 4). Everything above this section is
-the project's own VPS; this section is the install an association runs on its own server. The
-guide for its administrator is `install/README.md`. The install reuses the deployment of the
-project instead of copying it: one environment named `site`, deployed by `deploy/deploy.sh`.
+Epic E13, tasks R5a and R5b (docs/epics/E13_ROLLOUT.md sections 3 and 4). Everything above this
+section is the project's own VPS; this section is the install an association runs on its own
+server. The guide for its administrator is `install/README.md`. The install reuses the deployment
+of the project instead of copying it: one environment named `site`, deployed by `deploy/deploy.sh`.
+
+### Versions and releases (R5b)
+An association's installation follows a **version**, never `main`. A version is a git tag
+`vX.Y.Z` on a commit of `main`; while the platform is below 1.0, `Y` grows for new features or
+migrations and `Z` for fixes only.
+
+- **Releasing** is the owner's decision (the agent tags only on request), for a commit of `main`
+  that already ran on dev: `git tag -a v0.2.0 <sha> -m "v0.2.0"` and `git push origin v0.2.0`. The
+  workflow `.github/workflows/release.yml` then:
+  1. refuses a tag that is not `vX.Y.Z` (no leading zeros), a commit that is not on `main` or
+     is published already under another version, a version that is published already, or a
+     version that is not above every published release;
+  2. waits (up to 40 minutes) until CI has pushed the image of that commit, `ghcr.io/<repo>:<sha>`,
+     and adds the tag `vX.Y.Z` to that same image (no rebuild: the version runs the bits that ran
+     on dev);
+  3. builds the release files with `.github/scripts/build-release.sh <version> <sha> <dir>` from
+     the commit (`git archive`, so only committed files) and publishes a GitHub Release `vX.Y.Z`
+     with notes generated from the merged pull requests and two files:
+     - `install.sh`: `install/install.sh` with `RELEASE_VERSION="vX.Y.Z"`, so it installs the
+       version it came with;
+     - `aap-release.tar.gz`: the top directory `aap-vX.Y.Z/` with `deploy/` (without the files
+       of the project's own VPS, `deploy/hosts/` and `deploy/HOST_CHANGELOG.md`), `install/` (the
+       same baked `install.sh`) and a `VERSION` file of two lines, `VERSION=vX.Y.Z` and
+       `COMMIT=<sha>`.
+- **A published version is never moved or deleted:** installations refer to it. A broken version
+  is followed by a new patch version. A release that failed before it was published (for example,
+  the image never appeared) is retried by re-running the workflow; a draft left by a failed upload
+  is deleted by that re-run (the tag stays) and published again.
+- **Images:** the version tags stay in the registry for good; `deploy/cleanup.sh` needs no change,
+  because installations pull the image by its commit tag (below).
+- The project's own dev and prod keep deploying commits (sections above).
 
 ### What gets downloaded
-- **A commit of `main`, not a version yet** (versions come with R5b): `--ref <full sha>`, by
-  default the head of `main` from the GitHub API. Its image `ghcr.io/<repo>:<sha>` (public, built
-  by CI for every commit of `main`) and its source archive from `codeload.github.com`, of which
-  only `deploy/` and `install/` are kept, in `/opt/aap/releases/<sha>/`. Config and image always
-  come from the same commit, as on the project's VPS.
+- **A version** (the default): the installer of the latest release,
+  `https://github.com/<repo>/releases/latest/download/install.sh`, installs the version baked into
+  it; `--version vX.Y.Z` picks another one. A copy of `install/install.sh` from the repository has
+  no baked version and installs the latest release (`api.github.com/repos/<repo>/releases/latest`).
+  The installer downloads `releases/download/<version>/aap-release.tar.gz` (at most 200 MB),
+  unpacks it with root's own owners and modes (never the archive's), keeps only the top-level
+  `deploy/`, `install/` and `VERSION`, checks that `VERSION` is a plain file naming the version
+  asked for and a full commit (otherwise it refuses with one line),
+  and puts the release in `/opt/aap/releases/<commit>/`. The image is pulled by its commit tag,
+  `ghcr.io/<repo>:<commit>`, which is the same image as `:<version>`.
+- **A commit of `main`, for trying a change before it is released** (the test VPS): `--ref <full
+  sha>` downloads that commit's source archive from `codeload.github.com`, of which only `deploy/`
+  and `install/` are kept, and its image `ghcr.io/<repo>:<sha>` (public, built by CI for every
+  commit of `main`). Such a release has no `VERSION` file: the installer calls it
+  `commit <first 12 characters>`.
+- Config and image always come from the same commit, as on the project's VPS. The deploy state
+  (`current_sha`, `previous_sha`, `history`, `releases/<sha>/`) stays keyed by the commit, so
+  `deploy.sh`, its rollback and the clean-up work unchanged; the version of the running release is
+  the `VERSION` file of `releases/<current_sha>/`.
 
 ### The three phases of `install.sh`
 1. **Prepare, without questions:** refuses unless run as root on x86_64 Debian or Ubuntu with the
@@ -320,9 +371,9 @@ project instead of copying it: one environment named `site`, deployed by `deploy
 | `site/settings.env` (644) | The answers and the backend settings, no secrets (below) |
 | `site/files/` | Uploaded files, owned by uid 1000, mode 700 |
 | `site/current_sha`, `previous_sha`, `history` | Deploy state, as on the project's VPS |
-| `releases/<sha>/deploy/`, `releases/<sha>/install/` | The current and the previous release |
+| `releases/<sha>/deploy/`, `releases/<sha>/install/`, `releases/<sha>/VERSION` | The current and the previous release (`VERSION` only in a release of a version) |
 | `edge/` | The edge proxy: `deploy/edge/docker-compose.yml`, `caddy/Caddyfile` from `install/Caddyfile`, `caddy/environment.caddy`, `.env` (`SITE_HOST`, `HTTPS_PORT=443`, `TLS_MODE`) |
-| `bin/` | `install.sh`, `update.sh`, `uninstall.sh` (from the current release), `aap-disk-check` |
+| `bin/` | `install.sh`, `update.sh`, `uninstall.sh` of the release that runs (copied after a healthy deploy, and at once on the first install), `aap-disk-check` |
 | `install.log` | One line per step of every install and update (below) |
 
 `site/settings.env` (every value shell-quoted, read by `deploy.sh` with `source`) holds:
@@ -352,8 +403,9 @@ project instead of copying it: one environment named `site`, deployed by `deploy
 
 ### Running it again, updates and refusals
 - **A re-run** reads `site/settings.env` as the defaults of the questions, keeps every secret,
-  the `INSTANCE_ID` and the data, writes the new settings and deploys the same commit again (or
-  `--ref`). The building is created only until it exists (`site/.building-done`); the chairman
+  the `INSTANCE_ID` and the data, writes the new settings and deploys the same release again (or
+  the one of `--version` or `--ref`). An installer of another version (downloaded from a release)
+  keeps the installed version too and says how to change it with `update.sh`. The building is created only until it exists (`site/.building-done`); the chairman
   is invited on the first run and again only with `--invite-chairman` or a yes to that question
   (`site/.chairman-invited`), never because `--chairman-email` is repeated.
 - **Demo and real never switch on the same data:** before writing anything, the installer refuses
@@ -361,13 +413,21 @@ project instead of copying it: one environment named `site`, deployed by `deploy
   `install/uninstall.sh --delete-data`, which starts over. Should the settings and the data still
   disagree, the backend's own marker check refuses to start (`DEMO_ON_REAL_DATA`,
   `REAL_ON_DEMO_DATA`) and `deploy.sh` rolls back.
-- **`update.sh <sha>`** is meant to move forward: going back is the automatic rollback of
-  `deploy.sh` after a failed deploy, and a commit older than the install has no installer and is
-  refused. It downloads
-  that commit's release like phase 1 and runs that release's own
+- **`update.sh [vX.Y.Z | <sha>] [--allow-downgrade]`** updates to the latest version, to the
+  given version or to a commit of `main`. It downloads that release like phase 1, says so and
+  stops when the installation runs it already, and otherwise runs that release's own
   `install.sh --yes --ref <sha>`: a re-run without questions, which keeps the answers, the public
   IP found before and an unchanged hostname without checking DNS again, copies the new scripts
   to `bin/` and deploys through `deploy.sh site <sha>`.
+- **Updates move forward:** a version below the installed one is refused (by `update.sh` and by
+  `install.sh --version`) unless `--allow-downgrade` is given, because migrations are never
+  reversed and an older backend may not start on a newer database (then `deploy.sh` rolls back to
+  the release that ran). Going back after a failed deploy is the automatic rollback of
+  `deploy.sh`. A commit (`--ref`, or a commit given to `update.sh`) is not compared: that path is
+  for testing. A commit older than the install has no installer and is refused.
+- **Installations made before versions (R5a)** have an `update.sh` that takes only a commit: they
+  move to a version once with `bash /opt/aap/bin/update.sh <the commit of that version>` (shown
+  on its release page), and take versions from then on.
 - **Refusals** print one line saying what to fix and exit non-zero: not root, not x86_64, not
   Debian or Ubuntu, a port in use, an own hostname that does not resolve to the server (with
   `--yes`; interactively the question is asked again), an invalid answer (every text answer is
@@ -377,7 +437,8 @@ project instead of copying it: one environment named `site`, deployed by `deploy
 
 ### The install log and the screen
 `/opt/aap/install.log` (600) gets one line per step: time, step and outcome, for example
-`2026-11-18T10:00:00Z install deploy ok sha=<sha>`. It never holds a secret, the SMTP password,
+`2026-11-18T10:00:00Z install deploy ok sha=<sha> version=v0.2.0` (`version=` is empty for a
+commit). It never holds a secret, the SMTP password,
 the chairman's e-mail, the chairman's link or the address of the building. The SMTP password is
 read without echo or from `--smtp-password-file`, never from the command line. The chairman's
 link is printed to the terminal once, like `create-chairman --print-link`.
