@@ -167,9 +167,38 @@ Several instances and unrelated services share the host, so nothing may grow wit
 | Database | `deploy/docker-compose.deploy.yml` | 384 MB of memory, 200 processes; `max_wal_size=256MB`, `temp_file_limit=512MB` |
 | Edge proxy | `deploy/edge/docker-compose.yml` | 256 MB of memory, 200 processes |
 | Container logs | both compose files | 3 files of 10 MB per container |
+| Health checks | `deploy/docker-compose.deploy.yml`, `docker-compose.yml` | every 30 s once started, fast only while starting (`start_interval`: backend 2 s within a 60 s start period, database 1 s within 30 s), unhealthy after 3 failures; the backend check is `python -S -I /app/src/core/healthcheck.py`, a plain socket request to `/health/ready` without site packages or `urllib` (below) |
 | Images and releases | `deploy/cleanup.sh`, run by `deploy.sh` after a healthy deploy | only the current and the previous release of each environment are kept; images of other services are never touched |
 | Disk | `aap-disk-check.timer` (hourly) | a warning in the journal (tag `aap-disk-check`) and a failed unit at 70% and 85% of `DISK_BUDGET_GB`, or below 20% free on the host; image sizes are summed per image, so the estimate errs on the high side |
 
+- **Why the health checks are rare** (measured on dev with cgroup CPU counters, 2026-11-19,
+  issue [#166](https://github.com/Chemoday/apartment-association-platform/issues/166)): every
+  check is a process started in the container (`docker exec` alone costs about 160 ms of CPU).
+  The old backend check (`python -c` with `urllib.request`, every 5 s) cost about 570 ms per run,
+  so an idle backend used about 12 % of a core while the application itself used under 1 %; the
+  database's `pg_isready` every 3 s cost about 5 % more. That limits a 1 vCPU VPS and how many
+  installations share a host. The new backend check costs about 390 ms per run against 810 ms
+  for the old one (measured side by side in the same container, before the image held compiled
+  standard library modules), and runs 6 times less often. Since the same change the image holds
+  the bytecode of the standard library and of the application (`compileall` in the Dockerfile):
+  the base image ships none, and the container can never write it, so every check and every
+  `python -m` step of `entrypoint.sh` recompiled the modules it imports.
+
+  | Idle dev, 5 min, share of one core | Backend | Database |
+  | :--- | :--- | :--- |
+  | Before (checks every 5 s and 3 s) | 13.2 % | 5.1 % |
+  | After (every 30 s, the new backend check, compiled modules) | 1.1 % | 1.1 % |
+
+  With the compiled modules a check costs 162 ms of CPU, of which 117 ms is `docker exec`
+  itself (the old check would cost 319 ms in the same image). An idle installation now uses about
+  2 % of a core instead of about 18 %.
+
+  `start_interval` needs Docker Engine 25 or newer and Docker Compose 2.20.2 or newer. A recent
+  Compose on an older engine fails on it; an older Compose rejects the key. So
+  `install/install.sh` refuses both with a message, and `deploy/bootstrap.sh` refuses an older
+  engine. An older Compose on an older engine (for example engine 24 with Compose 2.21 on a
+  developer's machine) ignores `start_interval`: `docker compose up` still works, the services
+  only turn healthy about 30 s later each.
 - The limits of the app containers arrive with a deploy (they are part of the release); the edge
   limits, the disk check and the host-wide settings arrive with `bootstrap.sh`.
 - A deploy holds a shared lock on `/opt/aap/releases/.deploy.lock` while it pulls and starts its
@@ -209,7 +238,11 @@ association stores files.
 - **Automatic.** `deploy.sh` starts the new release with `docker compose up --wait`. The backend
   healthcheck calls `/health/ready`, which also checks the database. If the release is not healthy
   within 180 s, the script prints the backend logs, redeploys the previous SHA of that environment
-  and fails the workflow run.
+  and fails the workflow run. A release that gets ready within the 60 s start period turns
+  healthy within about 2 s (the fast checks of the start period); one that gets ready later, for
+  example after long migrations, waits for the next check, up to 30 s. A release that never
+  becomes ready is unhealthy after at most 60 s + 3 × (30 s + 5 s timeout) = 165 s, within the
+  180 s.
 - **Manual.** Run *Deploy* with an older SHA. The SHAs that ran are listed on the repository's
   *Deployments* page, or with `ssh deploy@164.68.121.228 status`.
 - **Schema.** Migrations must stay backward compatible (expand/contract). At startup,

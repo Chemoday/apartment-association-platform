@@ -18,6 +18,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.10 /uv /usr/local/bin/uv
 
+# The base image ships the standard library without bytecode, and the container can never write
+# it (read-only root, a non-root user, PYTHONDONTWRITEBYTECODE). Compiled once here, so every
+# health check and every `python -m` step of entrypoint.sh does not recompile it (issue #166).
+RUN python -m compileall -q /usr/local/lib/python3.12
+
 WORKDIR /app
 
 # Dependencies first, so code changes do not invalidate this layer.
@@ -27,6 +32,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY alembic.ini entrypoint.sh ./
 COPY alembic ./alembic
 COPY src ./src
+RUN python -m compileall -q /app/src /app/alembic
 COPY --from=frontend /frontend/dist ./frontend/dist
 
 # /data/files: uploaded files (epic E11). A named volume mounted there takes this owner; on the

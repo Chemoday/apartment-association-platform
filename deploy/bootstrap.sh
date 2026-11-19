@@ -48,6 +48,10 @@ log() { echo "[bootstrap] $*"; }
 for tool in docker curl python3 openssl flock systemctl; do
     command -v "$tool" > /dev/null || { echo "missing dependency: $tool" >&2; exit 1; }
 done
+# The health checks of the deploy compose file use start_interval (Docker Engine 25 or newer).
+docker_version=$(docker version --format '{{.Server.Version}}' 2> /dev/null || true)
+[[ "${docker_version%%.*}" =~ ^[0-9]+$ && ${docker_version%%.*} -ge 25 ]] \
+    || { echo "Docker Engine 25 or newer is needed (found: ${docker_version:-none})" >&2; exit 1; }
 
 log "deploy user"
 id deploy > /dev/null 2>&1 || useradd --create-home --shell /bin/bash deploy

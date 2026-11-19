@@ -474,3 +474,45 @@ def test_uninstall_deletes_nothing_without_its_flag(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert (tmp_path / "site").exists()
+
+
+# --- Docker Engine version (issue #166) --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("engine", "compose", "accepted"),
+    [
+        ("28.1.1", "2.35.1", True),
+        ("25.0.0", "2.20.2", True),
+        ("25.0.0", "v2.24.5", True),  # some plugins print a leading v
+        ("24.0.7", "2.35.1", False),  # a recent Compose fails on an old engine
+        ("20.10.24", "2.21.0", False),
+        ("28.1.1", "2.20.1", False),  # Compose before start_interval
+        ("28.1.1", "1.29.2", False),
+        ("", "2.35.1", False),  # the daemon does not answer
+        ("28.1.1", "", False),
+    ],
+)
+def test_docker_must_know_start_interval(
+    tmp_path: Path, engine: str, compose: str, accepted: bool
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+
+    def answer(value: str) -> str:
+        return f"echo {shlex.quote(value)}" if value else "exit 1"
+
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        f"[[ $1 == version ]] && {{ {answer(engine)}; exit; }}\n"
+        f"[[ $1 == compose && $2 == version ]] && {{ {answer(compose)}; exit; }}\n"
+        "exit 0\n"
+    )
+    docker.chmod(0o755)
+
+    result = bash(tmp_path / "aap", "check_docker_version", PATH=f"{bin_dir}:{os.environ['PATH']}")
+
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert "docker:" in result.stderr

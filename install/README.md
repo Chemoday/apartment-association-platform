@@ -9,6 +9,9 @@ docs/epics/E13_ROLLOUT.md; the technical contract is docs/DEPLOYMENT.md, "The si
 - A fresh VPS with **Ubuntu 22.04 or 24.04, or Debian 12**, on **x86_64 (amd64)**: 2 GB of memory
   and 20 GB of disk are enough for one building. ARM servers are not supported yet.
 - `root` access over SSH.
+- Docker: none (the installer installs it from Docker's own repository), or Docker Engine 25 or
+  newer with Docker Compose 2.20.2 or newer. Older versions, such as the `docker.io` package of
+  Debian 12, are refused with a message: update Docker first.
 - Ports **80 and 443** free on the server (the installer stops if another program uses them).
 - Optional: an own address such as `kyhistu.example.ee`. Without one, the site gets an address
   of the form `203-0-113-7.sslip.io`, which works at once.

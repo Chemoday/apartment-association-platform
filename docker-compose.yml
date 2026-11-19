@@ -10,10 +10,12 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d app"]
-      interval: 3s
+      test: ["CMD", "pg_isready", "-U", "app", "-d", "app"]
+      interval: 30s
       timeout: 3s
-      retries: 20
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
 
   backend:
     build: .
@@ -42,16 +44,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Rare once started, fast while starting (docs/DEPLOYMENT.md "Resource limits"): every check
+    # is a new process in the container; start_interval needs Docker Engine 25 or newer.
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"
-      interval: 5s
+      test: ["CMD", "python", "-S", "-I", "/app/src/core/healthcheck.py"]
+      interval: 30s
       timeout: 5s
-      retries: 10
-      start_period: 10s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
 
   # Observability (Task 8): collector + Grafana LGTM (Tempo traces, Prometheus metrics, Loki logs).
   otel-collector:

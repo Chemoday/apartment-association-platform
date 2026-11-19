@@ -7,6 +7,7 @@ The scripts run on the VPS as root or as the deploy user; here they run against 
 import fcntl
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -426,3 +427,75 @@ def test_the_caddyfile_of_an_installation_validates(tmp_path: Path, tls_mode: st
     result = _caddy_validate(tmp_path, "SITE_HOST=kyhistu.example.test", f"TLS_MODE={tls_mode}")
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# --- Health checks (issue #166) ----------------------------------------------------------------
+
+ROOT = DEPLOY.parent
+
+
+@pytest.mark.parametrize("compose_file", ["deploy/docker-compose.deploy.yml", "docker-compose.yml"])
+def test_health_checks_are_rare_once_started_and_fast_while_starting(compose_file: str) -> None:
+    """Every check is a new process in the container (docs/DEPLOYMENT.md "Resource limits")."""
+    services = yaml.safe_load((ROOT / compose_file).read_text())["services"]
+    backend = services["backend"]["healthcheck"]
+    db = services["db"]["healthcheck"]
+
+    assert backend["test"] == ["CMD", "python", "-S", "-I", "/app/src/core/healthcheck.py"]
+    assert db["test"] == ["CMD", "pg_isready", "-U", "app", "-d", "app"]  # no shell in between
+    for check, start_interval, start_period in ((backend, "2s", "60s"), (db, "1s", "30s")):
+        assert check["interval"] == "30s"
+        assert check["start_interval"] == start_interval
+        assert check["start_period"] == start_period
+        assert check["retries"] == 3
+
+
+def test_the_backend_check_is_in_the_image_where_compose_runs_it() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text()
+
+    assert (ROOT / "src/core/healthcheck.py").is_file()
+    assert "WORKDIR /app" in dockerfile and "COPY src ./src" in dockerfile
+
+
+def _seconds(value: str) -> int:
+    assert value.endswith("s"), value
+    return int(value[:-1])
+
+
+def test_a_release_that_never_gets_ready_is_unhealthy_before_the_deploy_gives_up() -> None:
+    """deploy.sh rolls back an unhealthy backend; the checks must decide within --wait-timeout."""
+    backend = _compose("docker-compose.deploy.yml")["services"]["backend"]["healthcheck"]
+    wait = int(re.search(r"--wait-timeout (\d+)", (DEPLOY / "deploy.sh").read_text()).group(1))
+
+    # The last check of the start period may already count; at worst each check hits its timeout.
+    each = _seconds(backend["interval"]) + _seconds(backend["timeout"])
+    unhealthy_after = _seconds(backend["start_period"]) + backend["retries"] * each
+    assert unhealthy_after < wait
+
+
+@pytest.mark.parametrize(
+    ("version", "accepted"),
+    [("28.1.1", True), ("25.0.0", True), ("28.1.1-ce", True), ("24.0.7", False), ("", False),
+     ("rc", False)],
+)  # fmt: skip
+def test_bootstrap_refuses_a_docker_engine_without_start_interval(
+    tmp_path: Path, version: str, accepted: bool
+) -> None:
+    """The version check of bootstrap.sh, run on its own under the script's shell options."""
+    source = (DEPLOY / "bootstrap.sh").read_text()
+    start = source.index("docker_version=$(")
+    check = source[start : source.index("\n\n", start)]
+    docker = tmp_path / "docker"
+    docker.write_text(f"#!/usr/bin/env bash\necho {shlex.quote(version)}\n")
+    docker.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{check}\necho passed"],
+        env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert (result.stdout.strip() == "passed") is accepted, result.stderr
+    if not accepted:
+        assert "Docker Engine 25 or newer is needed" in result.stderr
