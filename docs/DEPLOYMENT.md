@@ -187,6 +187,11 @@ Several instances and unrelated services share the host, so nothing may grow wit
   | Idle dev, 5 min, share of one core | Backend | Database |
   | :--- | :--- | :--- |
   | Before (checks every 5 s and 3 s) | 13.2 % | 5.1 % |
+  | After (every 30 s, the new backend check, compiled modules) | 1.1 % | 1.1 % |
+
+  With the compiled modules a check costs 162 ms of CPU, of which 117 ms is `docker exec`
+  itself (the old check would cost 319 ms in the same image). An idle installation now uses about
+  2 % of a core instead of about 18 %.
 
   `start_interval` needs Docker Engine 25 or newer and Docker Compose 2.20.2 or newer. A recent
   Compose on an older engine fails on it; an older Compose rejects the key. So
