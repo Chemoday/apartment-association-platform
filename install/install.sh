@@ -249,8 +249,14 @@ ensure_packages() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}" > /dev/null
 }
 
+# The health checks use start_interval (docs/DEPLOYMENT.md "Resource limits and disk hygiene"):
+# an older engine or Compose plugin either fails on it or ignores it.
+MIN_DOCKER_MAJOR=25
+MIN_COMPOSE_VERSION=2.20.2
+
 ensure_docker() {
     if command -v docker > /dev/null && docker compose version > /dev/null 2>&1; then
+        check_docker_version
         say "Docker is present"
         return 0
     fi
@@ -271,7 +277,23 @@ ensure_docker() {
         docker-compose-plugin > /dev/null
     systemctl enable --now docker > /dev/null 2>&1 || true
     docker compose version > /dev/null || die "docker: Docker did not start"
+    check_docker_version
     log_line "docker installed"
+}
+
+check_docker_version() {
+    local version major
+    version=$(docker version --format '{{.Server.Version}}' 2> /dev/null) || version=""
+    major=${version%%.*}
+    [[ "$major" =~ ^[0-9]+$ ]] || die "docker: cannot read the version of the Docker Engine; is the Docker service running?"
+    [[ "$major" -ge "$MIN_DOCKER_MAJOR" ]] \
+        || die "docker: Docker Engine $version is older than $MIN_DOCKER_MAJOR; update Docker (https://docs.docker.com/engine/install/) and run the installer again"
+    local compose
+    compose=$(docker compose version --short 2> /dev/null) || compose=""
+    compose=${compose#v}
+    [[ "$compose" =~ ^[0-9]+\.[0-9]+ ]] || die "docker: cannot read the version of Docker Compose"
+    [[ "$(printf '%s\n%s\n' "$MIN_COMPOSE_VERSION" "$compose" | sort -V | head -n 1)" == "$MIN_COMPOSE_VERSION" ]] \
+        || die "docker: Docker Compose $compose is older than $MIN_COMPOSE_VERSION; update the docker-compose-plugin package and run the installer again"
 }
 
 # Which release (docs/DEPLOYMENT.md "What gets downloaded"): --ref or --version as given; on a
