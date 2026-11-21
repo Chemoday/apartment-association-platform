@@ -985,14 +985,17 @@ class MetersService:
             )
         )
         apartments = await self.property_service.list_apartments(user.building_id)
+        # One query for every meter's history: the previous value and whether it has a start.
+        histories = await self._meter_histories([meter.id for meter in meters])
+
+        def cell(meter: MeterDevice) -> MatrixMeter:
+            return self._matrix_cell(
+                meter, readings.get(meter.id), histories.previous_value(meter, period)
+            )
 
         rows = []
         for apartment in apartments:
-            cells = [
-                self._matrix_cell(meter, readings.get(meter.id))
-                for meter in meters
-                if meter.apartment_id == apartment.id
-            ]
+            cells = [cell(meter) for meter in meters if meter.apartment_id == apartment.id]
             if not cells:
                 continue
             rows.append(
@@ -1005,18 +1008,9 @@ class MetersService:
                     meters=cells,
                 )
             )
-        master_meters = []
-        for meter in (m for m in meters if m.is_master_meter):
-            known, _ = await self._previous(meter, period)
-            master_meters.append(
-                MasterMeterRow(
-                    **self._matrix_cell(meter, readings.get(meter.id)).model_dump(),
-                    previous_value=(
-                        readings[meter.id].previous_value if meter.id in readings else known
-                    ),
-                    needs_start=known is None,
-                )
-            )
+        master_meters = [
+            MasterMeterRow(**cell(meter).model_dump()) for meter in meters if meter.is_master_meter
+        ]
         return MatrixResponse(
             period=_period_dto(period),
             balances=self._balances(meters, readings),
@@ -1025,12 +1019,17 @@ class MetersService:
         )
 
     @staticmethod
-    def _matrix_cell(meter: MeterDevice, reading: MeterReading | None) -> MatrixMeter:
+    def _matrix_cell(
+        meter: MeterDevice, reading: MeterReading | None, known: Decimal | None
+    ) -> MatrixMeter:
+        """`known`: the meter's previous value before the period (None: no start yet)."""
         return MatrixMeter(
             meter_id=meter.id,
             resource_type=meter.resource_type,
             location_label=meter.location_label,
             unit=meter.unit,
+            previous_value=reading.previous_value if reading is not None else known,
+            needs_start=known is None,
             status=meter_submission_status(
                 reading.source if reading else None,
                 reading.is_anomaly_confirmed if reading else False,
@@ -1442,8 +1441,9 @@ class MetersService:
     async def _meter_histories(self, meter_ids: list[uuid.UUID]) -> _MeterHistories:
         """Every reading of the meters with its period, newest first (see _MeterHistories).
 
-        Unbounded on purpose, for the few meters of one user: one row per meter and month, so
-        about 120 rows per meter after ten years. Add a lower bound if that ever matters."""
+        Unbounded on purpose: one row per meter and month, about 120 rows per meter after ten
+        years, for one user's meters or the building's matrix (some 24,000 rows for 200 meters
+        then). Add a lower bound if that ever matters."""
         rows: dict[uuid.UUID, list[_PastReading]] = {meter_id: [] for meter_id in meter_ids}
         if not meter_ids:
             return _MeterHistories(rows)

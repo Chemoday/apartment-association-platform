@@ -336,3 +336,55 @@ async def test_a_start_is_left_out_of_the_building_consumption(
     (series,) = response.json()["resources"]
     october = next(month for month in series["months"] if month["period_code"] == "2026-10")
     assert october["total"] is None  # nobody else submitted for October; the start counts not
+
+
+async def test_the_matrix_tells_the_board_which_apartment_meters_need_a_start(
+    api_client: AsyncClient, world: MetersWorld, fresh
+) -> None:
+    _, meter = fresh
+
+    response = await api_client.get(
+        f"{API}/periods/2026-10/matrix", headers=as_user(world.chairman)
+    )
+
+    cells = {
+        cell["meter_id"]: cell for row in response.json()["apartments"] for cell in row["meters"]
+    }
+    assert (cells[str(meter.id)]["needs_start"], cells[str(meter.id)]["previous_value"]) == (
+        True,
+        None,
+    )
+    assert (
+        cells[str(world.meter_14.id)]["needs_start"],
+        cells[str(world.meter_14.id)]["previous_value"],
+    ) == (
+        False,
+        "115.000",
+    )
+
+
+async def test_a_reading_written_without_its_origin_counts_as_history(
+    db_session: AsyncSession, world: MetersWorld
+) -> None:
+    """What a rollback to the release before 031 does: it inserts without previous_origin."""
+    from sqlalchemy import text
+
+    await db_session.execute(
+        text(
+            "INSERT INTO meters_readings (id, building_id, meter_id, period_id, value, "
+            "previous_value, consumption_delta, source) VALUES (gen_random_uuid(), :building, "
+            ":meter, :period, 120, 115, 5, 'RESIDENT')"
+        ),
+        {
+            "building": world.building.id,
+            "meter": world.meter_14.id,
+            "period": world.periods["2026-10"].id,
+        },
+    )
+
+    assert (await reading_of(db_session, world.meter_14)).previous_origin is not None
+    origin = await db_session.scalar(
+        text("SELECT previous_origin FROM meters_readings WHERE period_id = :period"),
+        {"period": world.periods["2026-10"].id},
+    )
+    assert origin == "HISTORY"

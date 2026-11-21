@@ -5,6 +5,10 @@ building imported without them), and meters_readings.previous_origin records whe
 previous_value came from. Existing readings: each meter's earliest reading took the meter's
 initial value (INITIAL), every later one the reading before it (HISTORY).
 
+The downgrade gives a meter without a start an initial value of 0 and an unset serial number an
+empty one, so a meter that never had a reading would count its whole value as its first
+consumption after a downgrade; downgrades are not part of a rollback (the migrations stay).
+
 Revision ID: 031
 Revises: 030
 Create Date: 2026-11-21
@@ -46,8 +50,15 @@ def upgrade() -> None:
         WHERE ranked.id = r.id
         """
     )
+    # The default keeps the previous release working after a rollback: it inserts readings
+    # without this column. Its readings then count as HISTORY, which is right for every meter
+    # that already had a reading or an initial value (docs/DEPLOYMENT.md "Rollback").
     op.alter_column(
-        "meters_readings", "previous_origin", existing_type=sa.String(16), nullable=False
+        "meters_readings",
+        "previous_origin",
+        existing_type=sa.String(16),
+        nullable=False,
+        server_default=sa.text("'HISTORY'"),
     )
     op.create_check_constraint(
         "ck_meters_readings_previous_origin",

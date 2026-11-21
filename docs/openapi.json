@@ -15209,6 +15209,25 @@
           "unit": {
             "$ref": "#/components/schemas/MeterUnit"
           },
+          "previous_value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+\\.[0-9]{3}$",
+                "examples": [
+                  "1254.000"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Value"
+          },
+          "needs_start": {
+            "type": "boolean",
+            "title": "Needs Start"
+          },
           "status": {
             "$ref": "#/components/schemas/SubmissionStatus"
           },
@@ -15229,6 +15248,8 @@
           "resource_type",
           "location_label",
           "unit",
+          "previous_value",
+          "needs_start",
           "status",
           "reading"
         ],

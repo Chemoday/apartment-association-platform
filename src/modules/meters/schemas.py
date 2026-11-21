@@ -344,6 +344,10 @@ class MatrixMeter(BaseModel):
     resource_type: ResourceType
     location_label: str
     unit: MeterUnit
+    # The board's entry form needs both (epic E13 R3b): the floor of a new value, and whether
+    # the meter still has no start, so the form offers the reading of the last bill.
+    previous_value: MeterAmount | None  # None with needs_start and no reading yet
+    needs_start: bool
     status: SubmissionStatus
     reading: ReadingSummary | None
 
@@ -357,17 +361,8 @@ class MatrixApartment(BaseModel):
     meters: list[MatrixMeter]
 
 
-class MasterMeterRow(BaseModel):
+class MasterMeterRow(MatrixMeter):
     """A Building Master Meter in the matrix: its id is what the board submits against."""
-
-    meter_id: uuid.UUID
-    resource_type: ResourceType
-    location_label: str
-    unit: MeterUnit
-    previous_value: MeterAmount | None  # None with needs_start and no reading yet
-    needs_start: bool
-    status: SubmissionStatus
-    reading: ReadingSummary | None
 
 
 class ResourceBalance(BaseModel):

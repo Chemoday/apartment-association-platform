@@ -167,9 +167,12 @@ class MeterReading(Base):
     period_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     value: Mapped[Decimal] = _meter_value(nullable=False)
     previous_value: Mapped[Decimal] = _meter_value(nullable=False)
+    # The server default keeps a rollback to the release before it working: that code inserts
+    # readings without this column (docs/DEPLOYMENT.md "Rollback"). This code always sets it.
     previous_origin: Mapped[PreviousOrigin] = mapped_column(
         varchar_enum(PreviousOrigin, "ck_meters_readings_previous_origin", length=16),
         nullable=False,
+        server_default=PreviousOrigin.HISTORY.value,
     )
     consumption_delta: Mapped[Decimal] = _meter_value(nullable=False)
     source: Mapped[ReadingSource] = mapped_column(
