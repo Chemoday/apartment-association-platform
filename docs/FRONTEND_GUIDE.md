@@ -184,6 +184,10 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   or leave it out. Explain under the field: "If you do not know it, leave it empty: this month
   will count as the start of your meter." Never send `previous_value` for any other meter
   (`422 PREVIOUS_VALUE_NOT_ALLOWED`).
+- **Correcting a first reading:** `reading.previous_value` holds the bill's reading of a
+  `SUBMITTED` start; leaving `previous_value` out of the correction keeps it, and only an explicit
+  `"previous_value": null` drops it (prefill the field with it, and send `null` when the user
+  clears it).
 - **`previous_origin`** of a reading: in the matrix and the apartment card, mark `SUBMITTED`
   ("start given by the resident: check against the last bill") and `START` ("start of the meter,
   no consumption this month"); `balances[].starting_meters > 0` means that month's balance is

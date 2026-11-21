@@ -242,8 +242,8 @@ Planning record: docs/cli_planning/2026-11-21-building-and-residents.md.
 - **Entrances by ranges of positions:** `1-24,25-48` means the 1st to 24th apartment and the 25th
   to 48th in the natural order of the numbers (`2`, `10`, `14`, `14A`), so letter suffixes need no
   rule. Overlapping ranges, gaps, a range beyond the last apartment and apartments left over are
-  errors; without the option every apartment is in entrance 1. The template shows the result, and
-  the chairman corrects it there.
+  errors; without the option the entrances stay empty and must be filled in before the import
+  (owner, 2026-11-21). The template shows the result, and the chairman corrects it there.
 - **A default set of meters per apartment** (for example cold and hot water): one template row per
   meter, so a second riser is one more row with the same apartment; an apartment without meters is
   one row with the meter columns empty.

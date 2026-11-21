@@ -289,8 +289,10 @@ once; adding apartments later is running administration (E13 R8).
 - **`--apartments <N>`** (1 to 1000) drafts apartments `1` to `N` with an empty area and floor.
 - **`--entrances <ranges>`**: comma-separated positions in the natural order of the numbers, a
   range `a-b` or one position, e.g. `1-24,25-48`; they must cover every apartment exactly once
-  (an overlap, a gap or a position past the last apartment is an error). Without it every
-  apartment is in entrance 1.
+  (an overlap, a gap or a position past the last apartment is an error). Without it the
+  `entrance` cells stay empty, so the import refuses the file until every apartment has its
+  entrance (owner, 2026-11-21: a default of 1 would silently put a building of four entrances
+  into one, and notices are sent by entrance).
 - **`--meters <types>`**: comma-separated `TYPE[:count]` with a count from 1 to 4, default
   `COLD_WATER,HOT_WATER`; `COLD_WATER:2,HOT_WATER:2` writes two rows of each type per apartment,
   with the locations `1` and `2` (two meters of a type need different locations; the chairman
@@ -325,10 +327,12 @@ fill the building once (an advisory lock).
   in every row), are ignored. Rows are numbered as the spreadsheet shows them: a line break inside
   a quoted cell does not shift the numbers. A cell that starts with `'` followed by `=`, `+`, `-` or `@` loses the `'`
   (the template's formula guard).
-- **The header:** exactly these columns, in any order, each once: `apartment`, `entrance`,
-  `floor`, `area_m2`, `resource`, `unit`, `serial_number`, `location`, `initial_value`,
-  `max_monthly_delta`. A refusal names the missing columns and how many unexpected or repeated
-  ones there are.
+- **The header** (owner, 2026-11-21: as lenient as is safe): the columns are found by name, in
+  any order, without regard to case or surrounding spaces. `apartment`, `entrance`, `area_m2` and
+  `resource` are required; `floor`, `unit`, `serial_number`, `location`, `initial_value` and
+  `max_monthly_delta` may be left out (their cells count as empty). A column of another name
+  (notes) is ignored and named in a warning. A refusal names the missing required columns; a
+  column given twice is refused.
 - **A row** is one of:
   - an apartment meter: `apartment` and `resource` filled;
   - an apartment without meters: `apartment` filled, every meter column empty;
@@ -336,12 +340,16 @@ fill the building once (an advisory lock).
 - **Apartment columns:**
   - `apartment`: 1 to 32 characters of one line of visible text (the rule of `create-building`);
     every row of one apartment repeats the same `entrance`, `floor` and `area_m2`; two numbers
-    that differ only in case (`14A`, `14a`) are an error of the later row, never two
-    apartments;
+    that differ only in case, spaces or leading zeros (`14A` and `14a`, `14 A` and `14A`, `01`
+    and `1`) are an error of the later row, never two apartments;
   - `entrance`: a whole number from 1 to 99, required;
   - `floor`: a whole number from -5 to 200, empty means 1;
   - `area_m2`: required, greater than 0, a decimal point or comma, rounded half up to 2 decimal
     places (the output counts how many were rounded), at most 999999.99.
+- **Numbers** (`area_m2`, `initial_value`, `max_monthly_delta`) may group their thousands with
+  spaces, as a spreadsheet shows them (`12 345,5`, also with a no-break space); any other
+  separator of thousands (`12.345,5`) is refused, because it cannot be told from a decimal
+  point.
 - **Meter columns:**
   - `resource`: one of the types above;
   - `unit`: empty takes the type's default; it must fit the type (table below);
@@ -371,7 +379,14 @@ fill the building once (an advisory lock).
   other than the column name): every problem as `row <n>: <column>: <what is wrong>` (row 1 is
   the header), then `error: <count> problems, nothing written` and 2; refusals as above and 1;
   success: `checked: <A> apartments, <M> apartment meters, <B> building meters, <R> areas
-  rounded` with `--dry-run`, else `imported: ...` with the same counts, and 0. A file without
+  rounded` with `--dry-run`, else `imported: ...` with the same counts, and 0. Before that line,
+  warnings that never stop the import: `warning: column(s) ignored: <names>`, and, when the
+  building has a register passport block and its provider is enabled, a check against the
+  register (owner, 2026-11-21): `warning: the register lists apartments the file does not have:
+  <numbers>`, `warning: the file has apartments the register does not list: <numbers>` (a shop
+  added by hand), and `warning: apartment <number>: area <file> m2, the register says
+  <register> m2` when they differ by more than 1 m2 and 2 %. At most 10 numbers per line (`and
+  <n> more`), at most 20 area lines. A file without
   any apartment and without other problems is `error: the layout has no apartments`. The command
   publishes no events; the period opener has already opened the current month for the building
   (section 2, "Monthly periods"), and its new meters are due a reading in it.
@@ -566,9 +581,13 @@ Who may submit, and in which period status:
   - Without `previous_value`, the reading starts the meter: `previous_value` is `value`, the
     consumption is `0.000`, no anomaly check runs, and `previous_origin` is `START`.
   - The same holds for a correction of that first reading, by its resident or by the board, while
-    the meter still has no earlier reading; a correction may add, change or drop
-    `previous_value`.
+    the meter still has no earlier reading. A correction may add or change `previous_value`; one
+    that leaves it out keeps the bill's reading given before (owner, 2026-11-21: fixing a typo in
+    the value must not erase it), and only an explicit `"previous_value": null` drops it, making
+    the reading the meter's start.
   - `previous_value` on any other meter is `422 PREVIOUS_VALUE_NOT_ALLOWED`.
+- **`previous_value` of a reading** is in every reading summary (`reading` of the dashboard and
+  the matrix), so a correction form can show the bill's reading it keeps.
 - **`previous_origin`** of a reading, in every reading payload: `HISTORY` (the reading of an
   earlier period), `INITIAL` (the meter's initial value), `SUBMITTED` (given with the reading, see
   above) or `START` (the reading started the meter). A `START` reading is never counted in
