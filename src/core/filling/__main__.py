@@ -18,6 +18,7 @@ from typing import BinaryIO, TextIO
 from src.core.config import Settings, get_settings
 from src.core.database import transaction
 from src.core.domain_events import SessionFactory
+from src.core.filling.compare import register_warnings
 from src.core.filling.draft import (
     DEFAULT_METERS,
     DraftApartmentRow,
@@ -34,7 +35,7 @@ from src.core.filling.service import FillingRefused, filling_target, lay_out
 from src.core.filling.template import (
     MAX_FILE_BYTES,
     TemplateError,
-    read_template,
+    read_template_report,
     write_template,
 )
 from src.core.telemetry import configure_logging
@@ -147,9 +148,7 @@ async def building_template(
                         "the register lists no apartments for this building: use --apartments <N>",
                     )
             try:
-                entrance_of = (
-                    parse_entrances(entrances, len(draft)) if entrances else [1] * len(draft)
-                )
+                entrance_of = parse_entrances(entrances, len(draft)) if entrances else None
             except DraftError as error:
                 raise _Exit(2, f"--entrances {error}") from None
             rows = template_rows(draft, entrance_of, meter_spec, building_meters)
@@ -192,6 +191,7 @@ async def import_building(
     dry_run: bool,
     out: TextIO,
     stdin: BinaryIO | None = None,
+    settings: Settings | None = None,
 ) -> int:
     """Returns the exit code (docs/API.md section 1, `import-building`). `file_path` None
     reads the template from `stdin` (`--file -`)."""
@@ -204,11 +204,11 @@ async def import_building(
         print("error: --file cannot be read", file=out)
         return 2
     try:
-        rows = read_template(data)
+        read = read_template_report(data)
     except TemplateError as error:
         print(f"error: {error}", file=out)
         return 2
-    layout, problems = check_layout(rows)
+    layout, problems = check_layout(read.rows)
     if problems:
         for problem in problems:
             print(
@@ -217,20 +217,42 @@ async def import_building(
             )
         print(f"error: {len(problems)} problems, nothing written", file=out)
         return 2
+    warnings = (
+        ["warning: column(s) ignored: " + ", ".join(read.ignored_columns)]
+        if read.ignored_columns
+        else []
+    )
     try:
         async with session_factory() as session, transaction(session):
             target = await filling_target(session)
+            warnings += await _register_check(session, settings or get_settings(), target, layout)
             if not dry_run:
                 await lay_out(session, target, layout)
     except FillingRefused as refused:
         print(f"error: {refused.message}", file=out)
         return 1
+    for warning in warnings:
+        print(warning, file=out)
     counts = (
         f"{len(layout.apartments)} apartments, {layout.apartment_meters} apartment meters, "
         f"{layout.building_meters} building meters, {layout.rounded_areas} areas rounded"
     )
     print(f"{'checked' if dry_run else 'imported'}: {counts}", file=out)
     return 0
+
+
+async def _register_check(session, settings: Settings, target, layout) -> list[str]:
+    """Warnings where the file differs from the building's register block, if there is one and
+    its provider is enabled; never a call to the register."""
+    registry = BuildingRegistryService(session, build_plugin_registry(settings))
+    provider = registry.provider_for(target.country_code)
+    if provider is None:
+        return []
+    block = await registry.stored_block(target.building_id)
+    if block is None:
+        return []
+    apartments, _ = from_register(provider.apartment_draft(block))
+    return register_warnings(layout, apartments)
 
 
 def main(
@@ -282,6 +304,7 @@ def main(
             file_path=None if args.file == "-" else Path(args.file),
             dry_run=args.dry_run,
             out=sys.stdout,
+            settings=settings,
         )
     )
 

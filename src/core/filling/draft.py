@@ -114,17 +114,18 @@ def _area(value: Decimal | None) -> str:
 
 def template_rows(
     apartments: list[DraftApartmentRow],
-    entrances: list[int],
+    entrances: list[int] | None,
     meters: list[tuple[ResourceType, int]],
     building_meters: bool,
 ) -> list[TemplateRow]:
     """One row per meter: each apartment's meters in the order of `meters`, then one building
     meter per type; `unit` holds the type's default, the other meter columns stay empty."""
     rows: list[TemplateRow] = []
-    for apartment, entrance in zip(apartments, entrances, strict=True):
+    # Without ranges the entrances stay empty: the import refuses them until they are filled in.
+    for apartment, entrance in zip(apartments, entrances or [None] * len(apartments), strict=True):
         place = {
             "apartment": apartment.number,
-            "entrance": str(entrance),
+            "entrance": "" if entrance is None else str(entrance),
             "floor": "" if apartment.floor is None else str(apartment.floor),
             "area_m2": _area(apartment.area_m2),
         }

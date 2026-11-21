@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from src.core.csv_safety import BOM, neutralize_formula
-from src.core.filling.layout import COLUMNS, RowInput
+from src.core.filling.layout import COLUMNS, REQUIRED_COLUMNS, RowInput
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 10_000
@@ -39,8 +39,19 @@ def write_template(rows: Iterable[TemplateRow]) -> str:
     return buffer.getvalue()
 
 
+@dataclass(frozen=True)
+class TemplateRead:
+    rows: list[RowInput]
+    ignored_columns: list[str]  # header cells of no known column, ignored (named in a warning)
+
+
 def read_template(data: bytes) -> list[RowInput]:
-    """The rows of the file (empty lines skipped), each with its line number as `ref`.
+    """The rows of the file; see read_template_report."""
+    return read_template_report(data).rows
+
+
+def read_template_report(data: bytes) -> TemplateRead:
+    """The rows of the file (empty lines skipped), each with its spreadsheet row as `ref`.
 
     Raises TemplateError for a file that cannot be read as a template at all; a row with the
     wrong number of cells is a TemplateError too, because its cells cannot be named."""
@@ -67,20 +78,27 @@ def read_template(data: bytes) -> list[RowInput]:
     width = len(names)
     while names and not names[-1]:
         names.pop()
-    missing = [column for column in COLUMNS if column not in names]
-    unexpected = [name for name in names if name not in COLUMNS]
-    repeated = sorted({name for name in names if names.count(name) > 1})
-    if missing or unexpected or repeated:
+    # Columns are found by name, without case; optional ones may be missing, others are ignored.
+    keys = [name.casefold() for name in names]
+    missing = [column for column in REQUIRED_COLUMNS if column not in keys]
+    repeated = sorted({key for key in keys if key and keys.count(key) > 1 and key in COLUMNS})
+    if missing or repeated:
         details = [
-            *(["missing: " + ", ".join(missing)] if 0 < len(missing) < len(COLUMNS) else []),
-            *([f"{len(unexpected)} unexpected column(s)"] if unexpected else []),
+            *(
+                ["missing: " + ", ".join(missing)]
+                if 0 < len(missing) < len(REQUIRED_COLUMNS)
+                else []
+            ),
             *(["twice: " + ", ".join(repeated)] if repeated else []),
         ]
         raise TemplateError(
-            "row 1: the header must be exactly: "
-            + ", ".join(COLUMNS)
+            "row 1: the header needs the columns "
+            + ", ".join(REQUIRED_COLUMNS)
+            + " and may have "
+            + ", ".join(c for c in COLUMNS if c not in REQUIRED_COLUMNS)
             + (f" ({'; '.join(details)})" if details else "")
         )
+    ignored = [name for name, key in zip(names, keys, strict=True) if key not in COLUMNS]
     rows: list[RowInput] = []
     # Rows are counted like the spreadsheet does: one per record, so a line break inside a
     # quoted cell (Alt+Enter) does not shift the numbers of the rows after it.
@@ -92,14 +110,17 @@ def read_template(data: bytes) -> list[RowInput]:
                 cells = cells[: len(names)]
             if not any(cell.strip() for cell in cells):
                 continue
+            if len(cells) < len(names) and all(key not in COLUMNS for key in keys[len(cells) :]):
+                cells = cells + [""] * (len(names) - len(cells))  # an ignored last column left out
             if len(cells) != len(names):
                 raise TemplateError(
                     f"row {row_number}: {len(cells)} cells instead of {len(names)}"
                     + (" (a decimal comma needs ';' as the separator)" if delimiter == "," else "")
                 )
-            rows.append(RowInput(ref=row_number, cells=dict(zip(names, cells, strict=True))))
+            known = {key: cell for key, cell in zip(keys, cells, strict=True) if key in COLUMNS}
+            rows.append(RowInput(ref=row_number, cells=known))
             if len(rows) > MAX_ROWS:
                 raise TemplateError(f"more than {MAX_ROWS} rows")
     except csv.Error as error:
         raise TemplateError(f"row {row_number + 1}: {error}") from None
-    return rows
+    return TemplateRead(rows=rows, ignored_columns=[name for name in ignored if name])

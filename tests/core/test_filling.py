@@ -184,7 +184,7 @@ def test_a_comma_separated_file_is_read_too() -> None:
     ("data", "message"),
     [
         (b"", "empty"),
-        (b"apartment;nonsense\n", "header must be exactly"),
+        (b"apartment;nonsense\n", "header needs the columns"),
         (
             (",".join(COLUMNS) + "\n1,1,,48,2,COLD_WATER,,,,,\n").encode(),
             "11 cells instead of 10 (a decimal comma needs ';'",
@@ -399,7 +399,8 @@ async def test_the_register_draft_comes_from_the_stored_block(
     assert code == 0, printed
     assert printed.splitlines()[1:] == ["left out: part 1 (NON_RESIDENTIAL)"]
     lines = path.read_text(encoding="utf-8-sig").splitlines()
-    assert lines[1:] == ["2;1;1;48,46;COLD_WATER;m3;;;;", "14A;1;4;33,10;COLD_WATER;m3;;;;"]
+    # Without --entrances the entrances stay empty: the chairman must fill them in.
+    assert lines[1:] == ["2;;1;48,46;COLD_WATER;m3;;;;", "14A;;4;33,10;COLD_WATER;m3;;;;"]
 
 
 async def test_without_a_block_the_register_needs_a_building_code(
@@ -511,7 +512,7 @@ async def test_the_template_can_go_through_standard_output_and_input(
 
     assert code == 0
     assert messages.getvalue().startswith("template - written: 1 apartments")
-    filled = template_text.getvalue().replace("1;1;;;COLD_WATER", "1;1;;40;COLD_WATER")
+    filled = template_text.getvalue().replace("1;;;;COLD_WATER", "1;1;;40;COLD_WATER")
     printed = io.StringIO()
     code = await import_building(
         factory_of(db_session), file_path=None, dry_run=True, out=printed,
@@ -666,3 +667,60 @@ async def test_a_code_for_another_building_replaces_the_stored_block(
     assert [line.split(";")[0] for line in lines[1:]] == ["9", "9"]
     record = await db_session.get(BuildingRegistryRecord, building_id)
     assert record.proposal["source"]["building_code"] == "100000002"
+
+
+@pytest.mark.parametrize(("first", "second"), [("01", "1"), ("14 A", "14a"), ("007", "7")])
+def test_numbers_that_differ_only_in_spelling_are_one_apartment(first: str, second: str) -> None:
+    _, problems = check_layout(
+        rows(apartment(first, resource="COLD_WATER"), apartment(second, resource="HOT_WATER"))
+    )
+
+    assert [(p.ref, p.column) for p in problems] == [(3, "apartment")]
+    assert "the same number as row 2" in problems[0].message
+
+
+def test_10_and_100_stay_two_apartments() -> None:
+    layout, problems = check_layout(rows(apartment("10"), apartment("100"), apartment("1")))
+
+    assert problems == [] and [a.number for a in layout.apartments] == ["10", "100", "1"]
+
+
+async def test_the_import_warns_where_the_file_differs_from_the_register(
+    db_session: AsyncSession, real_installation, tmp_path: Path
+) -> None:
+    building = await create_building(db_session)
+    block = EEBuildingFacts(
+        source=EESource(building_code="100000001", fetched_at=datetime(2026, 11, 20, tzinfo=UTC)),
+        building=EEBuilding(),
+        units=[
+            EEUnit(number="1", kind=UnitKind.APARTMENT, area_m2=D("45.36")),
+            EEUnit(number="2", kind=UnitKind.APARTMENT, area_m2=D("50.0")),
+            EEUnit(number="3", kind=UnitKind.APARTMENT, area_m2=D("60.0")),
+        ],
+    )
+    db_session.add(BuildingRegistryRecord(building_id=building.id, accepted=dump_block(block)))
+    await db_session.commit()
+    path = tmp_path / "building.csv"
+    path.write_text(
+        ";".join(COLUMNS)
+        + ";notes\n"
+        + "1;1;;4536;COLD_WATER;;;;;;typed in en-US\n"  # 45,36 read as 4536
+        + "2;1;;50,4;COLD_WATER;;;;;;\n"  # within 1 m2: no warning
+        + "K1;1;;80;COLD_WATER;;;;;;\n",  # a shop added by hand; apartment 3 deleted
+        encoding="utf-8",
+    )
+
+    printed = io.StringIO()
+    code = await import_building(
+        factory_of(db_session), file_path=path, dry_run=True, out=printed,
+        settings=with_register(),
+    )  # fmt: skip
+
+    assert code == 0
+    assert printed.getvalue().splitlines() == [
+        "warning: column(s) ignored: notes",
+        "warning: the register lists apartments the file does not have: 3",
+        "warning: the file has apartments the register does not list: K1",
+        "warning: apartment 1: area 4536.00 m2, the register says 45.36 m2",
+        "checked: 3 apartments, 3 apartment meters, 0 building meters, 0 areas rounded",
+    ]

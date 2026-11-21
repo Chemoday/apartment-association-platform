@@ -26,6 +26,7 @@ COLUMNS = (
     "max_monthly_delta",
 )
 APARTMENT_COLUMNS = ("apartment", "entrance", "floor", "area_m2")
+REQUIRED_COLUMNS = ("apartment", "entrance", "area_m2", "resource")
 METER_COLUMNS = COLUMNS[4:]
 
 NUMBER_MAX_LENGTH = 32  # property_apartments.number
@@ -58,6 +59,9 @@ LIMITS: dict[ResourceType, tuple[Decimal, Decimal]] = {
 _NOT_ONE_LINE = frozenset({"Cc", "Cf", "Zl", "Zp"})  # the rule of create-building
 _INTEGER = re.compile(r"-?[0-9]{1,6}")
 _DECIMAL = re.compile(r"[0-9]{1,12}([.,][0-9]+)?")
+# Thousands grouped by spaces as a spreadsheet shows them: "12 345,5" (also no-break spaces).
+_GROUPED = re.compile(r"[0-9]{1,3}([ \u00a0\u202f][0-9]{3})+([.,][0-9]+)?")
+_SPACES = re.compile(r"[ \u00a0\u202f]")
 # What a spreadsheet makes of a long number typed into a General cell: "1,23457E+16".
 _SPREADSHEET_EXPONENT = re.compile(r"[0-9]+([.,][0-9]+)?[eE][+-]?[0-9]+")
 # A building meter's default limit grows with the building: the apartment default per apartment,
@@ -128,6 +132,15 @@ def one_line(text: str) -> bool:
     return not any(unicodedata.category(char) in _NOT_ONE_LINE for char in text)
 
 
+_LEADING_ZEROS = re.compile(r"(?<![0-9])0+(?=[0-9])")
+_ANY_SPACE = re.compile(r"\s+")
+
+
+def same_number(number: str) -> str:
+    """The key under which two spellings are one apartment: "14 A" = "14a", "01" = "1"."""
+    return _LEADING_ZEROS.sub("", _ANY_SPACE.sub("", number.casefold()))
+
+
 def round_area(value: Decimal) -> Decimal:
     return value.quantize(AREA_PRECISION, rounding=ROUND_HALF_UP)
 
@@ -147,7 +160,7 @@ class _Checker:
         self.layout = BuildingLayout()
         self._apartments: dict[str, tuple[int, LayoutApartment]] = {}
         self._meter_keys: dict[tuple[str | None, ResourceType, str], int] = {}
-        self._spellings: dict[str, tuple[int, str]] = {}  # casefolded number -> its first row
+        self._spellings: dict[str, tuple[int, str]] = {}  # same_number() -> its first row
         self._scaled: list[int] = []  # building meters whose limit took the default
 
     def scale_building_limits(self) -> None:
@@ -179,6 +192,8 @@ class _Checker:
         return value
 
     def decimal(self, ref: int, column: str, text: str) -> Decimal | None:
+        if _GROUPED.fullmatch(text):
+            text = _SPACES.sub("", text)
         if not _DECIMAL.fullmatch(text):
             self.problem(ref, column, "a number with a decimal point or comma is needed")
             return None
@@ -255,13 +270,13 @@ class _Checker:
         apartment = LayoutApartment(number=number, entrance=entrance, floor=floor, area_m2=area)
         first = self._apartments.get(number)
         if first is None:
-            other = self._spellings.get(number.casefold())
+            other = self._spellings.get(same_number(number))
             if other is not None:
                 self.problem(
                     ref, "apartment", f"the same number as row {other[0]}, written differently"
                 )
                 return False
-            self._spellings[number.casefold()] = (ref, number)
+            self._spellings[same_number(number)] = (ref, number)
             self._apartments[number] = (ref, apartment)
             self.layout.apartments.append(apartment)
             if area != raw:

@@ -201,17 +201,67 @@ def test_header_cells_may_be_quoted_padded_and_in_any_order() -> None:
 
 
 @pytest.mark.parametrize(
+    ("header", "ignored"),
+    [
+        (HEADER.upper(), []),  # another case (owner, 2026-11-21: found by name)
+        (" Apartment ;Entrance;floor;AREA_M2;resource;unit;serial_number;location;initial_value;"
+         "max_monthly_delta", []),
+        (HEADER + ";notes", ["notes"]),  # another column: ignored, named in a warning
+    ],
+)  # fmt: skip
+def test_a_header_is_matched_by_name_without_case(header: str, ignored: list[str]) -> None:
+    from src.core.filling.template import read_template_report
+
+    read = read_template_report((header + "\r\n1;1;;48,2;COLD_WATER;;;;;\r\n").encode("utf-8"))
+
+    (row,) = read.rows
+    assert (row.cells["apartment"], row.cells["area_m2"]) == ("1", "48,2")
+    assert read.ignored_columns == ignored
+
+
+def test_optional_columns_may_be_left_out() -> None:
+    header = "apartment;entrance;area_m2;resource"
+
+    (row,) = read_template((header + "\r\n1;2;48,2;COLD_WATER\r\n").encode("utf-8"))
+    layout, problems = check_layout([row])
+
+    assert problems == []
+    assert (layout.apartments[0].entrance, layout.meters[0].location) == (2, "Main")
+
+
+def test_thousands_grouped_by_spaces_are_numbers() -> None:
+    layout, problems = check_layout(
+        [
+            RowInput(
+                ref=2,
+                cells={
+                    "apartment": "1",
+                    "entrance": "1",
+                    "area_m2": "1 200,5",
+                    "resource": "HEAT",
+                    "initial_value": "12\u00a0345,5",
+                },
+            ),
+            RowInput(ref=3, cells={"resource": "COLD_WATER", "max_monthly_delta": "7\u202f500"}),
+        ]
+    )
+
+    assert problems == []
+    assert layout.apartments[0].area_m2 == D("1200.50")
+    assert layout.meters[0].initial_value == D("12345.500")
+    assert layout.meters[1].max_monthly_delta == D("7500.000")
+
+
+@pytest.mark.parametrize(
     "header",
     [
-        HEADER.upper(),  # a different case
-        HEADER + ";notes",  # an extra column
-        HEADER.replace(";serial_number", ""),  # an optional column deleted
+        HEADER.replace(";area_m2", ""),  # a required column missing
         HEADER.replace("location", "unit"),  # a column twice
         "\t".join(COLUMNS),  # tab separated ("Unicode text")
         "sep=;\r\n" + HEADER,  # the Excel separator hint line
     ],
 )
-def test_a_header_that_is_not_exactly_the_template_is_refused_by_name(header: str) -> None:
+def test_a_header_without_its_required_columns_is_refused(header: str) -> None:
     data = (header + "\r\n1;1;;48,2;COLD_WATER;;;;;\r\n").encode("utf-8")
 
     with pytest.raises(TemplateError) as refused:
@@ -219,9 +269,7 @@ def test_a_header_that_is_not_exactly_the_template_is_refused_by_name(header: st
 
     message = str(refused.value)
     assert message.startswith("row 1: the ")
-    assert ("header must be exactly: " + ", ".join(COLUMNS)) in message or (
-        "separator must be ; or ," in message
-    )
+    assert "header needs the columns" in message or "separator must be ; or ," in message
 
 
 def test_trailing_empty_columns_a_spreadsheet_keeps_are_ignored() -> None:
@@ -336,7 +384,14 @@ def test_ten_thousand_rows_are_read_and_one_more_is_refused() -> None:
     [
         (b"", ["error: the file is empty"]),
         ("\ufeff".encode(), ["error: the file is empty"]),
-        (b"\r\n\r\n", ["error: row 1: the header must be exactly: " + ", ".join(COLUMNS)]),
+        (
+            b"\r\n\r\n",
+            [
+                "error: row 1: the header needs the columns apartment, entrance, area_m2, "
+                "resource and may have floor, unit, serial_number, location, initial_value, "
+                "max_monthly_delta"
+            ],
+        ),
         (
             csv_bytes(),
             ["error: the layout has no apartments", "error: 1 problems, nothing written"],
@@ -388,8 +443,8 @@ def test_areas_as_a_spreadsheet_writes_them_are_rounded_half_up(
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        ("1 200,5", "a number with a decimal point or comma is needed"),
-        ("1\u00a0200,5", "a number with a decimal point or comma is needed"),
+        ("1.200,5", "a number with a decimal point or comma is needed"),  # dot thousands
+        ("12 34,5", "a number with a decimal point or comma is needed"),  # not groups of 3
         ("48,2 m2", "a number with a decimal point or comma is needed"),
         ("1e2", "a number with a decimal point or comma is needed"),
         ("48,", "a number with a decimal point or comma is needed"),
@@ -1184,7 +1239,7 @@ async def test_an_unedited_register_template_imports_as_it_is(
 
 
 @FILLED
-async def test_an_unedited_counted_template_asks_for_every_area(
+async def test_an_unedited_counted_template_asks_for_every_entrance_and_area(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
     await create_building(db_session)
@@ -1197,9 +1252,11 @@ async def test_an_unedited_counted_template_asks_for_every_area(
     assert (code, printed.splitlines()) == (
         2,
         [
+            "row 2: entrance: required",
             "row 2: area_m2: required",
+            "row 3: entrance: required",
             "row 3: area_m2: required",
-            "error: 2 problems, nothing written",
+            "error: 4 problems, nothing written",
         ],
     )
 
@@ -1212,7 +1269,7 @@ async def test_two_meters_of_a_type_in_the_template_get_locations_1_and_2(
     await db_session.commit()
     path = tmp_path / "t.csv"
     drafted = await template(
-        db_session, path, apartments=1, meters="COLD_WATER:2", building_meters=False
+        db_session, path, apartments=1, entrances="1", meters="COLD_WATER:2", building_meters=False
     )
     assert drafted[0] == 0
     text = path.read_text(encoding="utf-8-sig").replace(";;COLD_WATER", ";40;COLD_WATER")

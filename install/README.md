@@ -66,8 +66,8 @@ the invitation by e-mail.
   1. Copy it to the computer of whoever fills it in (usually the chairman), for example
      `scp root@<server>:/opt/aap/site/building-template.csv .`
   2. Open it in a spreadsheet. LibreOffice asks how to read it: tick only "Semicolon" (with
-     "Comma" too, the areas split in two). Fill in the entrances (every apartment is in entrance 1
-     until you change it) and the meters: cold and hot water are prefilled; delete the rows of
+     "Comma" too, the areas split in two). Fill in the entrances (they are empty: the import
+     waits until every apartment has one) and the meters: cold and hot water are prefilled; delete the rows of
      meters an apartment does not have; the reading of the last bill goes into `initial_value`
      where you have it (else the resident's first reading starts the meter); type serial numbers
      into a column formatted as text. A shop or an office the register left out can be added as a
