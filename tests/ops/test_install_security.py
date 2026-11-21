@@ -574,7 +574,7 @@ def test_the_template_is_never_overwritten_and_a_failure_leaves_none(tmp_path: P
     assert failed.returncode == 0, failed.stderr
     assert not (other / "site/building-template.csv").exists()
     assert not (other / "site/building-template.csv.new").exists()
-    assert "building-template --out - --apartments <N>" in failed.stdout
+    assert "building-template --out - --from-register 101036416 >" in failed.stdout
     assert "not written (the register does not answer usably" in failed.stdout
 
 

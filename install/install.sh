@@ -914,14 +914,15 @@ write_building_template() {
         mv "$file.new" "$file"
         TEMPLATE_FILE=$file
         local line
+        # Register text on the terminal: control characters stripped, as in candidates_of.
         while IFS= read -r line; do
             say "   $line"
-        done < <(grep '^left out: ' "$file.err" || true)
+        done < <(grep '^left out: ' "$file.err" | tr -d '\000-\010\013-\037\177' || true)
         log_line "building template written"
     else
         rm -f "$file.new"
         local reason
-        reason=$(grep '^error: ' "$file.err" | tail -n 1 || true)
+        reason=$(grep '^error: ' "$file.err" | tail -n 1 | tr -d '\000-\037\177' || true)
         say "note: the building template was not written${reason:+ (${reason#error: })}."
         log_line "building template failed status=$status"
     fi
@@ -973,6 +974,11 @@ finish() {
         elif [[ -e "$template" ]]; then
             # A re-run: never print a command that would write over the chairman's work.
             say "  2. The apartments: fill in $template if not done yet, then check and import it:"
+        elif [[ -n "${BUILDING_CODE:-}" ]]; then
+            # The register was found but the template was not written (the register was down):
+            # the same command with the building it found.
+            say "  2. The apartments: write the template from the register again, fill it in, then check and import it:"
+            say "     docker exec $BACKEND python -m src.core.filling building-template --out - --from-register $BUILDING_CODE > $template"
         else
             say "  2. The apartments: write a template for <N> apartments (or --from-register <the code"
             say "     find-building gives>), fill it in, then check and import it:"

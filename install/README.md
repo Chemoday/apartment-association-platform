@@ -61,16 +61,28 @@ the invitation by e-mail.
 ## Afterwards
 
 - **The apartments and meters.** When the register found the building, the installer wrote
-  `/opt/aap/site/building-template.csv` with its apartments (numbers, areas, floors). Open it in a
-  spreadsheet, fill in the entrances and the meters (cold and hot water are prefilled; delete the
-  rows of meters an apartment does not have; the reading of the last bill goes into
-  `initial_value` where you have it), save it as "CSV UTF-8", then check and import it:
-  `docker exec -i aap-site-backend-1 python -m src.core.filling import-building --file - --dry-run
-  < /opt/aap/site/building-template.csv`, and the same without `--dry-run`. Without a register
-  match, write one for N apartments first: `docker exec aap-site-backend-1 python -m
-  src.core.filling building-template --out - --apartments N > /opt/aap/site/building-template.csv`.
-  The rules of every column are in docs/API.md section 1 ("Filling the building of a new
-  installation"). A building is filled once; changing it later is a planned feature.
+  `/opt/aap/site/building-template.csv` with its apartments (numbers, areas, floors). It holds no
+  personal data.
+  1. Copy it to the computer of whoever fills it in (usually the chairman), for example
+     `scp root@<server>:/opt/aap/site/building-template.csv .`
+  2. Open it in a spreadsheet. LibreOffice asks how to read it: tick only "Semicolon" (with
+     "Comma" too, the areas split in two). Fill in the entrances (every apartment is in entrance 1
+     until you change it) and the meters: cold and hot water are prefilled; delete the rows of
+     meters an apartment does not have; the reading of the last bill goes into `initial_value`
+     where you have it (else the resident's first reading starts the meter); type serial numbers
+     into a column formatted as text. A shop or an office the register left out can be added as a
+     row like an apartment.
+  3. Save it as "CSV UTF-8" and copy it back (`scp building-template.csv
+     root@<server>:/opt/aap/site/`).
+  4. Check it: `docker exec -i aap-site-backend-1 python -m src.core.filling import-building
+     --file - --dry-run < /opt/aap/site/building-template.csv`. Every problem names its row and
+     column. Then the same without `--dry-run` imports it.
+
+  Without a register match, write a template for N apartments into a new file first (never over
+  one you filled in): `docker exec aap-site-backend-1 python -m src.core.filling
+  building-template --out - --apartments N > /opt/aap/site/building-template-new.csv`. The rules
+  of every column are in docs/API.md section 1 ("Filling the building of a new installation"). A
+  building is filled once; changing it later is a planned feature.
 - **Run the installer again** at any time: it shows your previous answers as defaults (press Enter
   to keep them) and keeps every secret and all data. This is how you set or change the e-mail
   settings later. It never invites a chairman again unless you ask for it.
