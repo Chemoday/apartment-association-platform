@@ -186,8 +186,9 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   (`422 PREVIOUS_VALUE_NOT_ALLOWED`).
 - **Correcting a first reading:** `reading.previous_value` holds the bill's reading of a
   `SUBMITTED` start; leaving `previous_value` out of the correction keeps it, and only an explicit
-  `"previous_value": null` drops it (prefill the field with it, and send `null` when the user
-  clears it).
+  `"previous_value": null` drops it (prefill the field with it only when `previous_origin` is
+  `SUBMITTED`, never for a `START`, whose `previous_value` is its own value; send `null` when the
+  user clears a prefilled field).
 - **`previous_origin`** of a reading: in the matrix and the apartment card, mark `SUBMITTED`
   ("start given by the resident: check against the last bill") and `START` ("start of the meter,
   no consumption this month"); `balances[].starting_meters > 0` means that month's balance is
