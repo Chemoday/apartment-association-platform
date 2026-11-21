@@ -10,9 +10,9 @@
   down, everything works as today.
 - **Country pages:** [docs/external_providers/](../external_providers/README.md), one folder per
   country.
-- **Related:** the setup wizard and building administration (still to be designed; the apartment
-  list proposal of X3 plugs into it), the text-only building passport groundwork of E8 and the
-  equipment of E10 part B, elections of the board
+- **Related:** the building template and the setup wizard (E13 R3 and R7, section 6a; the
+  apartment list proposal of X3 feeds both), the text-only building passport groundwork of E8 and
+  the equipment of E10 part B, elections of the board
   (docs/BACKLOG.md B-9), several buildings per association (B-1), notifications (E1).
 
 This page is the design. Each task writes its part of the binding contract (docs/SCHEMA.md,
@@ -114,11 +114,11 @@ country later reopens it.
 | X0 ([#139](https://github.com/Chemoday/apartment-association-platform/issues/139)) | This page and the country pages | documentation only |
 | X1 ([#146](https://github.com/Chemoday/apartment-association-platform/issues/146)) | **Provider framework.** The provider protocol, outbound request rules, stored blocks with source, fetch time and attribution, the chairman starts a lookup, `registry_facts` (the country block, section 2a) in `GET /api/v1/property/building` (`null` without a provider) | a fake provider for the tests; the demo uses the real plugin where it is enabled |
 | X2 ([#147](https://github.com/Chemoday/apartment-association-platform/issues/147)) | **Building passport.** Address -> the register's building id -> the country block (Estonia: [ee/building_facts.md](../external_providers/ee/building_facts.md)) | the chairman confirms; the reminder before an energy certificate expires is X2b ([#148](https://github.com/Chemoday/apartment-association-platform/issues/148)): 180 and 30 days before and on the day (owner, 2026-11-15); the daily quota of register calls is [#152](https://github.com/Chemoday/apartment-association-platform/issues/152) |
-| X3 | **Apartment list proposal** for the setup wizard: apartment numbers and areas from the register | never overwrites apartments entered by hand; depends on the setup wizard |
+| X3 | **Apartment list proposal:** apartment numbers, areas and floors from the register, apartments only (no non-residential parts) | feeds the building template of E13 R3 now and the setup wizard of E13 R7 later (E13 section 6a, owner 2026-11-21); never overwrites apartments entered by hand |
 | X4 | **Legal calendar.** A core entity with manual entry for every country (board members' roles and mandate dates, the representation rule, the annual report deadline), pre-filled from a register where one exists | works where no register exists (section 5); names visible to the board only; reminders through E1 |
 | X5 | **Refresh and discrepancies.** A periodic refresh, a hint when the register differs from the app ("register: 48 apartments, app: 47"), the state of each source | an unavailable source is shown, never fatal |
 
-The order is X1 -> X2 -> (X3 when the setup wizard exists) -> X4 -> X5. X4 does not depend on
+The order is X1 -> X2 -> X3 (with E13 R3) -> X4 -> X5. X4 does not depend on
 X2 and can move earlier.
 
 ## 5. Countries

@@ -10,7 +10,7 @@
 - **Related:** backups (docs/BACKLOG.md B-3), one database per environment (B-4), installer and
   e-mail (B-8), a change of the apartment's owner (B-10), disk hygiene (B-11), resource limits
   per instance (B-12), several buildings and hosting many associations (B-1), demo mode in real
-  use (security backlog S-7), bulk import (E5, delivered by R3 and R4), the apartment list from
+  use (security backlog S-7), bulk import (E5, delivered by R3 and R4a-R4c), the apartment list from
   the register (E12 X3), login and invitations (E7).
 
 This page is the design. Each task writes its part of the binding contract (docs/SCHEMA.md,
@@ -79,8 +79,8 @@ wants the platform on its own server.
   nothing, it asks for the address and the registry code by hand. The association's name is always
   typed, because the building register does not hold it.
 - **Invitations without mail are queued:** while the installation has no working e-mail, the
-  board still invites residents; the invitations wait and go out as soon as SMTP is set, with a
-  fresh link. Nobody sees a link (the login promise of section 6 holds). Part of R4.
+  chairman still invites residents; the invitations wait and go out as soon as SMTP is set, with a
+  fresh link. Nobody sees a link (the login promise of section 6 holds). Part of R4a.
 - **SMTP can be set later in two ways:** now by a command on the server (running the installer
   again, the password stays in the server's environment file), and later in the app's building
   settings (R9, its own task: a secret in the database needs encryption and its own screen).
@@ -113,7 +113,7 @@ wants the platform on its own server.
   4. **The chairman's e-mail.**
   5. **E-mail (SMTP):** host, port, user name, password (read without echo) and the sender address.
      It may be skipped: the chairman's link is then printed to the terminal only, and invitations
-     wait until SMTP is set (R4).
+     wait until SMTP is set (R4a).
 - **About 15 minutes** from a clean VPS to the chairman's link in the terminal.
 - **Running it again is safe:** existing secrets and data are kept. Switching from a demo to a
   real installation needs a fresh database (the seed only fills an empty one); the installer
@@ -122,7 +122,8 @@ wants the platform on its own server.
   skips every notification in demo mode, sign-in mail needs `AUTH_MAIL_IN_DEMO`).
 - **An update is one command,** `update.sh <version>`, with the health check and the automatic
   rollback; **backups** (R6) are switched on by the installer by default.
-- Apartments and meters come in with one command and a ready template (R3).
+- Apartments and meters come in from a template the installer prefills from the register, with
+  one import command (R3, section 6a).
 - At the end the installer prints the next three or four steps and keeps a log of the
   installation on the host.
 - **Secrets and personal data stay out of the log and the screen history:** the SMTP password is
@@ -171,10 +172,10 @@ wants the platform on its own server.
 | :--- | :--- | :--- | :--- | :--- |
 | 0. Platform ready for real data | developers, once | demo mode a choice of each installation; the database and the files directory know which installation they belong to; versioned releases; backups | public image, chat off by default | R1, R5b, R6 |
 | 1. The install | the association's administrator, about 15 min | `install.sh` on a clean VPS: Docker, secrets, Caddy, HTTPS, empty building, first chairman's link | most of it in `bootstrap.sh`, `create-chairman` | R2, R5a |
-| 2a. The building is filled (first associations) | chairman fills a template, administrator imports | apartments (number, entrance, floor, area) and meters (apartment or none for a building meter, resource, unit, serial number, location label, initial value, limit) | nothing | R3 |
-| 2b. The same in the app (later) | chairman | the setup wizard: details from the register, apartments (by hand, CSV or the register's proposal), meters, review, start | the register lookup (E12) | R7 |
+| 2a. The building is filled (first associations) | chairman fills a template, administrator imports | apartments (number, entrance, floor, area) and meters (apartment or none for a building meter, resource, unit, serial number, location label, initial value, limit); the template is prefilled from the register where it knows the building (section 6a) | the register's parts of the building (E12 X2) | R3 |
+| 2b. The same in the app (later) | chairman | the setup wizard over the same core as 2a: details from the register, apartments (the register's proposal, by count or by hand), entrances, meters, review, start | the register lookup (E12) | R7 |
 | 3. The team | chairman | invites the board and the accountant, uploads the articles and house rules, chooses settings | everything | - |
-| 4. Residents | administrator or chairman | invitations by e-mail from the same template; apartments without an e-mail work on paper | one invitation at a time | R4 |
+| 4. Residents | chairman | bulk invitations of the owners by e-mail, the connection overview per apartment, join codes on paper confirmed by the chairman (section 6b); owners invite their tenants; apartments without anyone work on paper | one invitation at a time | R4a, R4b, R4c (R4c may follow the pilot, section 7) |
 | 5. The first month (pilot) | board, accountant, administrator | readings, paper apartments, the accountant's export, logs and traces | everything | feedback as issues |
 | 6. Running administration | chairman | replace a meter, add an apartment, change an area; a change of owner (B-10) | nothing | R8, B-10 |
 
@@ -194,6 +195,216 @@ wants the platform on its own server.
   section 7, only the mailbox owner holds an invitation link). The link would tell the person
   who invites whether the e-mail has an account, and would let them register an account under
   someone else's unverified e-mail. With a regular mailbox it is not needed.
+- **Join codes on paper** (section 6b) keep this rule: a code hands over no invitation link. It
+  only asks the chairman to invite; once confirmed, the link goes by e-mail to the mailbox owner
+  like every invitation.
+
+## 6a. Filling the building (designed 2026-11-21)
+
+Planning record: docs/cli_planning/2026-11-21-building-and-residents.md.
+
+### Owner decisions
+- **A template prefilled from the register now; the in-app wizard is designed with it.** The
+  administrator's commands (R3) and the later setup wizard (R7) call the same core, so R7 adds
+  screens, not logic.
+- **Apartments only:** of the register's parts of the building, only apartments are taken; shops
+  and offices (non-residential parts) are not, the association accounts for them separately. The
+  chairman may still add such a part as a row by hand: it then works like an apartment (its owner
+  can be invited, its meters count in the building's balance).
+- **What the register cannot know comes from the chairman:** the register holds the apartment
+  numbers, areas and floors, but no entrance (staircase) numbers and no meters
+  (docs/external_providers/ee/building_facts.md).
+- **The template holds no personal data:** apartments and meters only. Residents' e-mails are
+  entered by the chairman in the app (section 6b).
+
+### One core
+- **Laying out the building** takes the full list (apartments with number, entrance, floor and
+  area; meters with their apartment or none for a building meter, resource, unit, serial number,
+  location label, initial value and limit), checks all of it first and writes it in one
+  transaction through new creating methods of the `property` and `meters` services on one shared
+  session, or writes nothing.
+- **Where it lives:** outside the modules, in `src/core` (like `src/core/seed.py`), because it
+  calls both services; R7's chairman endpoints get their router next to it. The exact module is
+  R3's contract.
+- **First filling only:** the import refuses as a whole when the building already has any
+  apartment or meter (building meters have no natural key, so a second import would duplicate
+  them). Adding apartments later is running administration (R8). Nothing entered by hand is ever
+  overwritten.
+
+### Where the draft comes from
+- **The register** (E12 X3): a new pure method of the register provider turns the building's
+  passport block into a draft: the parts of kind apartment, with their number, area and the floor
+  of their entrance. A provider of another country implements the same method. A part of kind
+  apartment without a number, or with a number longer than the app allows, is reported in the
+  command's output, never dropped silently.
+- **A count:** apartments `1`..`N` when the register does not know the building; areas are then
+  filled in by the chairman.
+- **Entrances by ranges of positions:** `1-24,25-48` means the 1st to 24th apartment and the 25th
+  to 48th in the natural order of the numbers (`2`, `10`, `14`, `14A`), so letter suffixes need no
+  rule. Overlapping ranges, gaps, a range beyond the last apartment and apartments left over are
+  errors; without the option every apartment is in entrance 1. The template shows the result, and
+  the chairman corrects it there.
+- **A default set of meters per apartment** (for example cold and hot water): one template row per
+  meter, so a second riser is one more row with the same apartment; an apartment without meters is
+  one row with the meter columns empty.
+
+### The administrator's commands (R3)
+- `building-template --out <file.csv> [--from-register [<building code>]] [--apartments <N>]
+  [--entrances <ranges>] [--meters <resources>]` writes the template; the building (R2) must
+  exist.
+- **`--from-register`** drafts from the building's accepted passport block, else from its
+  proposal. Only when it has neither does it fetch the building once, with the register's
+  building code given to the option (kept as the proposal, like the chairman's proposal action,
+  docs/API.md section 1); the building itself stores no register code (`registry_code` is the
+  association's code in the commercial register), so without a block and without a code the
+  command stops with a clear error (exit 2, like an invalid option of `find-building`). Like
+  `find-building`, an operator command does not count against `REGISTRY_CALLS_PER_DAY`. The exit
+  codes follow `find-building`: 3 when the register does not answer usably, 4 when no provider of
+  the country is enabled.
+- `import-building --file <file.csv> [--dry-run]`: every problem with its row number, nothing
+  written when there is any; `--dry-run` writes nothing at all. Output and logs carry row numbers
+  and counts only.
+- **The template** (one row per meter, the apartment's columns repeated on each of its rows, a
+  building meter with an empty apartment): `apartment`, `entrance`, `floor`, `area_m2`,
+  `resource`, `unit`, `serial_number`, `location`, `initial_value`, `max_monthly_delta`. R3's
+  contract, approved by the owner, settles the exact columns and defaults and these rules:
+  - what a spreadsheet saves is accepted: the separator (`,` or `;`) is detected from the header
+    line, a byte order mark is skipped, and a decimal comma is accepted with `;` or inside quoted
+    cells (with `,` an unquoted `12,5` gives a wrong number of columns, an error of that row); a
+    file that is not UTF-8 is refused with a clear message;
+  - areas are decimals with 2 places (the register may give more: rounded half up or refused,
+    one of the two, decided in the contract); meter values `Numeric(12,3)`, never a float;
+  - a missing required value (an area, a serial number) is an error of its row;
+  - the written template is protected against spreadsheet formulas
+    (`src/core/csv_safety.py`), and the import strips that protection again.
+- **The installer:** when the register found the building, it runs `building-template
+  --from-register <the building code it picked>`, writes the prefilled template next to the
+  installation's settings and prints the import command as one of its next steps; otherwise it
+  prints `building-template --apartments <N>`.
+
+### The setup wizard later (R7)
+The same core behind chairman endpoints: the register's proposal or a count, entrances, meters,
+review, start. Its endpoints and screens are R7's contract and its own planning session; the core
+and the template columns of R3 do not change for it.
+
+## 6b. Connecting the residents (designed 2026-11-21)
+
+Once the chairman has signed in for the first time, the task is to bring the people of the
+building in. Owners are invited by the chairman, tenants by their owners (E7, unchanged); family
+members get no access of their own; an apartment without anyone works on paper (the chairman or
+the accountant enters its readings).
+
+### Owner decisions
+- **Residents' e-mails are entered only by the chairman,** in the app. The administrator of the
+  installation only enters the first chairman's e-mail (`create-chairman`).
+- **Bulk invitations** as below.
+- **The first invitation is in the instance's default language (`DEFAULT_LOCALE`; in Estonia the
+  state language, Estonian) or in English,** picked per invitation; an e-mail that already has an
+  account still gets the language of that account (unchanged).
+- **A connection overview per apartment** with pagination from the start; an apartment opens its
+  existing card (E8 P1).
+- **Join codes on paper,** confirmed by the chairman. **The chairman sees the full name, phone and
+  e-mail a person typed into a join request** (owner, 2026-11-21): an exception to the masking of
+  personal data, listed in AGENTS.md, for the chairman only and only until the decision.
+- **A tenant is the owner's relation:** the chairman never invites a tenant, even when the owner
+  is not in the app (section 9, question 6).
+
+### Three tasks
+R4 is split so that the riskiest part (a public page that collects personal data) does not hold
+up the rest: **R4a** bulk invitations and the queue, **R4b** the connection overview, **R4c** join
+codes and join requests. All of their actions need a real sign-in (a Bearer token; the demo
+header is refused, like every account endpoint of docs/API.md section 7), and join codes are
+refused altogether in demo mode. The module is `auth`, which owns invitations; `property` never
+imports `auth`.
+
+### R4a: bulk invitations of owners
+- The chairman pastes or uploads a list of rows `apartment number; e-mail; language (optional:
+  the default or en)`. The list is parsed in memory and never stored (not in the file storage of
+  E11). At most twice the number of apartments rows, at most 1 MB.
+- **A preview before anything is sent,** per row: no such apartment, a duplicate in the list, an
+  invitation already pending (as `409 INVITATION_ALREADY_PENDING` of today). **Never "already a
+  member":** no answer may tell whether an e-mail has an account (docs/API.md section 7, E7 3.6).
+- **Send:** one action; the server checks every row again (things may have changed since the
+  preview) and creates `OWNER` invitations (E7).
+- **The language** is stored on the invitation and used for every send of it until it is
+  accepted; the same optional language is offered on single invitations.
+- **Limits:** bulk rows, confirmed join requests (R4c) and "resend all expired" count against one
+  limit per building per 24 hours of twice the number of apartments; single invitations keep their
+  10 per inviter per hour.
+- **The queue:** invitations go out through a queue with pacing and retries (a regular mailbox of
+  the pilot limits how much it sends per hour), and also wait there while the installation has no
+  working e-mail (section 3). Unsent invitations are visible in the overview. **Resend all expired**
+  is one action.
+
+### R4b: the connection overview
+- Chairman only. Per apartment: number, entrance, a status, the number of active owners and
+  tenants (never names), and the date of the newest invitation or code.
+- **Statuses**, the first that applies: `CONNECTED` (an active owner), `JOIN_REQUEST` (a request
+  waits for the chairman), `INVITED` (an invitation pending), `CODE_ISSUED` (an unused code),
+  `TENANT_ONLY` (only tenants are active: nobody there can invite or vote), `PAPER` (marked by the
+  chairman as worked on paper), `EXPIRED` (the newest invitation or code ran out unused),
+  `NOT_INVITED` (also after a rejected or expired request).
+- A summary on top (34 of 60 connected), a filter by status, `limit` and `offset` like the other
+  lists of the API. Join requests also have their own list, because a co-owner's request hides
+  behind `CONNECTED`.
+- The screen is a frontend task: the list "apartment - status", the link to the apartment card,
+  the join requests with their actions, the paper mark.
+
+### R4c: join codes on paper
+- **Issue:** the chairman picks apartments (by default those without an active owner and with
+  nothing pending) and the server makes one code per picked apartment. The codes are in that
+  answer only (`Cache-Control: no-store`): the server keeps a keyed hash, like every link of E7,
+  so they are printed right away. An apartment may hold several unused codes (co-owners); a code
+  ends only when it is used, expires or the chairman cancels it ("replace" a lost sheet = cancel
+  that code and issue a new one). Issuing never touches pending requests. Rotating
+  `AUTH_HASH_SECRET` voids every code, like every link.
+- **The code:** 10 characters of Crockford's Base32 (no `I`, `L`, `O`, `U`; look-alikes mapped on
+  input), about 50 bits, shown in groups (`K7QF-M3TX-9R`), single use, valid 30 days by default
+  (an instance setting). Input is normalised: case, hyphens and spaces ignored.
+- **The printed sheet** is made by the client from the issue answer, never by the server or a
+  third-party service (the QR code too): the association's name, the site's address, the apartment
+  number, the code, a QR code with `https://<site>/join#code=<code>` (after `#`, so the code never
+  reaches a server log) and short instructions in the default language, English optional; one
+  apartment per page or several with cutting lines.
+- **The join page** needs no sign-in. Step 1: the code -> the server shows only the building's name
+  and the apartment number to confirm. Step 2: the person enters their full name, phone and
+  e-mail; the page says plainly that these personal data are needed so that the chairman can
+  confirm them, links the association's privacy notice (section 9, question 3: a prerequisite of
+  R4c), and says they are deleted after the decision. Step 2 checks the code again and uses it up
+  atomically; a join request waits for the chairman.
+- **Abuse limits:** per IP address (for example 20 lookups and submits per hour, like the redeem
+  limit of docs/API.md section 7). No per-building limit that blocks: an installation has one
+  building, so any visitor could use it up for every owner; a high ceiling only raises an alert
+  (docs/OBSERVABILITY.md). Every wrong, used or expired code gets the same generic answer with the
+  same timing (and so does a cancelled one), and the answer of step 2 does not depend on whether
+  the e-mail has an account.
+  Nothing is ever sent to the typed e-mail before the chairman confirms, so the form cannot be used
+  to send mail to anyone.
+- **The chairman is told** by an in-app notification `JOIN_REQUEST_SUBMITTED` (E1; ids only, no
+  personal data in it).
+- **The chairman decides:** confirm, reject or later, with the hint "a name alone is not enough:
+  confirm when the phone matches your list of members, or call the owner at the number from your
+  own list". Confirming creates an ordinary `OWNER` invitation to that e-mail; the chairman who
+  confirms becomes its inviter, so they see that e-mail like any e-mail they typed (docs/API.md
+  section 7). Its language is the one the person used on the join page when that is the default
+  language or English, else the default (the owner decision above). When an `OWNER` invitation of
+  that e-mail and apartment is already pending, that one is resent instead: it keeps its inviter,
+  and its stored language becomes the join page's language by the same rule. The person registers
+  as usual.
+- **Why the chairman confirms:** a sheet from a mailbox does not prove who owns the apartment,
+  and an owner invites tenants and votes in the polls of owners. The e-mail itself is proven by the
+  invitation link, as for every invitation. Handing the sheets over in person (at the general
+  meeting, against a signature) is the safest; mailboxes need the check. A sign-in with Smart-ID or
+  the ID card (E7, later country plugins) could confirm the person automatically one day.
+- **The data of a request** (full name, phone, e-mail) live only until the decision: a confirmed
+  request keeps the e-mail in its invitation, a rejected one keeps none of them; an undecided
+  request is deleted after 30 days (its decision record says `EXPIRED`, and the apartment shows
+  `NOT_INVITED` again). **A record of each decision without personal data** stays:
+  apartment, outcome, who decided (none for `EXPIRED`) and when (one person decides alone, so the board can see what was
+  done). A wrong confirmation is undone by ending that membership (E7 3.7). The code and the
+  request's data never reach logs or spans: the field of the join endpoints is named `join_code`
+  (never a bare `code`), and `join_code` joins the scrubber's markers, which match by substring;
+  `full_name`, `phone` and `email` already are.
 
 ## 7. Tasks
 
@@ -202,23 +413,25 @@ wants the platform on its own server.
 | R0 ([#155](https://github.com/Chemoday/apartment-association-platform/issues/155)) | This page, the planning record, issues | S | approve the page |
 | R1 ([#158](https://github.com/Chemoday/apartment-association-platform/issues/158)) | Demo mode as a choice of each installation: the flags come from its settings instead of being fixed to `true` in `deploy/docker-compose.deploy.yml`; `docker compose up` stays a demo out of the box. What already holds: no notifications in demo mode, sign-in mail and uploads in demo only on `ENVIRONMENT` local, dev or test. New: the `ENVIRONMENT` of a demo installed on a VPS (and so whether it allows uploads), the plugin and `FILES_IN_DEMO` switches that `deploy.sh` fixes for dev and prod moved into each installation's settings. The installation marker with an `INSTANCE_ID` in the database and in the files directory (B-4, S-7). Settled in R1: the settings of dev and prod in `deploy/environments/<env>.env`; a demo on a VPS runs as `ENVIRONMENT` `prod`, so without uploads and sign-in mail, like the public demo; demo mode is refused on the data of a real installation (docs/DEPLOYMENT.md "Demo mode and the installation marker") | S | no |
 | R2 ([#159](https://github.com/Chemoday/apartment-association-platform/issues/159)) | Operator command `create-building`: name, address, register code, country, reading deadline day; refuses when a building exists | S | no |
-| R3 | Operator command `import-building --file <csv> [--dry-run]`: apartments and meters from a template, all checked first, written in one transaction or not at all. It lives outside the modules (like `src/core/seed.py`) and writes only through the services of `property` and `meters` on one shared session | M | approve the template |
-| R4 | Invitations by e-mail from the same template; invitations made while the installation has no working e-mail wait and go out with a fresh link once SMTP is set (section 3) | S | a mailbox for the pilot |
+| R3 ([#170](https://github.com/Chemoday/apartment-association-platform/issues/170)) | Filling the building (section 6a): the core that lays out apartments and meters in one transaction; `building-template` (the register's draft through E12 X3, or a count; entrances by ranges; default meters) and `import-building --file <csv> [--dry-run]`; the installer writes a prefilled template when the register found the building. The template holds no personal data | M | approve the template |
+| R4a ([#171](https://github.com/Chemoday/apartment-association-platform/issues/171)) | Bulk invitations of owners by the chairman (section 6b): a preview, a daily limit per building, the language per invitation, the queue with pacing and while there is no working e-mail (section 3), resend all expired | M | a mailbox for the pilot |
+| R4b ([#172](https://github.com/Chemoday/apartment-association-platform/issues/172)) | The connection overview per apartment (section 6b), with pagination | S | no |
+| R4c ([#173](https://github.com/Chemoday/apartment-association-platform/issues/173)) | Join codes on paper and join requests confirmed by the chairman (section 6b) | M | the privacy notice of the join page (section 9, question 3) |
 | R5a ([#162](https://github.com/Chemoday/apartment-association-platform/issues/162)) | The simple install (section 4): `install/` with `install.sh` and `update.sh` from a clean Debian or Ubuntu server, one environment, no CI key, Docker installed when missing, the questions answered by flags too (for tests); the operator command that looks a building up in the register; SMTP set again by running the installer; tried in throw-away system containers and finally on a freshly reinstalled test VPS | M | done: the questions (owner, 2026-11-18) |
 | R5c | The project's own deployment renamed (for example `deploy/project-vps/`) without breaking CD or rollback (section 4, "Renaming") | S | no |
 | R5b ([#164](https://github.com/Chemoday/apartment-association-platform/issues/164)) | Versioned releases: an image tag `v0.x.y` built from a git tag, and the `install/` archive attached to the release; an installation follows a version, not `main`. Settled in R5b: the tag `vX.Y.Z` on a commit of `main` is the owner's decision; the release workflow re-tags the image CI built for that commit (no rebuild) and publishes `install.sh` and `aap-release.tar.gz` with the version baked in; `update.sh` takes the latest or a given version and refuses an older one without `--allow-downgrade` (docs/DEPLOYMENT.md "Versions and releases") | S | no |
 | R6 | Backups (B-3), switched on by the installer | M | where backups are kept, off the VPS |
-| R7 | The setup wizard in the app (stage 2b) with the register's apartment list (E12 X3) | L | yes, its own planning session |
+| R7 | The setup wizard in the app (stage 2b): screens and chairman endpoints over the core of R3 (section 6a), with the register's apartment list (E12 X3) | L | yes, its own planning session |
 | R8 | Running administration: replace a meter, add an apartment, change an area | M | no |
 | R9 | SMTP in the app's building settings, for the chairman: the password encrypted in the database, a test mail, the server's settings as the fallback | M | yes |
 
 R1-R5b need no deep involvement of the owner. R1-R6 are done before the pilot (B-3 is due
-before the first real association). One branch and one pull request per part of the epic, one
+before the first real association); R4c may follow the pilot if its privacy notice (section 9,
+question 3) is not ready by then. One branch and one pull request per part of the epic, one
 commit per task.
 
-**Residents' e-mails are personal data.** The template that carries them goes from the chairman
-to the administrator: it is never committed, it is deleted after the import, and neither
-`--dry-run` nor the logs print e-mails (counts and row numbers only).
+**Residents' e-mails are personal data,** and only the chairman enters them, in the app (section
+6b). The building template carries none: apartments and meters only (section 6a).
 
 ## 8. Out of scope
 
@@ -229,18 +442,27 @@ to the administrator: it is never committed, it is deleted after the import, and
 
 ## 9. Open questions
 
-1. Are the first associations brought in with the import (2a), with the wizard (2b) later?
+1. ~~Are the first associations brought in with the import (2a), with the wizard (2b) later?~~
+   Settled 2026-11-21: the import first (R3), the wizard (R7) designed on the same core and built
+   later (section 6a).
 2. Is the owner's building the pilot?
 3. Who prepares the privacy notice for residents and the data processing agreement (the
    association is the controller, the platform the processor)?
-4. A printed letter with an invitation QR code for apartments without a known e-mail: useful,
-   but the letter can be taken by the wrong person.
+4. ~~A printed letter with an invitation QR code for apartments without a known e-mail: useful,
+   but the letter can be taken by the wrong person.~~ Settled 2026-11-21: join codes on paper,
+   each use confirmed by the chairman (section 6b).
 5. Which transactional mail provider for the official launch, and the domain.
+6. ~~A rented apartment whose owner is not in the app: may the chairman invite the tenant
+   directly?~~ Settled 2026-11-21: no. A tenant is a relation between the owner and their tenant;
+   for the chairman and the board the owner is the member, so only an owner invites tenants (E7,
+   unchanged). Such an apartment works on paper until its owner connects.
 
 ## 10. Verification of the epic
 
-On a clean VPS: `install.sh` (real installation, about 15 minutes) -> `import-building --dry-run`
--> `import-building` -> the chairman's link from the installer -> sign-in -> the reading matrix of
-the current month shows every apartment -> an invited resident gets the e-mail and submits a
-reading -> `update.sh <next version>` keeps the data. `pytest` stays green and
-`docker compose up --build` still starts a demo with nothing filled in.
+On a clean VPS: `install.sh` (real installation, about 15 minutes) -> the prefilled template the
+installer wrote (or `building-template --apartments <N>`) -> `import-building --dry-run` ->
+`import-building` -> the chairman's link from the installer -> sign-in -> the reading matrix of the
+current month shows every apartment -> a bulk invitation brings an owner in, and so does a join
+code on paper confirmed by the chairman (once R4c is done) -> the connection overview shows them
+`CONNECTED` -> an owner submits a reading -> `update.sh <next version>` keeps the data. `pytest`
+stays green and `docker compose up --build` still starts a demo with nothing filled in.

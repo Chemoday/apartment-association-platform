@@ -79,7 +79,8 @@ issue with the `epic` label. Background: [docs/cli_planning/2026-10-31-post-cour
   export through plugins (`countries.ee.e_arve_xml`, `countries.ee.merit`). See [E2_BILLING_EXPORT.md](epics/E2_BILLING_EXPORT.md).
 - **E4 IoT readings API:** a public, token-per-vendor contract for remote meter systems, writing
   readings with source `IOT_WEBHOOK`.
-- **E5 Bulk import:** apartments, owners and memberships from CSV.
+- **E5 Bulk import:** delivered by E13: apartments and meters from a template (R3); owners by the
+  chairman's bulk invitations and join codes (R4a, R4c), never from an import.
 - Forum moderation beyond the MVP (the MVP only lets the chairman delete a forum topic; since 2026-11-13 the board too, BACKLOG B-2): authors edit or delete their own posts and comments; the board hides single comments; residents report abusive posts; a moderation log; purging soft-deleted content after a retention period (GDPR). Tracked in [#18](https://github.com/Chemoday/apartment-association-platform/issues/18) and docs/BACKLOG.md (B-2).
 
 ## Phase 3: Legal Governance, IoT & Managed Cloud
