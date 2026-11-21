@@ -332,9 +332,11 @@ fill the building once (an advisory lock).
   `resource` are required; `floor`, `unit`, `serial_number`, `location`, `initial_value` and
   `max_monthly_delta` may be left out (their cells count as empty). Names are compared without
   case, spaces, `-` and `_` (`Initial value` is `initial_value`). A column of another name (notes)
-  is ignored and named in a warning, unless its name contains a known one (`initial_value (m3)`:
-  refused, because ignoring it would lose data for good) or the file is separated by `,` (refused:
-  a decimal comma could move a number into it). A refusal names the missing required columns; a
+  is ignored and named in a warning, unless its name begins with the name of a known column that
+  the header lacks (other than `unit`): `initial_value (m3)` without `initial_value` is refused,
+  because ignoring it would lose that column's data for good, while `floor plan` next to `floor`
+  is only ignored. In a file separated by `,` every other column, also an empty one, is refused: a
+  decimal comma could move a number into it. A refusal names the missing required columns; a
   column given twice is refused. Header names are printed printable only, at most 32 characters
   and 10 names.
 - **A row** is one of:
@@ -345,7 +347,8 @@ fill the building once (an advisory lock).
   - `apartment`: 1 to 32 characters of one line of visible text (the rule of `create-building`);
     every row of one apartment repeats the same `entrance`, `floor` and `area_m2`; two numbers
     that differ only in case, spaces or leading zeros (`14A` and `14a`, `14 A` and `14A`, `01`
-    and `1`; a zero after a digit or a separator counts: `1.05` and `1.5` are two numbers) are
+    and `1`; a zero after a digit or after `.`, `,`, `/` or `-` counts: `1.05` and `1.5` are two
+    numbers) are
     an error of the later row, never two apartments;
   - `entrance`: a whole number from 1 to 99, required;
   - `floor`: a whole number from -5 to 200, empty means 1;
