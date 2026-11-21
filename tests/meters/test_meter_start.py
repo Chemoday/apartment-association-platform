@@ -160,8 +160,13 @@ async def test_the_first_reading_can_be_corrected_with_the_bill(
     assert response.json()["previous_origin"] == "SUBMITTED"
     assert response.json()["consumption_delta"] == "4.000"
 
-    # And back again: dropping the bill's reading makes it a start once more.
-    response = await submit(api_client, owner, meter, "125.000")
+    # A correction of the value that leaves it out keeps the bill's reading (owner, 2026-11-21).
+    response = await submit(api_client, owner, meter, "126.000")
+    assert response.json()["previous_origin"] == "SUBMITTED"
+    assert response.json()["consumption_delta"] == "5.000"
+
+    # Only an explicit null drops it: the reading is the start once more.
+    response = await submit(api_client, owner, meter, "126.000", previous_value=None)
     assert response.json()["previous_origin"] == "START"
     assert (await reading_of(db_session, meter)).consumption_delta == D("0.000")
 
@@ -388,3 +393,35 @@ async def test_a_reading_written_without_its_origin_counts_as_history(
         {"period": world.periods["2026-10"].id},
     )
     assert origin == "HISTORY"
+
+
+async def test_the_board_fixing_a_typo_keeps_the_resident_bill_reading(
+    api_client: AsyncClient, world: MetersWorld, fresh
+) -> None:
+    owner, meter = fresh
+    assert (await submit(api_client, owner, meter, "125.000", previous="110.000")).is_success
+
+    response = await submit(
+        api_client, world.chairman, meter, "126.000", reason="digit typed wrong"
+    )
+
+    assert response.status_code == 200, response.text
+    assert (response.json()["previous_origin"], response.json()["consumption_delta"]) == (
+        "SUBMITTED",
+        "16.000",
+    )
+    matrix = await api_client.get(f"{API}/periods/2026-10/matrix", headers=as_user(world.chairman))
+    cells = [cell for row in matrix.json()["apartments"] for cell in row["meters"]]
+    (cell,) = [c for c in cells if c["meter_id"] == str(meter.id)]
+    assert cell["reading"]["previous_value"] == "110.000"  # what a correction form shows
+
+
+async def test_resending_the_same_first_reading_without_the_bill_is_a_retry(
+    api_client: AsyncClient, fresh
+) -> None:
+    owner, meter = fresh
+    first = await submit(api_client, owner, meter, "125.000", previous="100.000")
+
+    again = await submit(api_client, owner, meter, "125.000")
+
+    assert again.json() == first.json()  # the bill's reading is kept, nothing changed

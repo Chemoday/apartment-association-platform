@@ -152,10 +152,16 @@ def _not_found(error_code: str, message: str) -> DomainError:
     return DomainError(status_code=404, error_code=error_code, message=message)
 
 
+def _drops_previous(request: ReadingSubmitRequest) -> bool:
+    """An explicit `"previous_value": null`: drop the bill's reading of a first reading."""
+    return "previous_value" in request.model_fields_set and request.previous_value is None
+
+
 def _summary(reading: MeterReading) -> ReadingSummary:
     return ReadingSummary(
         reading_id=reading.id,
         value=reading.value,
+        previous_value=reading.previous_value,
         consumption_delta=reading.consumption_delta,
         source=reading.source,
         is_anomaly_confirmed=reading.is_anomaly_confirmed,
@@ -378,9 +384,7 @@ class MetersService:
             and existing.value == request.value
             and request.reason is None
             # The same start too: adding, changing or dropping the bill's reading is a change.
-            and (existing.previous_origin == PreviousOrigin.SUBMITTED)
-            == (request.previous_value is not None)
-            and request.previous_value in (None, existing.previous_value)
+            and self._keeps_start(request, existing)
         ):
             # A retry (double click, timeout) of the resident's own reading, e.g. the final one
             # for last month after which the target moved on: nothing to change.
@@ -409,8 +413,16 @@ class MetersService:
         if previous_value is None:
             # A meter without a start (epic E13 R3b): the reading of the last bill when given,
             # else this reading starts the meter (no consumption, so no anomaly check).
+            # A correction that leaves it out keeps the bill's reading given before; only an
+            # explicit null drops it (owner, 2026-11-21: fixing a typo must not erase it).
             if request.previous_value is not None:
                 previous_value, origin = request.previous_value, PreviousOrigin.SUBMITTED
+            elif (
+                not _drops_previous(request)
+                and existing is not None
+                and existing.previous_origin == PreviousOrigin.SUBMITTED
+            ):
+                previous_value, origin = existing.previous_value, PreviousOrigin.SUBMITTED
             else:
                 previous_value, origin = request.value, PreviousOrigin.START
         elif request.previous_value is not None:
@@ -489,6 +501,15 @@ class MetersService:
         return self._reading_response(reading, period), (
             "created" if existing is None else "updated"
         )
+
+    @staticmethod
+    def _keeps_start(request: ReadingSubmitRequest, existing: MeterReading) -> bool:
+        """Whether the request leaves the reading's start as it is: the same bill reading, or
+        none where there is none; an omitted one keeps a SUBMITTED start."""
+        submitted = existing.previous_origin == PreviousOrigin.SUBMITTED
+        if request.previous_value is not None:
+            return submitted and request.previous_value == existing.previous_value
+        return not (submitted and _drops_previous(request))
 
     @staticmethod
     def _state_of(reading: MeterReading) -> tuple:

@@ -17591,6 +17591,14 @@
               "1254.000"
             ]
           },
+          "previous_value": {
+            "type": "string",
+            "pattern": "^-?[0-9]+\\.[0-9]{3}$",
+            "title": "Previous Value",
+            "examples": [
+              "1254.000"
+            ]
+          },
           "consumption_delta": {
             "type": "string",
             "pattern": "^-?[0-9]+\\.[0-9]{3}$",
@@ -17614,6 +17622,7 @@
         "required": [
           "reading_id",
           "value",
+          "previous_value",
           "consumption_delta",
           "source",
           "is_anomaly_confirmed",

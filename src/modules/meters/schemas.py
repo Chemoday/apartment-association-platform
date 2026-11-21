@@ -188,6 +188,8 @@ class PeriodListResponse(BaseModel):
 class ReadingSummary(BaseModel):
     reading_id: uuid.UUID
     value: MeterAmount
+    # The floor it was checked against; for a SUBMITTED start the bill's reading it keeps.
+    previous_value: MeterAmount
     consumption_delta: MeterAmount
     source: ReadingSource
     is_anomaly_confirmed: bool
