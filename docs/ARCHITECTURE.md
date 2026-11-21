@@ -163,6 +163,7 @@ Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). Tables: docs/SCHEMA.md sect
 - `src/modules/auth/` with sessions and refresh tokens, and the session check in `get_current_user`;
 - signing in with an e-mail link, with the silent limits and the demo-mode rule (`links.py`), and the auth e-mails (`mail.py`, `messages.csv`, with the catalog loader in `src/core/messages.py`);
 - the startup checks of 4.7, and the hourly clean-up of sessions, links, attempts and invitations;
+- the invitation queue (`queue.py`, epic E13 task R4a): a worker in the app process sends queued invitation e-mails with pacing and retries (4.9);
 - invitations, registration and accepting (`invitations.py`), residents, roles, ending memberships and closing accounts (`accounts.py`, the event in `events.py`), and the first-chairman command (`__main__.py`);
 - the optional password (`passwords.py`, A5): Argon2id hashes in `core_user_identities` (its model now in `src/modules/auth/models.py`), the login with its throttling, and set, change and remove.
 
@@ -264,6 +265,8 @@ Every query that resolves people filters closed accounts (`core_users.is_active`
 | `AUTH_DEMO_MAIL_DOMAINS` | empty | Optional recipient domains allowed in demo mode |
 | `AUTH_ALLOW_SESSIONLESS_TOKENS` | `false` | Accept tokens without `sid` (tests only, 4.4); refused at startup unless `ENVIRONMENT` is `local`, `dev` or `test` |
 | `AUTH_CLEANUP_ENABLED` | `true` | The hourly clean-up loop (docs/SCHEMA.md 7, retention) |
+| `AUTH_INVITATION_MAILS_PER_HOUR` | `30` | At most this many invitation e-mails per installation in any hour (4.9); a regular mailbox limits how much it sends |
+| `AUTH_INVITATION_QUEUE_ENABLED` | `true` | The invitation queue worker (4.9); tests drive its tick by hand |
 
 - **Where the secrets are checked:** in `create_app` / the app startup, not by a field validator. `Settings()` is built at import time, and `python -m src.core.openapi`, migrations, the seed and the CLI must keep working without a `.env`.
 - **Values:** `docker-compose.yml` and the test settings get local-only values; each deployed environment gets its own in `.env` (docs/DEPLOYMENT.md). `tests/core/test_security.py` changes accordingly (A2).
@@ -277,6 +280,16 @@ Every query that resolves people filters closed accounts (`core_users.is_active`
 - **Response headers:** every answer (the SPA and the API) carries `Referrer-Policy: no-referrer` (`src/core/headers.py`), so a link page never leaks its URL.
 - **Client IP:** the per-IP limits use the address uvicorn takes from `X-Forwarded-For` (`--proxy-headers`); an IPv6 address counts by its /64. Spans never carry it: the scrubber also redacts `net.peer.ip`, `net.sock.peer.addr` and `client.address`. Caddy sets that header, and the backend port is published only to Caddy, never to the internet.
 - **Logs:** uvicorn runs without an access log. The reverse proxy keeps its access log off, or excludes `Cookie` and `Authorization`.
+
+### 4.9 The invitation queue (epic E13, task R4a)
+Contract: docs/API.md section 7, "The invitation queue"; columns: docs/SCHEMA.md, `auth_invitations.send_due_at`.
+- **Why a queue of its own, not `notif_deliveries`:** an invitation e-mail carries a one-time link, and the plain token must never be stored. So the queue holds only "this invitation's e-mail is due", and the link is made at the moment of the send, after the pattern of the dispatcher (docs/ARCHITECTURE.md 3.3).
+- **One tick,** in short steps like the dispatcher:
+  1. a transaction claims due rows (`FOR UPDATE SKIP LOCKED`, oldest first, at most what the pacing still allows and at most 10), moves their `send_due_at` forward by the lease, adds one to `send_attempts`, makes a new link for each (the older ones stop working) and commits; the plain tokens stay in memory. A row that no longer applies (no active chairman; a tenant's apartment without an owner) is not sent and is looked at again after 3 hours;
+  2. then for each e-mail, one after another: it is sent with no transaction open (`send_auth_email`, so the demo-mode rule and the language rule are the same as before), cut off after 30 seconds, and its result is recorded right away in a short transaction, fenced on `send_attempts` and the lease: success clears `send_due_at`, sets `last_sent_at` and `expires_at` and adds an `INVITATION_MAIL` row to `auth_attempts` (what the pacing counts); a failure sets `send_due_at` to the next retry (1, 5, 15, 60 minutes, then every 3 hours).
+- **The lease** (6 minutes) outlasts a whole batch of sends that all run into the 30-second cut-off, so no other run claims and re-links an e-mail that is still being sent. Recording each result at once keeps the window of "sent but not recorded" (a crash; sent again after the lease) to one e-mail.
+- **When it runs:** one `InvitationQueue` per app process (`app.state.invitation_queue`), one drain at a time: a loop started with the app, like the clean-up (`AUTH_INVITATION_QUEUE_ENABLED`), every 30 seconds; and right after a request that queued something has committed, as detached work of `BackgroundWork` (so the first e-mail goes out within seconds and the answer never waits for the mail server). A wake-up while a drain runs makes that drain run once more instead of starting another one, so concurrent requests never stack batches over the pacing or fill the detached-work slots that the sign-in e-mails need. A drain takes batches until one comes back short. An installation runs one app process (uvicorn without workers); with several, `SKIP LOCKED` and the fence keep them safe, and the pacing may be exceeded by one batch per process. The tests switch the queue off and run it by hand (`drain_queue`), because they share one database session.
+- **Logs and metrics:** `auth_invitation_sent` and `auth_invitation_not_sent` with the invitation id, the attempt and the outcome only (the mail server's error code is in `auth_mail_failed` of `send_auth_email`), and a counter `auth.invitation_mails` by `outcome`: `sent`, `failed` (a mail server that stopped working shows up here) and `not_allowed` (demo mode without `AUTH_MAIL_IN_DEMO`: tried again later like a failure, but not counted as one).
 
 ## 5. Module `governance` (epic E3)
 

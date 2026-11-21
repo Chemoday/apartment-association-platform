@@ -370,6 +370,13 @@ imports `auth`.
   the pilot limits how much it sends per hour), and also wait there while the installation has no
   working e-mail (section 3). Unsent invitations are visible in the overview. **Resend all expired**
   is one action.
+- **Settled in the contract** (docs/API.md section 7, 2026-11-21): every invitation e-mail goes
+  through the queue, single ones too (the first-chairman command and the sign-in link e-mails
+  stay direct); the link is made when the e-mail goes out and the 7 days start then; the pacing
+  is `AUTH_INVITATION_MAILS_PER_HOUR` (30); a bulk send over the building limit creates nothing
+  (`429`), never a part; the list takes `;`, a tab or `,` and an optional header line; "resend
+  expired" covers `OWNER` and `STAFF` invitations, oldest first and as many as the limit allows
+  (`TENANT` ones stay their owners').
 
 ### R4b: the connection overview
 - Chairman only. Per apartment: number, entrance, a status, the number of active owners and
