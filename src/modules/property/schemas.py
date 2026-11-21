@@ -92,6 +92,17 @@ class ApartmentDTO(BaseModel):
     floor: int
 
 
+class NewApartment(BaseModel):
+    """An apartment of a new building, already checked by the filling core (epic E13 R3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    number: str
+    entrance: int
+    floor: int
+    area_m2: Decimal
+
+
 class ApartmentMembershipDTO(BaseModel):
     model_config = ConfigDict(frozen=True)
 

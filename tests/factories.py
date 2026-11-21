@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import get_settings
 from src.modules.meters.models import MeterDevice, MeterReading, ReadingPeriod
 from src.modules.meters.policies import period_due_date
-from src.modules.meters.schemas import PeriodStatus, ReadingSource, ResourceType
+from src.modules.meters.schemas import PeriodStatus, PreviousOrigin, ReadingSource, ResourceType
 from src.modules.property.models import Apartment, ApartmentMembership, Building, User
 from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType
 
@@ -127,15 +127,16 @@ async def create_meter(
     building: Building,
     apartment: Apartment | None,
     resource_type: ResourceType = ResourceType.COLD_WATER,
-    initial_value: Decimal = Decimal("0.000"),
+    initial_value: Decimal | None = Decimal("0.000"),
     max_monthly_delta: Decimal = Decimal("25.000"),
+    serial_number: str | None = "",
 ) -> MeterDevice:
     """apartment=None creates a Building Master Meter."""
     meter = MeterDevice(
         building_id=building.id,
         apartment_id=apartment.id if apartment else None,
         resource_type=resource_type,
-        serial_number=f"SN-{uuid.uuid4().hex[:10]}",
+        serial_number=f"SN-{uuid.uuid4().hex[:10]}" if serial_number == "" else serial_number,
         location_label="Basement Master" if apartment is None else "Bathroom",
         initial_value=initial_value,
         max_monthly_delta=max_monthly_delta,
@@ -172,6 +173,7 @@ async def create_reading(
     previous_value: Decimal,
     source: ReadingSource = ReadingSource.RESIDENT,
     submitted_by: User | None = None,
+    previous_origin: PreviousOrigin = PreviousOrigin.HISTORY,
 ) -> MeterReading:
     reading = MeterReading(
         building_id=meter.building_id,
@@ -179,6 +181,7 @@ async def create_reading(
         period_id=period.id,
         value=value,
         previous_value=previous_value,
+        previous_origin=previous_origin,
         consumption_delta=value - previous_value,
         source=source,
         submitted_by_user_id=submitted_by.id if submitted_by else None,

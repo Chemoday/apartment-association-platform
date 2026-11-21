@@ -58,6 +58,16 @@ case "$1" in
             echo "building 1 created"
             exit 0
         fi
+        if [[ " $* " == *" building-template "* ]]; then
+            if [[ "${STUB_TEMPLATE_EXIT:-0}" != 0 ]]; then
+                echo "error: the register does not answer usably; try again later" >&2
+                exit "$STUB_TEMPLATE_EXIT"
+            fi
+            printf 'apartment;entrance\\r\\n2;1\\r\\n'
+            echo "template - written: 1 apartments, 1 meters (1 apartment, 0 building)" >&2
+            echo "left out: part 1 (NON_RESIDENTIAL)" >&2
+            exit 0
+        fi
         if [[ " $* " == *" create-chairman "* ]]; then
             echo "invitation 00000000-0000-0000-0000-000000000000 created"
             echo "invitation e-mail sent"
@@ -525,3 +535,78 @@ def test_the_install_examples_use_documentation_addresses_only() -> None:
                 leaked.setdefault(str(path.relative_to(REPO_ROOT)), []).append("<address>")
 
     assert leaked == {}
+
+
+# --- The building template (epic E13 R3) ---------------------------------------------------------
+
+TEMPLATE_RUN = REAL_RUN.replace("create_building;", "create_building; write_building_template;")
+
+
+def test_a_building_found_in_the_register_gets_a_prefilled_template(tmp_path: Path) -> None:
+    root = tmp_path / "aap"
+    env = _stub_docker(tmp_path)
+
+    result = bash(root, f"{TEMPLATE_RUN}; log_line done; finish", **env)
+
+    assert result.returncode == 0, result.stderr
+    template = root / "site/building-template.csv"
+    assert template.read_bytes() == b"apartment;entrance\r\n2;1\r\n"
+    calls = (tmp_path / "docker.calls").read_text()
+    assert "building-template --out - --from-register 101036416" in calls
+    assert f"import-building --file - --dry-run < {template}" in result.stdout
+    assert "left out: part 1 (NON_RESIDENTIAL)" in result.stdout
+    assert "building template written" in (root / "install.log").read_text()
+    assert not (root / "site/building-template.csv.err").exists()
+
+
+def test_the_template_is_never_overwritten_and_a_failure_leaves_none(tmp_path: Path) -> None:
+    root = tmp_path / "aap"
+    (root / "site").mkdir(parents=True)
+    (root / "site/building-template.csv").write_text("filled in by the chairman")
+    kept = bash(root, TEMPLATE_RUN, **_stub_docker(tmp_path))
+    assert kept.returncode == 0, kept.stderr
+    assert (root / "site/building-template.csv").read_text() == "filled in by the chairman"
+
+    other = tmp_path / "other"
+    failed = bash(
+        other, f"{TEMPLATE_RUN}; finish", **_stub_docker(tmp_path, STUB_TEMPLATE_EXIT="3")
+    )
+    assert failed.returncode == 0, failed.stderr
+    assert not (other / "site/building-template.csv").exists()
+    assert not (other / "site/building-template.csv.new").exists()
+    assert "building-template --out - --from-register 101036416 >" in failed.stdout
+    assert "not written (the register does not answer usably" in failed.stdout
+
+
+def test_a_re_run_never_suggests_writing_over_the_template(tmp_path: Path) -> None:
+    root = tmp_path / "aap"
+    (root / "site").mkdir(parents=True)
+    template = root / "site/building-template.csv"
+    template.write_text("filled in by the chairman")
+
+    # A re-run of an installation whose building exists: no lookup, no new template.
+    result = bash(
+        root,
+        "MODE=real; BUILDING_KNOWN=true; SMTP_HOST=x; SITE_HOST=kyhistu.example.ee; "
+        "REF=x; VERSION=v1; finish",
+        **_stub_docker(tmp_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"fill in {template} if not done yet" in result.stdout
+    assert "building-template --out" not in result.stdout
+    assert template.read_text() == "filled in by the chairman"
+
+
+def test_without_a_register_match_the_next_steps_explain_a_counted_template(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "aap"
+    env = _stub_docker(tmp_path, STUB_FIND_JSON='{"status": "found", "candidates": []}')
+
+    result = bash(root, f"{TEMPLATE_RUN}; finish", **env)
+
+    assert result.returncode == 0, result.stderr
+    assert not (root / "site/building-template.csv").exists()
+    assert " building-template " not in (tmp_path / "docker.calls").read_text()
+    assert "building-template --out - --apartments <N>" in result.stdout

@@ -86,8 +86,9 @@ async def test_the_batched_history_answers_like_the_per_meter_queries(db_session
 
     for meter in meters:
         for period in [None, *periods.values()]:
-            assert histories.previous_value(meter, period) == await service._previous_value(
-                meter, period
+            assert (
+                histories.previous_value(meter, period)
+                == (await service._previous(meter, period))[0]
             )
             if period is None:
                 continue

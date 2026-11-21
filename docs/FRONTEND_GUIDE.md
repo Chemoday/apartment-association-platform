@@ -167,13 +167,36 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   `reading` is `null` until something was submitted for that meter in the shown period.
 - **Which month** (docs/API.md section 2): every meter has `next_submission` with everything its
   form needs: `period_code`, `due_date`, `final`, `previous_value` (what the new value must not go
-  below), `average_delta` and `reading` (already submitted for that period). Its period can
+  below, except with `needs_start: true`, see below), `average_delta` and `reading` (already
+  submitted for that period). Its period can
   differ from the shown `period` (one meter still due for October, another already for
   November), so the form always uses these fields. Show the month on the form ("Reading for
   November"). When `final` is `true`, the reading is a late one for the previous month: before
   sending, warn "This is your October reading. You cannot change it afterwards; your next
   reading will be for November." `next_submission: null` means nothing can be submitted now (no
   right to submit, or the period is missing or closed): hide the form.
+- **A meter without a start** (epic E13 R3b): `needs_start: true` on a meter or its
+  `next_submission` means the meter has no reading before that month. Its `previous_value` is
+  then no floor: `null` until the first reading of that month exists, afterwards that reading's
+  own previous value, and a correction of that first reading may go below it (a mistyped 1250
+  corrected to 125), so do not block a lower value on the client. Its form asks for the current
+  reading and an optional second field "reading on your last bill"; send it as `previous_value`,
+  or leave it out. Explain under the field: "If you do not know it, leave it empty: this month
+  will count as the start of your meter." Never send `previous_value` for any other meter
+  (`422 PREVIOUS_VALUE_NOT_ALLOWED`).
+- **Correcting a first reading:** `reading.previous_value` holds the bill's reading of a
+  `SUBMITTED` start; leaving `previous_value` out of the correction keeps it, and only an explicit
+  `"previous_value": null` drops it (prefill the field with it only when `previous_origin` is
+  `SUBMITTED`, never for a `START`, whose `previous_value` is its own value; send `null` when the
+  user clears a prefilled field).
+- **`previous_origin`** of a reading: in the matrix and the apartment card, mark `SUBMITTED`
+  ("start given by the resident: check against the last bill") and `START` ("start of the meter,
+  no consumption this month"); `balances[].starting_meters > 0` means that month's balance is
+  incomplete.
+- **The board's entry form** (matrix, apartments without residents): every matrix meter has
+  `previous_value` and `needs_start` like a dashboard meter; offer the "reading on the last bill"
+  field exactly where `needs_start` is `true`.
+- **`serial_number` can be `null`** (not set yet): show nothing or "-", never "null".
 - A user can belong to several apartments: render one card per apartment.
 - **Consumption hints**: each dashboard meter has `average_delta` (the 3-period average the anomaly
   check uses) and `previous_delta` (last period's consumption), both decimal strings or `null`.

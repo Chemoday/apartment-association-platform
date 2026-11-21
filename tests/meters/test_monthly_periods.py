@@ -140,6 +140,7 @@ async def test_inside_the_month_the_reading_is_the_months_and_can_change(
         "due_date": "2026-11-04T21:59:59Z",
         "final": False,
         "previous_value": "115.000",
+        "needs_start": False,
         "average_delta": "5.000",
         "reading": None,
     }
@@ -164,6 +165,7 @@ async def test_a_late_reading_closes_the_previous_month_and_the_next_goes_to_the
         "due_date": "2026-11-04T21:59:59Z",
         "final": True,
         "previous_value": "115.000",
+        "needs_start": False,
         "average_delta": "5.000",
         "reading": None,
     }

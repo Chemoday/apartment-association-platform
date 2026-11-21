@@ -48,6 +48,7 @@ from src.modules.property.schemas import (
     MembershipRefDTO,
     MembershipView,
     MeResponse,
+    NewApartment,
     NewBuilding,
     PersonDTO,
     PersonMembershipDTO,
@@ -666,6 +667,38 @@ class PropertyService:
         self.session.add(row)
         await self.session.flush()
         return row.id
+
+    async def building_country(self, building_id: uuid.UUID) -> str:
+        """The building's country code (system-level; the filling core picks its register)."""
+        return await self.session.scalar(
+            select(Building.country_code).where(Building.id == building_id)
+        )
+
+    async def has_apartments(self, building_id: uuid.UUID) -> bool:
+        """Whether the building has any apartment (the filling core fills a new one once)."""
+        found = await self.session.scalar(
+            select(Apartment.id).where(Apartment.building_id == building_id).limit(1)
+        )
+        return found is not None
+
+    async def create_apartments(
+        self, building_id: uuid.UUID, apartments: Iterable[NewApartment]
+    ) -> dict[str, uuid.UUID]:
+        """Apartments of a new building, checked by the filling core (src/core/filling, epic
+        E13 R3); returns their ids by number. The caller commits."""
+        rows = [
+            Apartment(
+                building_id=building_id,
+                number=apartment.number,
+                entrance=apartment.entrance,
+                floor=apartment.floor,
+                area_m2=apartment.area_m2,
+            )
+            for apartment in apartments
+        ]
+        self.session.add_all(rows)
+        await self.session.flush()
+        return {row.number: row.id for row in rows}
 
     async def building_ids(self) -> list[uuid.UUID]:
         """Every building of the installation (one per installation today; the operator

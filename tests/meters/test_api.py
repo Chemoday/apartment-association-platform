@@ -90,6 +90,7 @@ async def test_full_period_lifecycle(api_client: AsyncClient, world: MetersWorld
         "consumption_delta": "5.000",
         "source": "RESIDENT",
         "is_anomaly_confirmed": False,
+        "previous_origin": "HISTORY",
     }
 
     history = await api_client.get(
@@ -439,7 +440,12 @@ async def test_estimates_only_during_review_and_only_once(
     assert too_early.status_code == 409
     assert too_early.json()["error_code"] == "PERIOD_NOT_IN_REVIEW"
     assert first.json()["estimated_count"] == 3  # nobody submitted in this test
-    assert second.json() == {"period_code": "2026-10", "estimated_count": 0, "estimated": []}
+    assert second.json() == {
+        "period_code": "2026-10",
+        "estimated_count": 0,
+        "estimated": [],
+        "skipped_without_start": [],
+    }
     assert board.status_code == 403
 
 
@@ -499,6 +505,7 @@ async def test_matrix_shows_statuses_and_the_master_balance(
             "master_total": "15.000",
             "apartments_sum": "1133.000",
             "unallocated_loss": "-1118.000",  # negative: points at the wrong apartment reading
+            "starting_meters": 0,
         }
     ]
     assert [(a["apartment_number"], a["entrance"], a["status"]) for a in body["apartments"]] == [

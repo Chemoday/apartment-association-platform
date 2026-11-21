@@ -261,6 +261,33 @@ async def test_a_not_found_page_that_is_not_json_is_still_not_found(register) ->
         await EEBuildingRegistry().fetch(CODE)
 
 
+async def test_the_apartment_draft_takes_numbered_apartments_only(register) -> None:
+    """Epic E12 X3: the building template drafts apartments only; shops, common and unknown
+    parts and apartments without a number are left out with their reason."""
+    answer_ = building_answer()
+    parts = answer_["ehitis"]["ehitiseKehand"]["kehand"][0]["ehitiseOsad"]["ehitiseOsa"]
+    nameless = part("x", "K", "30.0")
+    nameless.pop("tahis")
+    parts.append(nameless)
+    register(answer(200, answer_))
+    provider = EEBuildingRegistry()
+
+    draft = provider.apartment_draft(await provider.fetch(CODE))
+
+    assert [(a.number, a.area_m2, a.floor) for a in draft.apartments] == [
+        ("2", Decimal("48.5"), 3),
+        ("10", Decimal("61.2"), 3),
+        ("14", Decimal("54.3"), 3),
+        ("14A", Decimal("33.1"), 3),
+    ]
+    assert sorted((p.number or "", p.reason) for p in draft.left_out) == [
+        ("", "COMMON"),
+        ("", "NO_NUMBER"),
+        ("1", "NON_RESIDENTIAL"),
+        ("3", "OTHER"),
+    ]
+
+
 async def test_odd_apartment_numbers_never_break_the_order(register) -> None:
     answer_ = building_answer()
     parts = answer_["ehitis"]["ehitiseKehand"]["kehand"][0]["ehitiseOsad"]["ehitiseOsa"]

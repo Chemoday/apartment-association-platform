@@ -249,6 +249,10 @@ association stores files.
   `python -m src.core.migrations` upgrades the database. When the database is already *newer* than
   the image (a rollback), it logs `migrations_skipped_schema_ahead` and skips the upgrade instead
   of crashing.
+- **Rolling back past epic E13 R3** (migration 031, a meter without a start) is safe until a
+  building is imported with meters that have no initial value or serial number: the older code
+  expects both. Before such an import, its readings simply count as `HISTORY` (the column's
+  default).
 
 ## Host configuration as code
 
@@ -393,7 +397,11 @@ migrations and `Z` for fixes only.
 3. **Install, unattended:** the layout below, secrets, the edge proxy, a swap file of 2 GB when the
    server has none and less than 4 GB of memory, the disk check timer, the deploy through
    `deploy.sh site <sha>` (health check and automatic rollback), then for a real installation
-   `create-building` and `create-chairman --print-link` in the running backend.
+   `create-building`, the building template when the register found the building
+   (`building-template --out - --from-register <code>`, docs/API.md section 1 "Filling the
+   building of a new installation"; never over an existing file) and `create-chairman
+   --print-link` in the running backend. Importing the filled template is the administrator's
+   next step, never the installer's (install/README.md).
 
 ### Layout (`/opt/aap`)
 
@@ -403,6 +411,7 @@ migrations and `Z` for fixes only.
 | `site/.env` (600) | Secrets: `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `AUTH_HASH_SECRET`, `NOTIFICATIONS_HASH_SECRET` (hex, generated once, never rotated by a re-run) and `SMTP_PASSWORD` in single quotes, which Docker Compose takes literally (so a password may not contain `'`, `\` or a line break) |
 | `site/settings.env` (644) | The answers and the backend settings, no secrets (below) |
 | `site/files/` | Uploaded files, owned by uid 1000, mode 700 |
+| `site/building-template.csv` (644) | The building template the installer prefilled from the register (apartments and meters, no personal data); filled in by the chairman, imported by the administrator |
 | `site/current_sha`, `previous_sha`, `history` | Deploy state, as on the project's VPS |
 | `releases/<sha>/deploy/`, `releases/<sha>/install/`, `releases/<sha>/VERSION` | The current and the previous release (`VERSION` only in a release of a version) |
 | `edge/` | The edge proxy: `deploy/edge/docker-compose.yml`, `caddy/Caddyfile` from `install/Caddyfile`, `caddy/environment.caddy`, `.env` (`SITE_HOST`, `HTTPS_PORT=443`, `TLS_MODE`) |

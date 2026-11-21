@@ -14,6 +14,7 @@ from src.modules.property import registry as registry_module
 from src.modules.property.models import Building, BuildingRegistryRecord, RegistryCallDay, User
 from src.plugins.countries.ee.facts import EEBuilding, EEBuildingFacts, EESource, EEUnit, UnitKind
 from src.plugins.registry import (
+    ApartmentDraft,
     RegistryBuildingNotFound,
     RegistryCandidate,
     RegistryUnavailable,
@@ -50,6 +51,9 @@ class FakeRegister:
 
     def certificate_valid_until(self, block: EEBuildingFacts):
         return None
+
+    def apartment_draft(self, block: EEBuildingFacts) -> ApartmentDraft:
+        return ApartmentDraft(apartments=[], left_out=[])
 
     async def fetch(self, code: str) -> EEBuildingFacts:
         if self.failing:

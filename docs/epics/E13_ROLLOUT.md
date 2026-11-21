@@ -242,45 +242,80 @@ Planning record: docs/cli_planning/2026-11-21-building-and-residents.md.
 - **Entrances by ranges of positions:** `1-24,25-48` means the 1st to 24th apartment and the 25th
   to 48th in the natural order of the numbers (`2`, `10`, `14`, `14A`), so letter suffixes need no
   rule. Overlapping ranges, gaps, a range beyond the last apartment and apartments left over are
-  errors; without the option every apartment is in entrance 1. The template shows the result, and
-  the chairman corrects it there.
+  errors; without the option the entrances stay empty and must be filled in before the import
+  (owner, 2026-11-21). The template shows the result, and the chairman corrects it there.
 - **A default set of meters per apartment** (for example cold and hot water): one template row per
   meter, so a second riser is one more row with the same apartment; an apartment without meters is
   one row with the meter columns empty.
 
+### The template (owner, 2026-11-21, second round)
+- **Default meters:** cold and hot water for every apartment, because in Estonia an apartment
+  pays the association only for its water; electricity is paid by each apartment to its own
+  supplier. `--meters` gives another set, with a count per type (`COLD_WATER:2,HOT_WATER:2` for a
+  kitchen and a bathroom riser), and the one-row-per-meter format already allows any mix per
+  apartment. A stored per-building set of meter types is not built now: it belongs to the wizard
+  (R7) and to adding apartments later (R8).
+- **Building meters:** the template has one row per type for the building's own meter (the water
+  meter where the water enters the building, which the water company bills the association by).
+  A building without one deletes the row.
+- **Only real meters:** an apartment with fewer meters than the default deletes the extra rows
+  rather than filling them with zeros: a meter in the app is due a reading every month. The
+  resident never deletes a meter; a wrong meter is switched off by the chairman (R8; the meter
+  keeps its history). A meter missing from an apartment is reported by the resident to the board
+  through the apartment's messages (E8).
+- **Optional columns:**
+  - `initial_value`: where the association has the readings of its last bill (the accountant or
+    the management company does), they go here. Where it is empty, the resident's first reading
+    starts the meter (R3b below).
+  - `serial_number`: few people know it at the start; the chairman sets it later (R8).
+  - `location` (kitchen, bathroom): empty becomes `Main`; two meters of one type in one apartment
+    need different locations, so that the resident sees which is which.
+  - `unit` and `max_monthly_delta`: empty takes the default of the type (docs/API.md section 1).
+- **Areas** are rounded half up to 2 decimal places by the import, which reports how many it
+  rounded; never to whole square metres, because the area divides the shared costs.
+- **Column names** are in English.
+
 ### The administrator's commands (R3)
-- `building-template --out <file.csv> [--from-register [<building code>]] [--apartments <N>]
-  [--entrances <ranges>] [--meters <resources>]` writes the template; the building (R2) must
-  exist.
+The exact contract is docs/API.md section 1, "Filling the building of a new installation".
+- `building-template --out <file.csv> [--from-register [<building code>] | --apartments <N>]
+  [--entrances <ranges>] [--meters <types>] [--no-building-meters]` writes the template; the
+  building (R2) must exist and have no apartments or meters yet.
 - **`--from-register`** drafts from the building's accepted passport block, else from its
   proposal. Only when it has neither does it fetch the building once, with the register's
-  building code given to the option (kept as the proposal, like the chairman's proposal action,
-  docs/API.md section 1); the building itself stores no register code (`registry_code` is the
-  association's code in the commercial register), so without a block and without a code the
-  command stops with a clear error (exit 2, like an invalid option of `find-building`). Like
-  `find-building`, an operator command does not count against `REGISTRY_CALLS_PER_DAY`. The exit
-  codes follow `find-building`: 3 when the register does not answer usably, 4 when no provider of
-  the country is enabled.
+  building code given to the option (kept as the proposal, like the chairman's proposal action);
+  the building itself stores no register code (`registry_code` is the association's code in the
+  commercial register), so without a block and without a code the command stops with a clear
+  error. Like `find-building`, it does not count against `REGISTRY_CALLS_PER_DAY`, and its exit
+  codes follow `find-building`.
 - `import-building --file <file.csv> [--dry-run]`: every problem with its row number, nothing
   written when there is any; `--dry-run` writes nothing at all. Output and logs carry row numbers
   and counts only.
-- **The template** (one row per meter, the apartment's columns repeated on each of its rows, a
-  building meter with an empty apartment): `apartment`, `entrance`, `floor`, `area_m2`,
-  `resource`, `unit`, `serial_number`, `location`, `initial_value`, `max_monthly_delta`. R3's
-  contract, approved by the owner, settles the exact columns and defaults and these rules:
-  - what a spreadsheet saves is accepted: the separator (`,` or `;`) is detected from the header
-    line, a byte order mark is skipped, and a decimal comma is accepted with `;` or inside quoted
-    cells (with `,` an unquoted `12,5` gives a wrong number of columns, an error of that row); a
-    file that is not UTF-8 is refused with a clear message;
-  - areas are decimals with 2 places (the register may give more: rounded half up or refused,
-    one of the two, decided in the contract); meter values `Numeric(12,3)`, never a float;
-  - a missing required value (an area, a serial number) is an error of its row;
-  - the written template is protected against spreadsheet formulas
-    (`src/core/csv_safety.py`), and the import strips that protection again.
+- **What a spreadsheet saves is accepted:** the separator (`,` or `;`) is detected from the header
+  line, a byte order mark is skipped, and a decimal comma is accepted with `;` or inside quoted
+  cells; a file that is not UTF-8 is refused with a message that says how to save it as
+  "CSV UTF-8". The template is written with `;`, decimal commas and a byte order mark, so it opens
+  in a spreadsheet with Estonian settings as it is, and it is protected against spreadsheet
+  formulas (`src/core/csv_safety.py`), which the import strips again.
+- **Values:** areas as above; meter values `Numeric(12,3)`, never a float, more than 3 decimal
+  places is an error; a missing required value is an error of its row.
 - **The installer:** when the register found the building, it runs `building-template
-  --from-register <the building code it picked>`, writes the prefilled template next to the
-  installation's settings and prints the import command as one of its next steps; otherwise it
-  prints `building-template --apartments <N>`.
+  --from-register <the building code it picked>`, writes the template next to the installation's
+  settings and prints the import command as one of its next steps; otherwise it prints
+  `building-template --apartments <N>`.
+
+### The first reading of a meter without a start (R3b)
+A meter imported without `initial_value` has no known start until its first reading.
+- **The resident's first reading asks for two values** (owner, 2026-11-21): the reading of the last
+  bill, optional, and the current one. With both, the consumption of that month is known at
+  once; the chairman checks such a start against the last bill. This is the only case where a
+  resident gives a previous value, and it happens once per meter.
+- **Without the bill's reading,** the first reading is the meter's start: it shows no consumption
+  for that month, and the next month counts from it.
+- **The board sees how each reading started** (from the history, from the meter's initial value,
+  given with the reading, or a start), may correct it like any reading, and the accountant's
+  export carries it.
+- Contract: docs/SCHEMA.md (`meters_readings.previous_origin`, nullable `initial_value` and
+  `serial_number` of `meters_devices`) and docs/API.md sections 2 and 3.
 
 ### The setup wizard later (R7)
 The same core behind chairman endpoints: the register's proposal or a count, entrances, meters,
@@ -400,11 +435,11 @@ imports `auth`.
   request keeps the e-mail in its invitation, a rejected one keeps none of them; an undecided
   request is deleted after 30 days (its decision record says `EXPIRED`, and the apartment shows
   `NOT_INVITED` again). **A record of each decision without personal data** stays:
-  apartment, outcome, who decided (none for `EXPIRED`) and when (one person decides alone, so the board can see what was
-  done). A wrong confirmation is undone by ending that membership (E7 3.7). The code and the
-  request's data never reach logs or spans: the field of the join endpoints is named `join_code`
-  (never a bare `code`), and `join_code` joins the scrubber's markers, which match by substring;
-  `full_name`, `phone` and `email` already are.
+  apartment, outcome, who decided (none for `EXPIRED`) and when (one person decides alone, so the
+  board can see what was done). A wrong confirmation is undone by ending that membership (E7
+  3.7). The code and the request's data never reach logs or spans: the field of the join endpoints
+  is named `join_code` (never a bare `code`), and `join_code` joins the scrubber's markers, which
+  match by substring; `full_name`, `phone` and `email` already are.
 
 ## 7. Tasks
 
@@ -421,8 +456,9 @@ imports `auth`.
 | R5c | The project's own deployment renamed (for example `deploy/project-vps/`) without breaking CD or rollback (section 4, "Renaming") | S | no |
 | R5b ([#164](https://github.com/Chemoday/apartment-association-platform/issues/164)) | Versioned releases: an image tag `v0.x.y` built from a git tag, and the `install/` archive attached to the release; an installation follows a version, not `main`. Settled in R5b: the tag `vX.Y.Z` on a commit of `main` is the owner's decision; the release workflow re-tags the image CI built for that commit (no rebuild) and publishes `install.sh` and `aap-release.tar.gz` with the version baked in; `update.sh` takes the latest or a given version and refuses an older one without `--allow-downgrade` (docs/DEPLOYMENT.md "Versions and releases") | S | no |
 | R6 | Backups (B-3), switched on by the installer | M | where backups are kept, off the VPS |
+| R3b ([#170](https://github.com/Chemoday/apartment-association-platform/issues/170)) | The first reading of a meter imported without an initial value (section 6a): the resident may give the reading of the last bill, else the first reading starts the meter; the board sees how each reading started | S | done: the rule (owner, 2026-11-21) |
 | R7 | The setup wizard in the app (stage 2b): screens and chairman endpoints over the core of R3 (section 6a), with the register's apartment list (E12 X3) | L | yes, its own planning session |
-| R8 | Running administration: replace a meter, add an apartment, change an area | M | no |
+| R8 | Running administration: replace a meter, switch a wrong meter off, set a meter's serial number (optional since R3), add an apartment, change an area | M | no |
 | R9 | SMTP in the app's building settings, for the chairman: the password encrypted in the database, a test mail, the server's settings as the fallback | M | yes |
 
 R1-R5b need no deep involvement of the owner. R1-R6 are done before the pilot (B-3 is due

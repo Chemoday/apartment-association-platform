@@ -24,7 +24,13 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base, uuid_pk, varchar_enum
-from src.modules.meters.schemas import MeterUnit, PeriodStatus, ReadingSource, ResourceType
+from src.modules.meters.schemas import (
+    MeterUnit,
+    PeriodStatus,
+    PreviousOrigin,
+    ReadingSource,
+    ResourceType,
+)
 
 
 def _meter_value(**kwargs) -> Mapped[Decimal]:
@@ -74,7 +80,8 @@ class MeterDevice(Base):
     resource_type: Mapped[ResourceType] = mapped_column(
         varchar_enum(ResourceType, "ck_meters_devices_resource_type"), nullable=False
     )
-    serial_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    # None until set: optional since epic E13 R3 (few people know it when a building starts).
+    serial_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     location_label: Mapped[str] = mapped_column(
         String(100), nullable=False, default="Main", server_default="Main"
     )
@@ -84,9 +91,8 @@ class MeterDevice(Base):
         default=MeterUnit.M3,
         server_default=MeterUnit.M3.value,
     )
-    initial_value: Mapped[Decimal] = _meter_value(
-        nullable=False, default=Decimal("0.000"), server_default=text("0.000")
-    )
+    # None: no known start (imported without one, epic E13 R3b); its first reading starts it.
+    initial_value: Mapped[Decimal | None] = _meter_value(nullable=True)
     max_monthly_delta: Mapped[Decimal] = _meter_value(
         nullable=False, default=Decimal("25.000"), server_default=text("25.000")
     )
@@ -146,6 +152,11 @@ class MeterReading(Base):
         CheckConstraint(
             "consumption_delta = value - previous_value", name="ck_meters_readings_delta_consistent"
         ),
+        # A start has no consumption: its previous value is its own value (epic E13 R3b).
+        CheckConstraint(
+            "previous_origin <> 'START' OR previous_value = value",
+            name="ck_meters_readings_start_without_consumption",
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -156,6 +167,13 @@ class MeterReading(Base):
     period_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     value: Mapped[Decimal] = _meter_value(nullable=False)
     previous_value: Mapped[Decimal] = _meter_value(nullable=False)
+    # The server default keeps a rollback to the release before it working: that code inserts
+    # readings without this column (docs/DEPLOYMENT.md "Rollback"). This code always sets it.
+    previous_origin: Mapped[PreviousOrigin] = mapped_column(
+        varchar_enum(PreviousOrigin, "ck_meters_readings_previous_origin", length=16),
+        nullable=False,
+        server_default=PreviousOrigin.HISTORY.value,
+    )
     consumption_delta: Mapped[Decimal] = _meter_value(nullable=False)
     source: Mapped[ReadingSource] = mapped_column(
         varchar_enum(ReadingSource, "ck_meters_readings_source"), nullable=False

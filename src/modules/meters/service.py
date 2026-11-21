@@ -69,11 +69,13 @@ from src.modules.meters.schemas import (
     MatrixMeter,
     MatrixResponse,
     MeterUnit,
+    NewMeter,
     NextSubmission,
     PeriodDTO,
     PeriodListResponse,
     PeriodStatus,
     PeriodStatusUpdateResponse,
+    PreviousOrigin,
     ReadingHistoryResponse,
     ReadingResponse,
     ReadingSource,
@@ -104,7 +106,9 @@ class _PastReading:
     period_code: str
     value: Decimal
     delta: Decimal
-    history: bool  # counts as consumption history (HISTORY_SOURCES, not a confirmed anomaly)
+    # Counts as consumption history: HISTORY_SOURCES, not a confirmed anomaly, not a start.
+    history: bool
+    start: bool  # the reading started the meter (no consumption, epic E13 R3b)
 
 
 class _MeterHistories:
@@ -112,7 +116,7 @@ class _MeterHistories:
 
     The dashboard used to ask per meter, in separate queries and some twice, for the previous
     value, the previous delta and the last 3 history deltas. The answers are those of
-    `_previous_value` and `_history_deltas` for the same meter and period.
+    `_previous` and `_history_deltas` for the same meter and period.
     """
 
     def __init__(self, rows: dict[uuid.UUID, list[_PastReading]]) -> None:
@@ -124,13 +128,15 @@ class _MeterHistories:
             return rows
         return [row for row in rows if row.period_code < period.period_code]
 
-    def previous_value(self, meter: MeterDevice, period: ReadingPeriod | None) -> Decimal:
+    def previous_value(self, meter: MeterDevice, period: ReadingPeriod | None) -> Decimal | None:
+        """As MetersService._previous: None for a meter without a start before the period."""
         before = self._before(meter.id, period)
         return before[0].value if before else meter.initial_value
 
     def previous_delta(self, meter_id: uuid.UUID, period: ReadingPeriod) -> Decimal | None:
         before = self._before(meter_id, period)
-        return before[0].delta if before else None
+        # A start has no consumption: it is no "last month's consumption" either.
+        return before[0].delta if before and not before[0].start else None
 
     def history_deltas(self, meter_id: uuid.UUID, period: ReadingPeriod) -> list[Decimal]:
         deltas = [row.delta for row in self._before(meter_id, period) if row.history][:3]
@@ -146,13 +152,20 @@ def _not_found(error_code: str, message: str) -> DomainError:
     return DomainError(status_code=404, error_code=error_code, message=message)
 
 
+def _drops_previous(request: ReadingSubmitRequest) -> bool:
+    """An explicit `"previous_value": null`: drop the bill's reading of a first reading."""
+    return "previous_value" in request.model_fields_set and request.previous_value is None
+
+
 def _summary(reading: MeterReading) -> ReadingSummary:
     return ReadingSummary(
         reading_id=reading.id,
         value=reading.value,
+        previous_value=reading.previous_value,
         consumption_delta=reading.consumption_delta,
         source=reading.source,
         is_anomaly_confirmed=reading.is_anomaly_confirmed,
+        previous_origin=reading.previous_origin,
     )
 
 
@@ -173,6 +186,34 @@ class MetersService:
         # None only for system-level readers (e.g. notifications), which never write.
         self.outbox = outbox
         self.timezone = ZoneInfo(get_settings().INSTANCE_TIMEZONE)
+
+    # --- A new building (the filling core, src/core/filling, epic E13 R3) -------------------------
+
+    async def has_meters(self, building_id: uuid.UUID) -> bool:
+        """Whether the building has any meter (the filling core fills a new one once)."""
+        found = await self.session.scalar(
+            select(MeterDevice.id).where(MeterDevice.building_id == building_id).limit(1)
+        )
+        return found is not None
+
+    async def create_meters(self, building_id: uuid.UUID, meters: list[NewMeter]) -> None:
+        """Meters of a new building, checked by the filling core; publishes nothing (the period
+        opener already opened the month, and a new meter is simply due a reading in it). The
+        caller commits."""
+        self.session.add_all(
+            MeterDevice(
+                building_id=building_id,
+                apartment_id=meter.apartment_id,
+                resource_type=meter.resource_type,
+                unit=meter.unit,
+                serial_number=meter.serial_number,
+                location_label=meter.location_label,
+                initial_value=meter.initial_value,
+                max_monthly_delta=meter.max_monthly_delta,
+            )
+            for meter in meters
+        )
+        await self.session.flush()
 
     # --- System-level reads (no caller; used by the notifications module) -----------------------
 
@@ -342,6 +383,8 @@ class MetersService:
             and existing.submitted_by_user_id == user.id
             and existing.value == request.value
             and request.reason is None
+            # The same start too: adding, changing or dropping the bill's reading is a change.
+            and self._keeps_start(request, existing)
         ):
             # A retry (double click, timeout) of the resident's own reading, e.g. the final one
             # for last month after which the target moved on: nothing to change.
@@ -366,7 +409,28 @@ class MetersService:
                 message="A later period already has a reading for this meter.",
             )
 
-        previous_value = await self._previous_value(meter, period)
+        previous_value, origin = await self._previous(meter, period)
+        if previous_value is None:
+            # A meter without a start (epic E13 R3b): the reading of the last bill when given,
+            # else this reading starts the meter (no consumption, so no anomaly check).
+            # A correction that leaves it out keeps the bill's reading given before; only an
+            # explicit null drops it (owner, 2026-11-21: fixing a typo must not erase it).
+            if request.previous_value is not None:
+                previous_value, origin = request.previous_value, PreviousOrigin.SUBMITTED
+            elif (
+                not _drops_previous(request)
+                and existing is not None
+                and existing.previous_origin == PreviousOrigin.SUBMITTED
+            ):
+                previous_value, origin = existing.previous_value, PreviousOrigin.SUBMITTED
+            else:
+                previous_value, origin = request.value, PreviousOrigin.START
+        elif request.previous_value is not None:
+            raise DomainError(
+                status_code=422,
+                error_code="PREVIOUS_VALUE_NOT_ALLOWED",
+                message="Only the first reading of a meter without a start takes a previous value.",
+            )
         average = calculate_rolling_average_delta(
             await self._history_deltas(meter.id, period), NO_HISTORY_AVERAGE
         )
@@ -384,6 +448,7 @@ class MetersService:
         target = (
             request.value,
             previous_value,
+            origin,
             check.consumption_delta,
             source,
             check.is_anomaly_confirmed,
@@ -412,6 +477,7 @@ class MetersService:
         )
         reading.value = request.value
         reading.previous_value = previous_value
+        reading.previous_origin = origin
         reading.consumption_delta = check.consumption_delta
         reading.source = source
         reading.is_anomaly_confirmed = check.is_anomaly_confirmed
@@ -437,10 +503,20 @@ class MetersService:
         )
 
     @staticmethod
+    def _keeps_start(request: ReadingSubmitRequest, existing: MeterReading) -> bool:
+        """Whether the request leaves the reading's start as it is: the same bill reading, or
+        none where there is none; an omitted one keeps a SUBMITTED start."""
+        submitted = existing.previous_origin == PreviousOrigin.SUBMITTED
+        if request.previous_value is not None:
+            return submitted and request.previous_value == existing.previous_value
+        return not (submitted and _drops_previous(request))
+
+    @staticmethod
     def _state_of(reading: MeterReading) -> tuple:
         return (
             reading.value,
             reading.previous_value,
+            reading.previous_origin,
             reading.consumption_delta,
             reading.source,
             reading.is_anomaly_confirmed,
@@ -597,6 +673,7 @@ class MetersService:
             dashboard_meters = []
             for meter in (m for m in meters if m.apartment_id == membership.apartment_id):
                 reading = readings.get(meter.id)
+                known = histories.previous_value(meter, period)
                 dashboard_meters.append(
                     DashboardMeter(
                         meter_id=meter.id,
@@ -604,11 +681,8 @@ class MetersService:
                         serial_number=meter.serial_number,
                         location_label=meter.location_label,
                         unit=meter.unit,
-                        previous_value=(
-                            reading.previous_value
-                            if reading is not None
-                            else histories.previous_value(meter, period)
-                        ),
+                        previous_value=reading.previous_value if reading is not None else known,
+                        needs_start=known is None,
                         **self._consumption_hints(meter, period, histories),
                         reading=_summary(reading) if reading is not None else None,
                         next_submission=self._next_submission(
@@ -642,15 +716,13 @@ class MetersService:
         if period is None or period.status != PeriodStatus.OPEN_FOR_RESIDENTS:
             return None
         reading = readings[period.period_code].get(meter.id)
+        known = histories.previous_value(meter, period)
         return NextSubmission(
             period_code=period.period_code,
             due_date=period.due_date,
             final=target.final,
-            previous_value=(
-                reading.previous_value
-                if reading is not None
-                else histories.previous_value(meter, period)
-            ),
+            previous_value=reading.previous_value if reading is not None else known,
+            needs_start=known is None,
             average_delta=rolling_average_delta(histories.history_deltas(meter.id, period)),
             reading=_summary(reading) if reading is not None else None,
         )
@@ -741,6 +813,7 @@ class MetersService:
                             consumption_delta=reading.consumption_delta,
                             source=reading.source,
                             is_anomaly_confirmed=reading.is_anomaly_confirmed,
+                            previous_origin=reading.previous_origin,
                         )
                         for reading in sorted(
                             readings.get(meter.id, []),
@@ -812,6 +885,8 @@ class MetersService:
                     MeterDevice.apartment_id == apartment_id,
                     MeterReading.building_id == user.building_id,
                     MeterReading.period_id.in_([period.id for period in periods]),
+                    # A start has no consumption: the month counts as without a reading.
+                    MeterReading.previous_origin != PreviousOrigin.START,
                 )
             )
         ).all()
@@ -866,6 +941,8 @@ class MetersService:
                     MeterDevice.apartment_id.is_not(None),
                     MeterReading.building_id == user.building_id,
                     MeterReading.period_id.in_([period.id for period in periods]),
+                    # A start has no consumption: that apartment is not counted for the month.
+                    MeterReading.previous_origin != PreviousOrigin.START,
                 )
             )
         ).all()
@@ -929,14 +1006,17 @@ class MetersService:
             )
         )
         apartments = await self.property_service.list_apartments(user.building_id)
+        # One query for every meter's history: the previous value and whether it has a start.
+        histories = await self._meter_histories([meter.id for meter in meters])
+
+        def cell(meter: MeterDevice) -> MatrixMeter:
+            return self._matrix_cell(
+                meter, readings.get(meter.id), histories.previous_value(meter, period)
+            )
 
         rows = []
         for apartment in apartments:
-            cells = [
-                self._matrix_cell(meter, readings.get(meter.id))
-                for meter in meters
-                if meter.apartment_id == apartment.id
-            ]
+            cells = [cell(meter) for meter in meters if meter.apartment_id == apartment.id]
             if not cells:
                 continue
             rows.append(
@@ -950,16 +1030,7 @@ class MetersService:
                 )
             )
         master_meters = [
-            MasterMeterRow(
-                **self._matrix_cell(meter, readings.get(meter.id)).model_dump(),
-                previous_value=(
-                    readings[meter.id].previous_value
-                    if meter.id in readings
-                    else await self._previous_value(meter, period)
-                ),
-            )
-            for meter in meters
-            if meter.is_master_meter
+            MasterMeterRow(**cell(meter).model_dump()) for meter in meters if meter.is_master_meter
         ]
         return MatrixResponse(
             period=_period_dto(period),
@@ -969,12 +1040,17 @@ class MetersService:
         )
 
     @staticmethod
-    def _matrix_cell(meter: MeterDevice, reading: MeterReading | None) -> MatrixMeter:
+    def _matrix_cell(
+        meter: MeterDevice, reading: MeterReading | None, known: Decimal | None
+    ) -> MatrixMeter:
+        """`known`: the meter's previous value before the period (None: no start yet)."""
         return MatrixMeter(
             meter_id=meter.id,
             resource_type=meter.resource_type,
             location_label=meter.location_label,
             unit=meter.unit,
+            previous_value=reading.previous_value if reading is not None else known,
+            needs_start=known is None,
             status=meter_submission_status(
                 reading.source if reading else None,
                 reading.is_anomaly_confirmed if reading else False,
@@ -996,14 +1072,22 @@ class MetersService:
                 return meter.resource_type == rt and meter.unit == u
 
             masters = [m for m in meters if m.is_master_meter and same_kind(m)]
-            apartment_deltas = [
-                readings[m.id].consumption_delta
+            apartment_readings = [
+                readings[m.id]
                 for m in meters
                 if not m.is_master_meter and same_kind(m) and m.id in readings
             ]
+            apartment_deltas = [reading.consumption_delta for reading in apartment_readings]
+            starting = sum(
+                1 for r in apartment_readings if r.previous_origin == PreviousOrigin.START
+            )
             apartments_sum = canonical_meter_value(sum(apartment_deltas, start=Decimal("0.000")))
             master_total = None
-            if all(m.id in readings for m in masters):
+            # A building meter that started this month has no consumption yet: no total either.
+            if all(
+                m.id in readings and readings[m.id].previous_origin != PreviousOrigin.START
+                for m in masters
+            ):
                 master_total = canonical_meter_value(
                     sum((readings[m.id].consumption_delta for m in masters), start=Decimal("0.000"))
                 )
@@ -1018,6 +1102,7 @@ class MetersService:
                         if master_total is not None
                         else None
                     ),
+                    starting_meters=starting,
                 )
             )
         return balances
@@ -1065,8 +1150,13 @@ class MetersService:
         )
 
         estimated = []
+        skipped_without_start: list[uuid.UUID] = []
         for meter in (m for m in meters if m.id not in with_reading | with_later_reading):
-            previous_value = await self._previous_value(meter, period)
+            previous_value, origin = await self._previous(meter, period)
+            if previous_value is None:
+                # Nothing to estimate from: its first reading starts the meter (epic E13 R3b).
+                skipped_without_start.append(meter.id)
+                continue
             average = calculate_rolling_average_delta(
                 await self._history_deltas(meter.id, period), NO_HISTORY_AVERAGE
             )
@@ -1083,6 +1173,7 @@ class MetersService:
                 period_id=period.id,
                 value=canonical_meter_value(previous_value + average),
                 previous_value=previous_value,
+                previous_origin=origin,
                 consumption_delta=average,
                 source=ReadingSource.AUTO_ESTIMATED,
                 is_anomaly_confirmed=False,
@@ -1118,6 +1209,7 @@ class MetersService:
                 )
                 for reading, meter in estimated
             ],
+            skipped_without_start=skipped_without_start,
         )
 
     # --- Period status --------------------------------------------------------------------------
@@ -1250,6 +1342,7 @@ class MetersService:
                     source=reading.source.value,
                     is_anomaly_confirmed=reading.is_anomaly_confirmed,
                     recorded_at=reading.recorded_at,
+                    previous_origin=reading.previous_origin.value,
                 )
             )
         return result
@@ -1369,8 +1462,9 @@ class MetersService:
     async def _meter_histories(self, meter_ids: list[uuid.UUID]) -> _MeterHistories:
         """Every reading of the meters with its period, newest first (see _MeterHistories).
 
-        Unbounded on purpose, for the few meters of one user: one row per meter and month, so
-        about 120 rows per meter after ten years. Add a lower bound if that ever matters."""
+        Unbounded on purpose: one row per meter and month, about 120 rows per meter after ten
+        years, for one user's meters or the building's matrix (some 24,000 rows for 200 meters
+        then). Add a lower bound if that ever matters."""
         rows: dict[uuid.UUID, list[_PastReading]] = {meter_id: [] for meter_id in meter_ids}
         if not meter_ids:
             return _MeterHistories(rows)
@@ -1382,19 +1476,30 @@ class MetersService:
                 MeterReading.consumption_delta,
                 MeterReading.source,
                 MeterReading.is_anomaly_confirmed,
+                MeterReading.previous_origin,
             )
             .join(ReadingPeriod, ReadingPeriod.id == MeterReading.period_id)
             .where(MeterReading.meter_id.in_(meter_ids))
             .order_by(MeterReading.meter_id, ReadingPeriod.period_code.desc())
         )
-        for meter_id, code, value, delta, source, confirmed in result:
+        for meter_id, code, value, delta, source, confirmed, origin in result:
+            start = origin == PreviousOrigin.START
             rows[meter_id].append(
-                _PastReading(code, value, delta, source in HISTORY_SOURCES and not confirmed)
+                _PastReading(
+                    code,
+                    value,
+                    delta,
+                    source in HISTORY_SOURCES and not confirmed and not start,
+                    start,
+                )
             )
         return _MeterHistories(rows)
 
-    async def _previous_value(self, meter: MeterDevice, period: ReadingPeriod | None) -> Decimal:
-        """The meter's reading in the latest earlier period, else its initial value."""
+    async def _previous(
+        self, meter: MeterDevice, period: ReadingPeriod | None
+    ) -> tuple[Decimal | None, PreviousOrigin | None]:
+        """The meter's reading in the latest earlier period (HISTORY), else its initial value
+        (INITIAL); (None, None) for a meter without a start (epic E13 R3b)."""
         statement = (
             select(MeterReading.value)
             .join(ReadingPeriod, ReadingPeriod.id == MeterReading.period_id)
@@ -1405,7 +1510,11 @@ class MetersService:
         if period is not None:
             statement = statement.where(ReadingPeriod.period_code < period.period_code)
         value = await self.session.scalar(statement)
-        return value if value is not None else meter.initial_value
+        if value is not None:
+            return value, PreviousOrigin.HISTORY
+        if meter.initial_value is not None:
+            return meter.initial_value, PreviousOrigin.INITIAL
+        return None, None
 
     async def _history_deltas(self, meter_id: uuid.UUID, period: ReadingPeriod) -> list[Decimal]:
         """Last 3 qualifying deltas before the period, oldest first (ROADMAP section C)."""
@@ -1417,6 +1526,7 @@ class MetersService:
                 ReadingPeriod.period_code < period.period_code,
                 MeterReading.source.in_(HISTORY_SOURCES),
                 MeterReading.is_anomaly_confirmed.is_(False),
+                MeterReading.previous_origin != PreviousOrigin.START,
             )
             .order_by(ReadingPeriod.period_code.desc())
             .limit(3)
@@ -1433,6 +1543,7 @@ class MetersService:
             consumption_delta=reading.consumption_delta,
             source=reading.source,
             is_anomaly_confirmed=reading.is_anomaly_confirmed,
+            previous_origin=reading.previous_origin,
         )
 
     def _writer_outbox(self) -> EventOutbox:

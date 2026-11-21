@@ -253,6 +253,152 @@ nothing; it does not count against `REGISTRY_CALLS_PER_DAY`, which limits the ch
   - `{"status": "no_provider"}` and 4 when no provider of that country is enabled;
   - an invalid option: `error: <option> <what is wrong>` and 2.
 
+### Filling the building of a new installation (epic E13, task R3)
+Two operator commands, not endpoints (design: docs/epics/E13_ROLLOUT.md section 6a):
+`uv run python -m src.core.filling building-template ...` writes a template of apartments and
+meters, the chairman fills it in a spreadsheet, and `uv run python -m src.core.filling
+import-building ...` lays the building out from it. The template holds no personal data.
+
+**Both refuse** (exit 1, nothing changed) when the installation marker does not say a real
+installation (as `create-building`), when there is no building yet (run `create-building`
+first), or when the building already has an apartment or a meter: they fill a new building
+once; adding apartments later is running administration (E13 R8).
+
+#### `building-template`
+`building-template --out <file.csv> (--from-register [<building code>] | --apartments <N>)
+[--entrances <ranges>] [--meters <types>] [--no-building-meters]`
+- `--out`: the file to write; an existing file is refused (exit 1). `--out -` writes the
+  template to standard output instead, and every message of the command then goes to standard
+  error (the installer and other tooling run it inside the backend container this way). A file
+  that cannot be written (a missing directory, a read-only file system) is `error: --out ...`
+  and 2.
+- **`--from-register`** drafts from the building's accepted passport block (section 1, "Building
+  register facts"), else from its proposal. When the building has neither, the register's
+  building code must be given (`--from-register 101036416`): the command fetches that building
+  once and keeps it as the proposal, as `POST /property/building/registry/proposal` does. A code
+  given for another building than the stored block's is fetched the same way and replaces the
+  proposal (the lookup had picked the wrong building), so the draft is always that code's. It does
+  not count against `REGISTRY_CALLS_PER_DAY`, like `find-building`. The draft is the parts of
+  kind apartment, in natural order of their numbers, with their area and the floor of their
+  entrance. Non-residential and common parts are left out (owner, 2026-11-21); a part of kind
+  apartment without a printable number (`NUMBER_NOT_TEXT`), with one longer than 32 characters
+  (`NUMBER_TOO_LONG`), or with a number already drafted (`NUMBER_REPEATED`), is left out too and
+  named in the output (control characters shown as `?`). Areas are written rounded half up to 2
+  decimal places. A register that lists no apartment for the building is `error: ...` and 1
+  (draft it with `--apartments` instead).
+- **`--apartments <N>`** (1 to 1000) drafts apartments `1` to `N` with an empty area and floor.
+- **`--entrances <ranges>`**: comma-separated positions in the natural order of the numbers, a
+  range `a-b` or one position, e.g. `1-24,25-48`; they must cover every apartment exactly once
+  (an overlap, a gap or a position past the last apartment is an error). Without it the
+  `entrance` cells stay empty, so the import refuses the file until every apartment has its
+  entrance (owner, 2026-11-21: a default of 1 would silently put a building of four entrances
+  into one, and notices are sent by entrance).
+- **`--meters <types>`**: comma-separated `TYPE[:count]` with a count from 1 to 4, default
+  `COLD_WATER,HOT_WATER`; `COLD_WATER:2,HOT_WATER:2` writes two rows of each type per apartment,
+  with the locations `1` and `2` (two meters of a type need different locations; the chairman
+  may rename them, kitchen and bathroom).
+  Types are those of `meters_devices.resource_type` (docs/SCHEMA.md section 3).
+- **Building meters:** one row per type of `--meters` for the building's own meter (empty
+  `apartment`), unless `--no-building-meters`.
+- **The file:** UTF-8 with a byte order mark, `;` as the separator, decimal commas, CRLF, every
+  cell protected against spreadsheet formulas (`src/core/csv_safety.py`), the header of the
+  template below, one row per meter (apartments first, then building meters), `unit` filled with
+  the type's default, the other meter columns empty.
+- **Output and exit codes** (standard output, standard error with `--out -`): `template <file>
+  written: <A> apartments, <M> meters (<x> apartment, <y> building)` (`<file>` is `-` with
+  `--out -`) plus one line per left-out register part (`left out: part <number or "without a
+  number"> (<reason>)`) and 0; already filled, no building, not a real installation or an
+  existing file: `error: ...` and 1; an invalid option, `--from-register` and `--apartments`
+  together or neither, a building without a passport block and no code, a code the register does
+  not know or of the wrong form: `error: <option> <what is wrong>` and 2; the register does not
+  answer usably: 3; no register provider of the building's country is enabled: 4.
+
+#### `import-building`
+`import-building --file <file.csv | -> [--dry-run]` (`-` reads the file from standard input)
+checks the whole file, then writes every
+apartment and meter in one transaction, or nothing. `--dry-run` only checks. Two runs at once
+fill the building once (an advisory lock).
+- **The file:** at most 5 MB and 10,000 rows. UTF-8, a byte order mark skipped; anything else is
+  refused with `error: the file is not UTF-8: save it as "CSV UTF-8"` and 2. The separator, `;`
+  or `,`, is the one of the header line (tabs are refused with a message that says so). A
+  decimal comma is accepted with `;` and inside quoted cells; with `,`, an unquoted `12,5` gives a
+  row with too many cells. Empty lines are skipped; cells are trimmed. Empty columns after the
+  last one, which a spreadsheet keeps when a column was used and cleared (empty in the header and
+  in every row), are ignored. Rows are numbered as the spreadsheet shows them: a line break inside
+  a quoted cell does not shift the numbers. A cell that starts with `'` followed by `=`, `+`, `-` or `@` loses the `'`
+  (the template's formula guard).
+- **The header** (owner, 2026-11-21: as lenient as is safe): the columns are found by name, in
+  any order, without regard to case or surrounding spaces. `apartment`, `entrance`, `area_m2` and
+  `resource` are required; `floor`, `unit`, `serial_number`, `location`, `initial_value` and
+  `max_monthly_delta` may be left out (their cells count as empty). Names are compared without
+  case, spaces, `-` and `_` (`Initial value` is `initial_value`). A column of another name (notes)
+  is ignored and named in a warning, unless its name begins with the name of a known column that
+  the header lacks (other than `unit`): `initial_value (m3)` without `initial_value` is refused,
+  because ignoring it would lose that column's data for good, while `floor plan` next to `floor`
+  is only ignored. In a file separated by `,` every other column, also an empty one, is refused: a
+  decimal comma could move a number into it. A refusal names the missing required columns; a
+  column given twice is refused. Header names are printed printable only, at most 32 characters
+  and 10 names.
+- **A row** is one of:
+  - an apartment meter: `apartment` and `resource` filled;
+  - an apartment without meters: `apartment` filled, every meter column empty;
+  - a building meter: `apartment`, `entrance`, `floor` and `area_m2` empty, `resource` filled.
+- **Apartment columns:**
+  - `apartment`: 1 to 32 characters of one line of visible text (the rule of `create-building`);
+    every row of one apartment repeats the same `entrance`, `floor` and `area_m2`; two numbers
+    that differ only in case, spaces or leading zeros (`14A` and `14a`, `14 A` and `14A`, `01`
+    and `1`; a zero after a digit or after `.`, `,`, `/` or `-` counts: `1.05` and `1.5` are two
+    numbers) are
+    an error of the later row, never two apartments;
+  - `entrance`: a whole number from 1 to 99, required;
+  - `floor`: a whole number from -5 to 200, empty means 1;
+  - `area_m2`: required, greater than 0, a decimal point or comma, rounded half up to 2 decimal
+    places (the output counts how many were rounded), at most 999999.99.
+- **Numbers** (`area_m2`, `initial_value`, `max_monthly_delta`) may group their thousands with
+  spaces, as a spreadsheet shows them (`12 345,5`, also with a no-break space); any other
+  separator of thousands (`12.345,5`) is refused, because it cannot be told from a decimal
+  point.
+- **Meter columns:**
+  - `resource`: one of the types above;
+  - `unit`: empty takes the type's default; it must fit the type (table below);
+  - `serial_number`: optional, at most 100 characters (set later by the chairman, E13 R8); a
+    number that a spreadsheet turned into an exponent (`1,23457E+16`) is an error that says to
+    format the column as text;
+  - `location`: optional, at most 100 characters, empty means `Main`; two meters of one type in
+    one apartment, or two building meters of one type, need different locations (compared
+    without case);
+  - `initial_value`: optional, at least 0, at most 3 decimal places, at most 999999999.999. Empty
+    means the meter has no known start: its first reading starts it (section 2, "A meter without
+    a start");
+  - `max_monthly_delta`: optional, greater than 0, at most 3 decimal places; empty takes the
+    default below. A building meter carries the whole building, so its default is the larger of
+    the table's building value and twice the apartment value for every apartment of the file
+    (a building of 150 apartments: cold water 2 x 25 x 150 = 7500).
+
+| Type | Default unit | Units allowed | Default `max_monthly_delta`, apartment / building |
+| :--- | :--- | :--- | :--- |
+| `COLD_WATER` | `m3` | `m3` | 25 / 500 |
+| `HOT_WATER` | `m3` | `m3` | 15 / 500 |
+| `GAS` | `m3` | `m3` | 50 / 1000 |
+| `ELECTRICITY` | `kWh` | `kWh`, `MWh` | 1000 / 20000 (in `MWh`: divided by 1000) |
+| `HEAT` | `kWh` | `kWh`, `MWh` | 2000 / 100000 (in `MWh`: divided by 1000) |
+
+- **Output and exit codes** (standard output, row numbers and counts only, never cell values
+  other than the column name): every problem as `row <n>: <column>: <what is wrong>` (row 1 is
+  the header), then `error: <count> problems, nothing written` and 2; refusals as above and 1;
+  success: `checked: <A> apartments, <M> apartment meters, <B> building meters, <R> areas
+  rounded` with `--dry-run`, else `imported: ...` with the same counts, and 0. Before that line,
+  warnings that never stop the import: `warning: column(s) ignored: <names>`, and, when the
+  building has a register passport block and its provider is enabled, a check against the
+  register (owner, 2026-11-21): `warning: the register lists apartments the file does not have:
+  <numbers>`, `warning: the file has apartments the register does not list: <numbers>` (a shop
+  added by hand), and `warning: apartment <number>: area <file> m2, the register says
+  <register> m2` when they differ by more than 1 m2 and 2 %. At most 10 numbers per line (`and
+  <n> more`), at most 20 area lines. A file without
+  any apartment and without other problems is `error: the layout has no apartments`. The command
+  publishes no events; the period opener has already opened the current month for the building
+  (section 2, "Monthly periods"), and its new meters are due a reading in it.
+
 ### Apartment cards (epic E8, task P1)
 (Requires role: `CHAIRMAN` or `BOARD`.) The board looks after an apartment without seeing who
 lives there: residents appear only as their relation to the apartment, never with a user id, name,
@@ -369,6 +515,14 @@ listed.
 ```
 `reading` is `null` until something was submitted for that period.
 
+**A meter without a start** (epic E13, task R3b): `needs_start` is `true`, in the meter and in its
+`next_submission`, while the meter has no initial value and no reading before that period; its
+`previous_value` is `null` until the meter's first reading exists (then it is that reading's
+`previous_value`, which the first reading may still correct). Every other meter has
+`needs_start: false`. Its form asks for the current reading and, optionally, the reading of the
+last bill (`POST /meters/readings`, "A meter without a start"). `serial_number` is `null` for a
+meter whose serial number is not set yet.
+
 `next_submission`: where this meter's next reading goes (see "Which month a reading belongs
 to") and what its form needs. It does not depend on the `period_code` asked for, and its period
 can differ from `period` (one meter still due for last month, another already for this one), so
@@ -377,8 +531,10 @@ the form uses these fields, not the meter's own:
 - `final: true` when it is a late reading for the previous month that the resident cannot change
   afterwards (warn before sending: "this is October's reading; you cannot change it later, and
   your next one will be November's");
-- `previous_value` (the floor of the new value), `average_delta` (the anomaly check's average)
-  and `reading` (what was already submitted for that period, or `null`), all for that period.
+- `previous_value` (the floor of the new value, except with `needs_start: true`: then it is
+  `null` before that period's first reading and that reading's own previous value after it, and a
+  correction may go below it), `average_delta` (the anomaly check's average) and `reading` (what
+  was already submitted for that period, or `null`), all for that period.
 
 `null` when nothing can be submitted now: the user cannot submit for the apartment
 (`can_submit_readings` is `false`), or the target period does not exist yet or is not
@@ -423,7 +579,28 @@ Who may submit, and in which period status:
 - **No rewriting history.** A reading cannot change once a later period already has a reading for that meter (`409 LATER_READING_EXISTS`), because that period's `previous_value` snapshot would silently break.
 - **Replaced meters.** An inactive (replaced) meter only accepts board corrections of a reading it already has in that period.
 - **No-op.** Re-submitting exactly what is stored is a no-op: no audit row, no event. "Exactly" means the same value, previous value, delta, source, anomaly flag and submitter, and no new `reason`. Otherwise the full path runs, e.g. the board confirming an estimate with the same value.
-- `previous_value` is the meter's reading in the latest earlier period, or `initial_value` if there is none.
+- `previous_value` is the meter's reading in the latest earlier period, or `initial_value` if there is none; when the meter has neither, see "A meter without a start".
+- **A meter without a start** (epic E13, task R3b; docs/epics/E13_ROLLOUT.md section 6a): a meter
+  whose `initial_value` is `NULL` and that has no reading in an earlier period.
+  - The request may carry `previous_value`, the reading of the association's last bill, at least
+    0 and at most `value` (else `422 READING_BELOW_PREVIOUS`). The consumption is then
+    `value - previous_value`, the anomaly check runs as usual, and the reading's
+    `previous_origin` is `SUBMITTED`.
+  - Without `previous_value`, the reading starts the meter: `previous_value` is `value`, the
+    consumption is `0.000`, no anomaly check runs, and `previous_origin` is `START`.
+  - The same holds for a correction of that first reading, by its resident or by the board, while
+    the meter still has no earlier reading. A correction may add or change `previous_value`; one
+    that leaves it out keeps the bill's reading given before (owner, 2026-11-21: fixing a typo in
+    the value must not erase it), and only an explicit `"previous_value": null` drops it, making
+    the reading the meter's start.
+  - `previous_value` on any other meter is `422 PREVIOUS_VALUE_NOT_ALLOWED`.
+- **`previous_value` of a reading** is in every reading summary (`reading` of the dashboard and
+  the matrix), so a correction form can show the bill's reading it keeps.
+- **`previous_origin`** of a reading, in every reading payload: `HISTORY` (the reading of an
+  earlier period), `INITIAL` (the meter's initial value), `SUBMITTED` (given with the reading, see
+  above) or `START` (the reading started the meter). A `START` reading is never counted in
+  `average_delta` or `previous_delta`, and shows no consumption (`GET
+  /meters/apartments/{apartment_id}/consumption`).
 - `average_delta` follows docs/ROADMAP_MVP.md, section C.
 - **Locking.** The period is taken `FOR SHARE`, then the meter `FOR UPDATE`. Status changes and estimates lock the period `FOR NO KEY UPDATE` first, then the meters. This one order means a submission and a status change or estimate run one after the other and never deadlock, and a reading can never land in a period that was just closed.
 - `due_date` is the end of the local deadline day in `INSTANCE_TIMEZONE` (default `Europe/Tallinn`), sent in UTC: `2026-11-04T21:59:59Z` is 23:59:59 on 4 November in Tallinn. Periods are opened by the monthly job and closed by `PATCH …/status`, never automatically; `due_date` drives the reading reminders (section 6) and ends the time a late reading for the previous month is accepted.
@@ -434,6 +611,7 @@ Who may submit, and in which period status:
   "meter_id": "uuid",
   "period_code": "2026-10",
   "value": "1254.000",
+  "previous_value": null,
   "confirmation_level": 0,
   "reason": null
 }
@@ -492,18 +670,19 @@ Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum
 {
   "period": { "period_code": "2026-10", "status": "REVIEW_BY_BOARD", "due_date": "2026-11-04T21:59:59Z" },
   "balances": [
-    { "resource_type": "COLD_WATER", "unit": "m3", "master_total": "52.000", "apartments_sum": "48.500", "unallocated_loss": "3.500" }
+    { "resource_type": "COLD_WATER", "unit": "m3", "master_total": "52.000", "apartments_sum": "48.500", "unallocated_loss": "3.500", "starting_meters": 0 }
   ],
   "master_meters": [
     { "meter_id": "uuid", "resource_type": "COLD_WATER", "location_label": "Basement Master", "unit": "m3",
-      "previous_value": "1030.000", "status": "SUBMITTED",
+      "previous_value": "1030.000", "needs_start": false, "status": "SUBMITTED",
       "reading": { "reading_id": "uuid", "value": "1082.000", "consumption_delta": "52.000", "source": "ADMIN_OVERRIDE", "is_anomaly_confirmed": false } }
   ],
   "apartments": [
     {
       "apartment_id": "uuid", "apartment_number": "14", "entrance": 2, "floor": 4, "status": "ANOMALY_CONFIRMED",
       "meters": [
-        { "meter_id": "uuid", "resource_type": "COLD_WATER", "location_label": "Bathroom", "unit": "m3", "status": "ANOMALY_CONFIRMED",
+        { "meter_id": "uuid", "resource_type": "COLD_WATER", "location_label": "Bathroom", "unit": "m3",
+          "previous_value": "124.000", "needs_start": false, "status": "ANOMALY_CONFIRMED",
           "reading": { "reading_id": "uuid", "value": "1254.000", "consumption_delta": "1130.000", "source": "RESIDENT", "is_anomaly_confirmed": true } }
       ]
     }
@@ -514,6 +693,19 @@ Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum
 - `balances` has one row per resource type and unit that has master meters (kWh and MWh are never summed together), so the generic names also cover kWh and MWh: `master_total_m3` is `master_total` with `unit` `m3`.
 - `master_total` is `null` while any master meter of that type has no reading; then `unallocated_loss` is `null` too.
 - `unallocated_loss = master_total - apartments_sum` can be negative, which points to a wrong reading.
+- A building meter without a start (section 2) has `needs_start: true` in `master_meters` and
+  `previous_value: null` until its first reading. While a master meter of the kind has a `START`
+  reading in the period, `master_total` and `unallocated_loss` are `null`: its consumption is not
+  known yet.
+- `starting_meters`: how many apartment meters of that type have a `START` reading in the period
+  (section 2, "A meter without a start"); they count as `0.000` in `apartments_sum`, so a number
+  above 0 means the balance of that month is incomplete.
+- Every `reading` carries `previous_origin` (section 2), so the board sees a start given by a
+  resident (`SUBMITTED`) and can check it against the last bill.
+- Every meter of the matrix, apartment meters and master meters alike, has `previous_value` (the
+  floor of a new value, as in the dashboard) and `needs_start` (section 2, "A meter without a
+  start"), so the board's entry form for an apartment without residents offers the reading of
+  the last bill exactly where the meter needs a start.
 - A meter's status is `MISSING` without a reading; otherwise `ANOMALY_CONFIRMED`, `AUTO_ESTIMATED` or `SUBMITTED`.
 - An apartment's status is the most urgent of its meters' statuses, in the order `MISSING` > `ANOMALY_CONFIRMED` > `AUTO_ESTIMATED` > `SUBMITTED`.
 - Apartments without active meters are not listed. The payload contains no names.
@@ -527,8 +719,10 @@ Finds all active apartment meters without a reading in period_code, calculates t
 - Allowed only in `REVIEW_BY_BOARD` (`409 PERIOD_NOT_IN_REVIEW`), so residents can no longer submit.
 - The estimated `value` is `previous_value + average`, where the average defaults to `0.000` without history. The reading has `submitted_by_user_id = NULL`; its audit row records the triggering user and the reason `"3-month avg estimate"`.
 - Running it again estimates nothing new.
+- A meter without a start (section 2) cannot be estimated: it is skipped and listed in
+  `skipped_without_start` (meter ids) of the response.
 - If `previous + average` would exceed NUMERIC(12, 3), nothing is saved and the response is `422 ESTIMATE_OUT_OF_RANGE` with that `meter_id`; enter that reading by hand.
-- Response: `{"period_code": "2026-10", "estimated_count": 2, "estimated": [{"reading_id", "meter_id", "apartment_id", "value", "consumption_delta"}]}`.
+- Response: `{"period_code": "2026-10", "estimated_count": 2, "estimated": [{"reading_id", "meter_id", "apartment_id", "value", "consumption_delta"}], "skipped_without_start": []}`.
 
 ### `PATCH /api/v1/meters/periods/{period_code}/status`
 Transitions period status (OPEN_FOR_RESIDENTS ↔ REVIEW_BY_BOARD ↔ LOCKED).
@@ -603,6 +797,8 @@ board's apartment card).
     period, a decimal string with 3 decimals; a meter replaced during the period counts with both
     its readings. It can be negative after a correction. `null` when no meter of that type has a
     reading in that period (not submitted yet, or the meter did not exist): show a gap, not 0.
+    A `START` reading (section 2, "A meter without a start") has no consumption: it counts as
+    having no reading here.
     With two meters of a type (kitchen and bathroom), an open month can show only the one
     already submitted.
   - `estimated`: `true` when at least one of those readings is an estimate (`AUTO_ESTIMATED`).
@@ -671,7 +867,7 @@ The building's consumption per month and the average per apartment and per m², 
 ### `GET /api/v1/meters/periods/{period_code}/export-csv`
 Executes plugins/common/csv_export and streams a CSV file of the period's readings.
 - Requires role `CHAIRMAN`, `BOARD` or `ACCOUNTANT`. Served as `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="readings-2026-10.csv"`.
-- Columns: `period_code, entrance, apartment_number, meter_id, resource_type, serial_number, location_label, unit, previous_value, value, consumption_delta, source, is_anomaly_confirmed, recorded_at`.
+- Columns: `period_code, entrance, apartment_number, meter_id, resource_type, serial_number, location_label, unit, previous_value, value, consumption_delta, source, is_anomaly_confirmed, recorded_at, previous_origin` (`serial_number` empty when it is not set; `previous_origin` as in section 2).
 - Master meters have an empty apartment, and `MASTER` in `apartment_number`.
 - Text cells that would start a spreadsheet formula are prefixed with `'` (CSV-injection guard). That covers `= + - @`, also after leading whitespace or line breaks and in full-width forms (NFKC), and a leading tab, CR or LF. No names.
 - If the CSV plugin is not enabled (`ENABLED_PLUGINS`), the response is `404 EXPORTER_NOT_ENABLED`.
