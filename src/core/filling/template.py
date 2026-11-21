@@ -9,6 +9,7 @@ in a spreadsheet with Estonian settings as it is. Reading: the separator of the 
 import csv
 import io
 import re
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -22,7 +23,10 @@ MAX_ROWS = 10_000
 
 
 def _plain(name: str) -> str:
-    return re.sub(r"[\s_\-]+", "", name.casefold())
+    """A header name without case, whitespace, '-', '_' and invisible format characters (a
+    zero-width space pasted from a web page)."""
+    visible = "".join(c for c in name if unicodedata.category(c) != "Cf")
+    return re.sub(r"[\s_\-]+", "", visible.casefold())
 
 
 _KNOWN = {_plain(column): column for column in COLUMNS}
@@ -119,21 +123,34 @@ def read_template_report(data: bytes) -> TemplateRead:
     ignored = [name for name, key in zip(names, keys, strict=True) if key not in COLUMNS]
     for name in ignored:
         plain = _plain(name)
-        # Only a name that begins with a known one ("initial_value (m3)"); short names such
-        # as unit are left out, so "units total" or a notes column is never refused.
+        # A name that begins with a known one ("initial_value (m3)") while that column itself is
+        # missing: ignoring it would lose the column's data for good. Short names such as unit
+        # are left out, and next to the real column ("floor plan" beside floor) it is only an
+        # extra column.
         like = next(
-            (c for c in COLUMNS if len(_plain(c)) >= 5 and plain.startswith(_plain(c))), None
+            (
+                c
+                for c in COLUMNS
+                if len(_plain(c)) >= 5 and plain.startswith(_plain(c)) and c not in keys
+            ),
+            None,
         )
         if like is not None:
-            # "initial_value (m3)": ignoring it would lose every start of the file for good.
             raise TemplateError(
-                f"row 1: the column '{shown(name)}' looks like {like}: name it {like}"
+                f"row 1: the column '{shown(name)}' looks like {like}: name it {like}, or give "
+                f"it a name that does not begin with {like}"
             )
     if ignored and delimiter == ",":
+        listed = [
+            f"'{shown(name)}'" if name else f"the empty column {names.index(name) + 1}"
+            for name in ignored[:MAX_SHOWN]
+        ]
+        more = f" and {len(ignored) - MAX_SHOWN} more" if len(ignored) > MAX_SHOWN else ""
         raise TemplateError(
             "row 1: a file separated by ',' may only have the template's columns (a decimal "
             "comma could move a number into another column): delete "
-            + ", ".join(f"'{shown(name)}'" for name in ignored[:MAX_SHOWN])
+            + ", ".join(listed)
+            + more
             + " or save the file with ';'"
         )
     rows: list[RowInput] = []

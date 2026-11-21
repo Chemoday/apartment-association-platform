@@ -737,12 +737,38 @@ def test_a_slightly_renamed_column_is_still_that_column(name: str) -> None:
     assert row.cells["initial_value"] == "12,5"
 
 
-@pytest.mark.parametrize("name", ["initial_value (m3)", "max_monthly_delta m3", "Location 2"])
-def test_a_column_named_like_a_known_one_is_refused_not_ignored(name: str) -> None:
-    header = ";".join(COLUMNS) + ";" + name
+@pytest.mark.parametrize(
+    ("name", "known"),
+    [
+        ("initial_value (m3)", "initial_value"),
+        ("max_monthly_delta m3", "max_monthly_delta"),
+        ("Location 2", "location"),
+        ("initial\u200bvalue", None),  # a zero-width space: still the column itself
+    ],
+)
+def test_a_column_named_like_a_missing_known_one_is_refused_not_ignored(
+    name: str, known: str | None
+) -> None:
+    if known is None:
+        header = ";".join(name if c == "initial_value" else c for c in COLUMNS)
+        (row,) = read_template((header + "\n1;1;;40;COLD_WATER;;;;12;\n").encode("utf-8"))
+        assert row.cells["initial_value"] == "12"
+        return
+    header = ";".join(c for c in COLUMNS if c != known) + ";" + name
 
     with pytest.raises(TemplateError, match="looks like"):
-        read_template((header + "\n1;1;;40;COLD_WATER;;;;;;5\n").encode("utf-8"))
+        read_template((header + "\n1;1;;40;COLD_WATER;;;;5\n").encode("utf-8"))
+
+
+@pytest.mark.parametrize("name", ["floor plan", "Apartment owner", "location comment", "Floors"])
+def test_an_extra_column_beside_the_real_one_is_only_ignored(name: str) -> None:
+    from src.core.filling.template import read_template_report
+
+    read = read_template_report(
+        (";".join(COLUMNS) + ";" + name + "\n1;1;;40;COLD_WATER;;;;;;x\n").encode("utf-8")
+    )
+
+    assert read.ignored_columns == [name]
 
 
 def test_a_comma_file_with_another_column_is_refused() -> None:
@@ -758,7 +784,7 @@ async def test_ignored_header_names_are_shown_printable_short_and_few(
 ) -> None:
     await create_building(db_session)
     await db_session.commit()
-    extra = ["\x1b[31mred"] + [f"note{n}" for n in range(11)] + ["x" * 50]
+    extra = ["\x1b[31mred", "x" * 50] + [f"note{n}" for n in range(11)]
     path = tmp_path / "building.csv"
     path.write_text(
         ";".join([*COLUMNS, *extra]) + "\n1;1;;40;;;;;;" + ";" * len(extra) + "\n",
@@ -770,6 +796,7 @@ async def test_ignored_header_names_are_shown_printable_short_and_few(
     assert code == 0, printed
     warning = printed.splitlines()[0]
     assert "\x1b" not in warning and "?[31mred" in warning
+    assert "x" * 31 + "..." in warning and "x" * 32 not in warning
     assert warning.endswith(" and 3 more")
 
 
