@@ -27,7 +27,8 @@ docs/API.md sections 0 and 7, docs/ARCHITECTURE.md section 4 and docs/FRONTEND_G
   - Family members get no access of their own. `RESIDENT` memberships are not created by E7.
   - The invited person completes the registration themselves: name, optional phone, language, and
     how the name is shown on the forum.
-  - A CSV import of apartments and owners comes later with E5.
+  - A CSV import of apartments and meters is E13 R3; owners never come from an import, only from
+    the chairman's invitations (single, bulk or confirmed join codes, E13 section 6b).
 - **"Replace tenant" closes the old access and invites a new person.** An account is never handed
   over to another person, because it carries personal things: the notification feed, linked chats
   and browsers, sessions, forum comments, preferences. The meter history belongs to the apartment

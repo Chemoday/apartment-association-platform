@@ -81,7 +81,8 @@ From `ehitiseKehand.kehand[].ehitiseOsad.ehitiseOsa[]`.
 | `toilets` | `ehitiseOsaPohiandmed.tualettruumide_arv` | integer | |
 | `entrance_floor` | `ehitiseOsaPohiandmed.sissepaasuKorrus` | integer | the floor of the apartment's entrance |
 
-- **No entrance (staircase) number** per apartment in the register; the setup wizard asks for it.
+- **No entrance (staircase) number** per apartment in the register; the chairman fills it in the
+  building template (E13 R3) and later in the setup wizard (E13 R7).
 - Ordered by `number` in natural order (`2`, `10`, `14`, `14A`); common parts last.
 
 ## `energy_certificates`
@@ -113,6 +114,8 @@ single parts (`ehitiseOsaTehnilisedNaitajad`) are not taken in `ee/1`.
 From `ehitiseKatastriyksused.ehitiseKatastriyksus[].katastritunnus`.
 
 ## For the core (plugin methods, epic E12 section 2a)
-- **Apartment list for the setup wizard (X3):** `units` with `kind == APARTMENT`: number and area.
+- **Apartment list proposal (X3):** `units` with `kind == APARTMENT`: number, area and
+  `entrance_floor` as the floor; it feeds the building template (E13 R3) and later the setup
+  wizard (E13 R7).
 - **Certificate reminder (X2b):** the latest `valid_until` among the certificates whose `state` is
   `DO_DOKUSEIS_KEHTIV`; none without one (an annulled certificate is never reported).
