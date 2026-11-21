@@ -147,7 +147,7 @@ The daily quota of register calls of the installation (docs/API.md section 1).
 | `previous_value` | `NUMERIC(12, 3)`| `NOT NULL` | Snapshot of prior period's value (or `initial_value`, or the value given with the first reading of a meter without a start, or `value` itself for a start; see `previous_origin`) |
 | `consumption_delta` | `NUMERIC(12, 3)`| `NOT NULL` | `value - previous_value` |
 | `source` | `VARCHAR(32)` | `NOT NULL` | Enum: `RESIDENT`, `ADMIN_OVERRIDE`, `AUTO_ESTIMATED`, `IOT_WEBHOOK` |
-| `previous_origin` | `VARCHAR(16)` | `NOT NULL` | Where `previous_value` came from (epic E13 R3b): `HISTORY` (an earlier period's reading), `INITIAL` (the meter's `initial_value`), `SUBMITTED` (given with the first reading of a meter without a start), `START` (the reading started the meter: `previous_value = value`). The migration sets `INITIAL` on each meter's earliest reading and `HISTORY` on the others |
+| `previous_origin` | `VARCHAR(16)` | `NOT NULL, DEFAULT 'HISTORY'` | Where `previous_value` came from (epic E13 R3b): `HISTORY` (an earlier period's reading), `INITIAL` (the meter's `initial_value`), `SUBMITTED` (given with the first reading of a meter without a start), `START` (the reading started the meter: `previous_value = value`). The migration sets `INITIAL` on each meter's earliest reading and `HISTORY` on the others |
 | `is_anomaly_confirmed`| `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | `TRUE` if user passed 2-step popup confirmation |
 | `submitted_by_user_id`| `UUID` | `FK(core_users.id), NULLABLE`| User who submitted/modified (NULL if system `AUTO_ESTIMATED`) |
 | `recorded_at` | `TIMESTAMPTZ` | `NOT NULL` | Timestamp of last modification (ORM `onupdate`; a raw `INSERT … ON CONFLICT DO UPDATE` must set it explicitly) |

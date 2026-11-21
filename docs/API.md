@@ -269,16 +269,21 @@ once; adding apartments later is running administration (E13 R8).
 [--entrances <ranges>] [--meters <types>] [--no-building-meters]`
 - `--out`: the file to write; an existing file is refused (exit 1). `--out -` writes the
   template to standard output instead, and every message of the command then goes to standard
-  error (the installer and other tooling run it inside the backend container this way).
+  error (the installer and other tooling run it inside the backend container this way). A file
+  that cannot be written (a missing directory, a read-only file system) is `error: --out ...`
+  and 2.
 - **`--from-register`** drafts from the building's accepted passport block (section 1, "Building
   register facts"), else from its proposal. When the building has neither, the register's
   building code must be given (`--from-register 101036416`): the command fetches that building
-  once and keeps it as the proposal, as `POST /property/building/registry/proposal` does. It does
+  once and keeps it as the proposal, as `POST /property/building/registry/proposal` does. A code
+  given for another building than the stored block's is fetched the same way and replaces the
+  proposal (the lookup had picked the wrong building), so the draft is always that code's. It does
   not count against `REGISTRY_CALLS_PER_DAY`, like `find-building`. The draft is the parts of
   kind apartment, in natural order of their numbers, with their area and the floor of their
   entrance. Non-residential and common parts are left out (owner, 2026-11-21); a part of kind
-  apartment without a number, with one longer than 32 characters, or with a number already
-  drafted, is left out too and named in the output. Areas are written rounded half up to 2
+  apartment without a printable number (`NUMBER_NOT_TEXT`), with one longer than 32 characters
+  (`NUMBER_TOO_LONG`), or with a number already drafted (`NUMBER_REPEATED`), is left out too and
+  named in the output (control characters shown as `?`). Areas are written rounded half up to 2
   decimal places. A register that lists no apartment for the building is `error: ...` and 1
   (draft it with `--apartments` instead).
 - **`--apartments <N>`** (1 to 1000) drafts apartments `1` to `N` with an empty area and floor.
@@ -287,7 +292,9 @@ once; adding apartments later is running administration (E13 R8).
   (an overlap, a gap or a position past the last apartment is an error). Without it every
   apartment is in entrance 1.
 - **`--meters <types>`**: comma-separated `TYPE[:count]` with a count from 1 to 4, default
-  `COLD_WATER,HOT_WATER`; `COLD_WATER:2,HOT_WATER:2` writes two rows of each type per apartment.
+  `COLD_WATER,HOT_WATER`; `COLD_WATER:2,HOT_WATER:2` writes two rows of each type per apartment,
+  with the locations `1` and `2` (two meters of a type need different locations; the chairman
+  may rename them, kitchen and bathroom).
   Types are those of `meters_devices.resource_type` (docs/SCHEMA.md section 3).
 - **Building meters:** one row per type of `--meters` for the building's own meter (empty
   `apartment`), unless `--no-building-meters`.
@@ -311,20 +318,26 @@ apartment and meter in one transaction, or nothing. `--dry-run` only checks. Two
 fill the building once (an advisory lock).
 - **The file:** at most 5 MB and 10,000 rows. UTF-8, a byte order mark skipped; anything else is
   refused with `error: the file is not UTF-8: save it as "CSV UTF-8"` and 2. The separator, `;`
-  or `,`, is the one of the header line. A decimal comma is accepted with `;` and inside quoted
-  cells; with `,`, an unquoted `12,5` gives a row with too many cells. Empty lines are skipped;
-  cells are trimmed. A cell that starts with `'` followed by `=`, `+`, `-` or `@` loses the `'`
+  or `,`, is the one of the header line (tabs are refused with a message that says so). A
+  decimal comma is accepted with `;` and inside quoted cells; with `,`, an unquoted `12,5` gives a
+  row with too many cells. Empty lines are skipped; cells are trimmed. Empty columns after the
+  last one, which a spreadsheet keeps when a column was used and cleared (empty in the header and
+  in every row), are ignored. Rows are numbered as the spreadsheet shows them: a line break inside
+  a quoted cell does not shift the numbers. A cell that starts with `'` followed by `=`, `+`, `-` or `@` loses the `'`
   (the template's formula guard).
 - **The header:** exactly these columns, in any order, each once: `apartment`, `entrance`,
   `floor`, `area_m2`, `resource`, `unit`, `serial_number`, `location`, `initial_value`,
-  `max_monthly_delta`.
+  `max_monthly_delta`. A refusal names the missing columns and how many unexpected or repeated
+  ones there are.
 - **A row** is one of:
   - an apartment meter: `apartment` and `resource` filled;
   - an apartment without meters: `apartment` filled, every meter column empty;
   - a building meter: `apartment`, `entrance`, `floor` and `area_m2` empty, `resource` filled.
 - **Apartment columns:**
   - `apartment`: 1 to 32 characters of one line of visible text (the rule of `create-building`);
-    every row of one apartment repeats the same `entrance`, `floor` and `area_m2`;
+    every row of one apartment repeats the same `entrance`, `floor` and `area_m2`; two numbers
+    that differ only in case (`14A`, `14a`) are an error of the later row, never two
+    apartments;
   - `entrance`: a whole number from 1 to 99, required;
   - `floor`: a whole number from -5 to 200, empty means 1;
   - `area_m2`: required, greater than 0, a decimal point or comma, rounded half up to 2 decimal
@@ -332,7 +345,9 @@ fill the building once (an advisory lock).
 - **Meter columns:**
   - `resource`: one of the types above;
   - `unit`: empty takes the type's default; it must fit the type (table below);
-  - `serial_number`: optional, at most 100 characters (set later by the chairman, E13 R8);
+  - `serial_number`: optional, at most 100 characters (set later by the chairman, E13 R8); a
+    number that a spreadsheet turned into an exponent (`1,23457E+16`) is an error that says to
+    format the column as text;
   - `location`: optional, at most 100 characters, empty means `Main`; two meters of one type in
     one apartment, or two building meters of one type, need different locations (compared
     without case);
@@ -340,7 +355,9 @@ fill the building once (an advisory lock).
     means the meter has no known start: its first reading starts it (section 2, "A meter without
     a start");
   - `max_monthly_delta`: optional, greater than 0, at most 3 decimal places; empty takes the
-    default below.
+    default below. A building meter carries the whole building, so its default is the larger of
+    the table's building value and twice the apartment value for every apartment of the file
+    (a building of 150 apartments: cold water 2 x 25 x 150 = 7500).
 
 | Type | Default unit | Units allowed | Default `max_monthly_delta`, apartment / building |
 | :--- | :--- | :--- | :--- |
@@ -637,7 +654,8 @@ Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum
     {
       "apartment_id": "uuid", "apartment_number": "14", "entrance": 2, "floor": 4, "status": "ANOMALY_CONFIRMED",
       "meters": [
-        { "meter_id": "uuid", "resource_type": "COLD_WATER", "location_label": "Bathroom", "unit": "m3", "status": "ANOMALY_CONFIRMED",
+        { "meter_id": "uuid", "resource_type": "COLD_WATER", "location_label": "Bathroom", "unit": "m3",
+          "previous_value": "124.000", "needs_start": false, "status": "ANOMALY_CONFIRMED",
           "reading": { "reading_id": "uuid", "value": "1254.000", "consumption_delta": "1130.000", "source": "RESIDENT", "is_anomaly_confirmed": true } }
       ]
     }
@@ -657,6 +675,10 @@ Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum
   above 0 means the balance of that month is incomplete.
 - Every `reading` carries `previous_origin` (section 2), so the board sees a start given by a
   resident (`SUBMITTED`) and can check it against the last bill.
+- Every meter of the matrix, apartment meters and master meters alike, has `previous_value` (the
+  floor of a new value, as in the dashboard) and `needs_start` (section 2, "A meter without a
+  start"), so the board's entry form for an apartment without residents offers the reading of
+  the last bill exactly where the meter needs a start.
 - A meter's status is `MISSING` without a reading; otherwise `ANOMALY_CONFIRMED`, `AUTO_ESTIMATED` or `SUBMITTED`.
 - An apartment's status is the most urgent of its meters' statuses, in the order `MISSING` > `ANOMALY_CONFIRMED` > `AUTO_ESTIMATED` > `SUBMITTED`.
 - Apartments without active meters are not listed. The payload contains no names.

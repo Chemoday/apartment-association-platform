@@ -188,6 +188,9 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   ("start given by the resident: check against the last bill") and `START` ("start of the meter,
   no consumption this month"); `balances[].starting_meters > 0` means that month's balance is
   incomplete.
+- **The board's entry form** (matrix, apartments without residents): every matrix meter has
+  `previous_value` and `needs_start` like a dashboard meter; offer the "reading on the last bill"
+  field exactly where `needs_start` is `true`.
 - **`serial_number` can be `null`** (not set yet): show nothing or "-", never "null".
 - A user can belong to several apartments: render one card per apartment.
 - **Consumption hints**: each dashboard meter has `average_delta` (the 3-period average the anomaly
