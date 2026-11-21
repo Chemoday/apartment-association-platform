@@ -391,6 +391,12 @@ imports `auth`.
   behind `CONNECTED`.
 - The screen is a frontend task: the list "apartment - status", the link to the apartment card,
   the join requests with their actions, the paper mark.
+- **Settled in the contract** (docs/API.md section 7, 2026-11-22): `GET /auth/connections` and
+  `PUT /auth/connections/{apartment_id}/paper` in module `auth`, the mark stored on the apartment
+  (`property_apartments.on_paper`, changed through `PropertyService`); `JOIN_REQUEST` and
+  `CODE_ISSUED` are in the contract but returned only with R4c; the item shows whether the pending
+  invitation's e-mail is still queued (`invitation_delivery`), so unsent invitations of R4a are
+  visible; `limit` up to 500, so one page holds a whole building.
 
 ### R4c: join codes on paper
 - **Issue:** the chairman picks apartments (by default those without an active owner and with

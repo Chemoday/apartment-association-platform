@@ -204,6 +204,8 @@ Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). Tables: docs/SCHEMA.md sect
 | `inactive_user_ids(user_ids)` | which of these users are closed (for the notifications backstop, 4.1) |
 | `has_active_owner(apartment_id)` | whether a `TENANT` invitation still applies |
 | `active_chairman_count(building_id)` | active users with `CHAIRMAN` (`is_active` filtered; a closed account keeps its old `building_role`) |
+| `connection_rows(building_id, apartment_id=None)` | `list[ConnectionRowDTO(apartment_id, number, entrance, on_paper, owners, tenants)]` of every apartment (or of one) in the order of the apartment list, with the active `OWNER` and `TENANT` memberships of active users counted, in one query (the connection overview of epic E13 R4b) |
+| `set_on_paper(building_id, apartment_id, on_paper)` | Sets the chairman's paper mark; returns `False` when the apartment is not in that building |
 
 ### 4.3 Which rows are "active"
 Every query that resolves people filters closed accounts (`core_users.is_active`) and ended memberships (`property_memberships.ended_at IS NULL`). Since A4 all of them do, with a test per row (`tests/property/test_active_rows.py`):
@@ -222,6 +224,7 @@ Every query that resolves people filters closed accounts (`core_users.is_active`
 | `get_masked_author_badges` | no (history: closed authors keep a masked badge) | yes (A4): an ended membership counts as "no longer a member" |
 | `has_active_members` (E8/P2: a thread needs a reader) | yes | yes |
 | `list_apartments`, `get_building` | n/a | n/a |
+| `connection_rows` (E13 R4b, the connection overview) | yes: a membership of a closed account is not counted | yes; tested in `tests/auth/test_connections.py` |
 | demo user list (`src/core/demo.py`) | yes; apartment and relation come from the static `DEMO_USERS`, not from live memberships | n/a |
 
 ### 4.4 Sessions in `get_current_user`

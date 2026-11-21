@@ -2057,6 +2057,54 @@ What stays:
 There is no endpoint to change an e-mail address; changing one's own e-mail comes later (E7 page,
 scope).
 
+### The connection overview (epic E13, task R4b)
+Which apartments have someone in the app, for the chairman who brings the building in. The
+chairman only (signed in with a Bearer token; anyone else `403 FORBIDDEN`). It shows no names and
+no e-mails: only counts, statuses and dates.
+
+#### `GET /api/v1/auth/connections?status=NOT_INVITED&limit=50&offset=0`
+Response `200 ConnectionOverview`:
+```json
+{
+  "summary": { "apartments": 60, "connected": 34, "by_status": { "CONNECTED": 34, "INVITED": 12, "NOT_INVITED": 14 } },
+  "matching": 14,
+  "items": [
+    { "apartment_id": "uuid", "apartment_number": "14", "entrance": 2, "status": "NOT_INVITED", "owners": 0, "tenants": 0, "on_paper": false, "last_invited_at": null, "invitation_delivery": null }
+  ]
+}
+```
+- **One item per apartment,** in the order of the apartment list (entrance, then the natural order
+  of the numbers). `owners` and `tenants` count the active `OWNER` and `TENANT` memberships
+  of active accounts (family members are not counted).
+- **`status`,** the first that applies:
+  - `CONNECTED`: an active owner;
+  - `JOIN_REQUEST`: a join request waits for the chairman (task R4c; never returned before it);
+  - `INVITED`: an `OWNER` invitation is pending;
+  - `CODE_ISSUED`: an unused join code (task R4c; never returned before it);
+  - `TENANT_ONLY`: only tenants are active, so nobody there can invite or vote;
+  - `PAPER`: marked by the chairman as worked on paper (below);
+  - `EXPIRED`: the newest `OWNER` invitation ran out unused (until the clean-up deletes it, 30
+    days after it expired, docs/SCHEMA.md 7; then `NOT_INVITED`);
+  - `NOT_INVITED`: none of these (also after an invitation was deleted, or a membership ended).
+- **`last_invited_at`:** the latest time an e-mail of any `OWNER` invitation of the apartment went
+  out (an invitation whose first e-mail is still queued counts with the time it was created;
+  `null`: none). **`invitation_delivery`:** of the pending `OWNER` invitation, if
+  there is one: `QUEUED` while its e-mail waits in the queue, else `SENT`; `null` without one. So
+  invitations that could not be sent yet are visible.
+- **`on_paper`:** the chairman's mark; it stays when the apartment connects later, but
+  `CONNECTED`, `INVITED` and `TENANT_ONLY` come first.
+- **`summary`** counts every apartment of the building, whatever the filter: `apartments`, the
+  number `connected`, and `by_status` with each status that occurs. **`matching`** is the number of
+  items the filter selects, for paging.
+- **Filters:** `status` (optional; one status). `limit` 1..500 (default 50), `offset` 0..100000.
+- Errors: `403 FORBIDDEN`, `422 VALIDATION_ERROR`.
+
+#### `PUT /api/v1/auth/connections/{apartment_id}/paper`
+The chairman marks an apartment as worked on paper (the chairman or the accountant enters its
+readings), or takes the mark away. Request `{"on_paper": true}`. Response `200` with the item of
+that apartment, as in the list. Errors: `403 FORBIDDEN`, `404 APARTMENT_NOT_FOUND` (not in the
+caller's building), `422 VALIDATION_ERROR`.
+
 ### First chairman of a new installation
 An operator command, not an endpoint: `uv run python -m src.modules.auth create-chairman --email
 chair@example.com`.

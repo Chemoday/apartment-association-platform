@@ -54,6 +54,7 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `floor` | `INTEGER` | `NOT NULL, DEFAULT 1` | Floor number |
 | `riser_group` | `VARCHAR(50)` | `NULLABLE` | Plumbing riser identifier |
 | `area_m2` | `NUMERIC(8, 2)` | `NOT NULL` | Heated area in m² (prepared for Phase 2 Billing) |
+| `on_paper` | `BOOLEAN` | `NOT NULL, DEFAULT false` | Marked by the chairman as worked on paper (epic E13 R4b, migration 033); shown in the connection overview (docs/API.md 7) and set through `PropertyService.set_on_paper` |
 | `UNIQUE` | `(building_id, number)` | | Unique apartment number per building |
 
 ### Table: `property_memberships`
