@@ -13,7 +13,7 @@ import asyncio
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TextIO
+from typing import BinaryIO, TextIO
 
 from src.core.config import Settings, get_settings
 from src.core.database import transaction
@@ -31,7 +31,13 @@ from src.core.filling.draft import (
 )
 from src.core.filling.layout import check_layout
 from src.core.filling.service import FillingRefused, filling_target, lay_out
-from src.core.filling.template import TemplateError, read_template, write_template
+from src.core.filling.template import (
+    MAX_FILE_BYTES,
+    TemplateError,
+    read_template,
+    write_template,
+)
+from src.core.telemetry import configure_logging
 from src.modules.property.registry import BuildingRegistryService
 from src.plugins.registry import (
     RegistryBuildingNotFound,
@@ -40,6 +46,18 @@ from src.plugins.registry import (
 )
 
 NO_REGISTER_BLOCK = object()  # the building has no block and no code was given
+
+
+def _read_capped(path: Path) -> bytes:
+    """At most one byte more than a template may have, so a huge file is never loaded."""
+    with path.open("rb") as file:
+        return file.read(MAX_FILE_BYTES + 1)
+
+
+def configure_cli_logging(settings: Settings) -> None:
+    """Logs of the commands go to standard error, never standard output: with `--out -` the
+    standard output is the template itself, and a log line in it would break the file."""
+    configure_logging(level=settings.LOG_LEVEL, json_logs=settings.LOG_JSON, stream=sys.stderr)
 
 
 def _write_new(path: Path, text: str) -> None:
@@ -86,15 +104,17 @@ async def building_template(
     session_factory: SessionFactory,
     settings: Settings,
     *,
-    out_path: Path,
+    out_path: Path | None,
     from_register_code: str | None | object,
     apartments: int | None,
     entrances: str | None,
     meters: str,
     building_meters: bool,
     out: TextIO,
+    template_out: TextIO | None = None,
 ) -> int:
-    """Returns the exit code (docs/API.md section 1, `building-template`)."""
+    """Returns the exit code (docs/API.md section 1, `building-template`). `out_path` None
+    writes the template to `template_out` (`--out -`); the messages always go to `out`."""
     try:
         meter_spec = parse_meters(meters)
     except DraftError as error:
@@ -103,7 +123,7 @@ async def building_template(
     try:
         async with session_factory() as session, transaction(session):
             target = await filling_target(session)
-            if await asyncio.to_thread(out_path.exists):
+            if out_path is not None and await asyncio.to_thread(out_path.exists):
                 raise _Exit(1, f"{out_path} exists already; give another --out")
             if apartments is not None:
                 try:
@@ -128,7 +148,10 @@ async def building_template(
                 raise _Exit(2, f"--entrances {error}") from None
             rows = template_rows(draft, entrance_of, meter_spec, building_meters)
             try:
-                await asyncio.to_thread(_write_new, out_path, write_template(rows))
+                if out_path is None:
+                    (template_out or sys.stdout).write(write_template(rows))
+                else:
+                    await asyncio.to_thread(_write_new, out_path, write_template(rows))
             except FileExistsError:
                 raise _Exit(1, f"{out_path} exists already; give another --out") from None
     except FillingRefused as refused:
@@ -139,7 +162,7 @@ async def building_template(
         return stop.code
     apartment_rows = sum(1 for row in rows if row.cells.get("apartment"))
     print(
-        f"template {out_path} written: {len(draft)} apartments, {len(rows)} meters "
+        f"template {out_path or '-'} written: {len(draft)} apartments, {len(rows)} meters "
         f"({apartment_rows} apartment, {len(rows) - apartment_rows} building)",
         file=out,
     )
@@ -149,11 +172,20 @@ async def building_template(
 
 
 async def import_building(
-    session_factory: SessionFactory, *, file_path: Path, dry_run: bool, out: TextIO
+    session_factory: SessionFactory,
+    *,
+    file_path: Path | None,
+    dry_run: bool,
+    out: TextIO,
+    stdin: BinaryIO | None = None,
 ) -> int:
-    """Returns the exit code (docs/API.md section 1, `import-building`)."""
+    """Returns the exit code (docs/API.md section 1, `import-building`). `file_path` None
+    reads the template from `stdin` (`--file -`)."""
     try:
-        data = await asyncio.to_thread(file_path.read_bytes)
+        if file_path is None:
+            data = await asyncio.to_thread((stdin or sys.stdin.buffer).read, MAX_FILE_BYTES + 1)
+        else:
+            data = await asyncio.to_thread(_read_capped, file_path)
     except OSError:
         print("error: --file cannot be read", file=out)
         return 2
@@ -194,7 +226,7 @@ def main(
     parser = argparse.ArgumentParser(prog="python -m src.core.filling")
     commands = parser.add_subparsers(dest="command", required=True)
     template = commands.add_parser("building-template", help="write the building template")
-    template.add_argument("--out", required=True, type=Path)
+    template.add_argument("--out", required=True, help="a new file, or - for standard output")
     source = template.add_mutually_exclusive_group(required=True)
     source.add_argument("--from-register", nargs="?", const=NO_REGISTER_BLOCK, default=None)
     source.add_argument("--apartments", type=int)
@@ -202,9 +234,11 @@ def main(
     template.add_argument("--meters", default=DEFAULT_METERS)
     template.add_argument("--no-building-meters", action="store_true")
     importer = commands.add_parser("import-building", help="lay the building out from a file")
-    importer.add_argument("--file", required=True, type=Path)
+    importer.add_argument("--file", required=True, help="the filled template, or - for stdin")
     importer.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    settings = get_settings()
+    configure_cli_logging(settings)
 
     if session_factory is None:
         from src.core.database import async_session_factory
@@ -216,18 +250,25 @@ def main(
         return asyncio.run(
             building_template(
                 factory,
-                get_settings(),
-                out_path=args.out,
+                settings,
+                out_path=None if args.out == "-" else Path(args.out),
                 from_register_code=args.from_register,
                 apartments=args.apartments,
                 entrances=args.entrances,
                 meters=args.meters,
                 building_meters=not args.no_building_meters,
-                out=sys.stdout,
+                # With --out - the template is the standard output, so the messages move aside.
+                out=sys.stderr if args.out == "-" else sys.stdout,
+                template_out=sys.stdout,
             )
         )
     return asyncio.run(
-        import_building(factory, file_path=args.file, dry_run=args.dry_run, out=sys.stdout)
+        import_building(
+            factory,
+            file_path=None if args.file == "-" else Path(args.file),
+            dry_run=args.dry_run,
+            out=sys.stdout,
+        )
     )
 
 

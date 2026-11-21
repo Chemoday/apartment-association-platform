@@ -9,11 +9,17 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import Settings, get_settings
-from src.core.filling.__main__ import NO_REGISTER_BLOCK, building_template, import_building
+from src.core.filling.__main__ import (
+    NO_REGISTER_BLOCK,
+    building_template,
+    configure_cli_logging,
+    import_building,
+)
 from src.core.filling.draft import (
     DraftError,
     from_count,
@@ -25,6 +31,7 @@ from src.core.filling.draft import (
 from src.core.filling.layout import COLUMNS, RowInput, check_layout, unguard
 from src.core.filling.template import TemplateError, TemplateRow, read_template, write_template
 from src.core.instance import InstanceRecord
+from src.core.telemetry import configure_logging
 from src.modules.meters.models import MeterDevice
 from src.modules.meters.schemas import MeterUnit, ResourceType
 from src.modules.property.models import Apartment, Building, BuildingRegistryRecord
@@ -486,3 +493,104 @@ async def test_a_demo_installation_is_never_filled(db_session: AsyncSession, tmp
     code, printed = await importing(db_session, path)
 
     assert code == 1 and "not marked as a real one" in printed
+
+
+async def test_the_template_can_go_through_standard_output_and_input(
+    db_session: AsyncSession, real_installation
+) -> None:
+    """--out - and --file -: how the installer runs the commands inside the backend container."""
+    await create_building(db_session)
+    await db_session.commit()
+    messages, template_text = io.StringIO(), io.StringIO()
+
+    code = await building_template(
+        factory_of(db_session), get_settings(), out_path=None, out=messages,
+        template_out=template_text, from_register_code=None, apartments=1, entrances=None,
+        meters="COLD_WATER", building_meters=False,
+    )  # fmt: skip
+
+    assert code == 0
+    assert messages.getvalue().startswith("template - written: 1 apartments")
+    filled = template_text.getvalue().replace("1;1;;;COLD_WATER", "1;1;;40;COLD_WATER")
+    printed = io.StringIO()
+    code = await import_building(
+        factory_of(db_session), file_path=None, dry_run=True, out=printed,
+        stdin=io.BytesIO(filled.encode("utf-8")),
+    )  # fmt: skip
+    assert (code, printed.getvalue()) == (
+        0,
+        "checked: 1 apartments, 1 apartment meters, 0 building meters, 0 areas rounded\n",
+    )
+
+
+def test_one_row_reports_all_its_problems() -> None:
+    _, problems = check_layout(
+        rows(apartment("9"), apartment("1", entrance="", resource="WATER", initial_value="x"))
+    )
+
+    assert [(p.ref, p.column) for p in problems] == [
+        (3, "entrance"),
+        (3, "resource"),
+        (3, "initial_value"),
+    ]
+
+
+def test_the_logs_of_the_commands_never_reach_the_standard_output(capsys) -> None:
+    """With --out - the standard output is the template: a log line there breaks the file."""
+    try:
+        configure_cli_logging(get_settings())
+        structlog.get_logger("src.modules.property.registry").info("registry_proposal_fetched")
+        captured = capsys.readouterr()
+    finally:
+        configure_logging(level="INFO", json_logs=True)
+
+    assert captured.out == ""
+    assert "registry_proposal_fetched" in captured.err
+
+
+async def test_a_huge_file_is_never_read_whole(
+    db_session: AsyncSession, real_installation, tmp_path: Path
+) -> None:
+    path = tmp_path / "huge.csv"
+    with path.open("wb") as file:
+        file.truncate(6 * 1024 * 1024)
+
+    code, printed = await importing(db_session, path)
+
+    assert (code, printed) == (2, "error: the file is larger than 5 MB\n")
+
+
+def test_main_keeps_its_logs_and_messages_off_the_template_output(capsys, monkeypatch) -> None:
+    """The blocker of the first review: main() itself must route every log line to stderr."""
+    from src.core.filling import __main__ as cli
+    from src.core.filling.service import FillingRefused
+
+    async def refuse(session):
+        structlog.get_logger("src.modules.property.registry").info("registry_proposal_fetched")
+        raise FillingRefused("refused")
+
+    class _Session:  # what transaction() touches when the work fails
+        info: dict = {}
+
+        async def rollback(self) -> None: ...
+
+        async def commit(self) -> None: ...
+
+    @asynccontextmanager
+    async def no_session():
+        yield _Session()
+
+    monkeypatch.setattr(cli, "filling_target", refuse)
+    try:
+        code = cli.main(
+            ["building-template", "--out", "-", "--apartments", "2"],
+            session_factory=lambda: no_session,
+        )
+        captured = capsys.readouterr()
+    finally:
+        configure_logging(level="INFO", json_logs=True)
+
+    assert code == 1
+    assert captured.out == ""
+    assert "registry_proposal_fetched" in captured.err
+    assert "error: refused" in captured.err

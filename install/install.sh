@@ -538,6 +538,7 @@ ask_building() {
         return 0
     fi
     BUILDING_KNOWN=false
+    BUILDING_CODE=""  # the register's code of the building the lookup found (for the template)
     if ! $YES; then
         say ""
         say "3. The building. Its address is looked up in the public building register."
@@ -584,7 +585,10 @@ ask_building() {
                 fi
             done
         fi
-        [[ -n "$chosen" ]] && BUILDING_ADDRESS=${addresses[$chosen]}
+        if [[ -n "$chosen" ]]; then
+            BUILDING_ADDRESS=${addresses[$chosen]}
+            BUILDING_CODE=${codes[$chosen]}
+        fi
         log_line "building lookup ok"
     else
         case $status in
@@ -892,6 +896,38 @@ create_building() {
     touch "$SITE_DIR/.building-done"
 }
 
+# The building template, prefilled from the register when the lookup found the building
+# (docs/API.md section 1, "Filling the building of a new installation"). Never overwritten.
+TEMPLATE_FILE=""
+write_building_template() {
+    [[ "$MODE" == real ]] || return 0
+    $BUILDING_KNOWN && return 0
+    [[ -n "${BUILDING_CODE:-}" ]] || return 0
+    local file="$SITE_DIR/building-template.csv" status=0
+    [[ -e "$file" ]] && return 0
+    # The template is the standard output; the command's messages (no personal data: counts,
+    # parts of the building it left out, errors) are its standard error.
+    in_backend src.core.filling building-template --out - --from-register "$BUILDING_CODE" \
+        > "$file.new" 2> "$file.err" || status=$?
+    if [[ $status -eq 0 && -s "$file.new" ]]; then
+        chmod 644 "$file.new"
+        mv "$file.new" "$file"
+        TEMPLATE_FILE=$file
+        local line
+        while IFS= read -r line; do
+            say "   $line"
+        done < <(grep '^left out: ' "$file.err" || true)
+        log_line "building template written"
+    else
+        rm -f "$file.new"
+        local reason
+        reason=$(grep '^error: ' "$file.err" | tail -n 1 || true)
+        say "note: the building template was not written${reason:+ (${reason#error: })}."
+        log_line "building template failed status=$status"
+    fi
+    rm -f "$file.err"
+}
+
 CHAIRMAN_LINK=""
 CHAIRMAN_MAILED=false
 invite_chairman() {
@@ -930,7 +966,20 @@ finish() {
         say ""
         say "Next steps:"
         say "  1. The chairman opens the link and sets a password."
-        say "  2. The chairman checks the building's details and adds the apartments and meters."
+        local template=${TEMPLATE_FILE:-$SITE_DIR/building-template.csv}
+        if [[ -n "$TEMPLATE_FILE" ]]; then
+            say "  2. The apartments: $template holds those of the register. Fill in the entrances and"
+            say "     the meters (a spreadsheet opens it), then check and import it:"
+        elif [[ -e "$template" ]]; then
+            # A re-run: never print a command that would write over the chairman's work.
+            say "  2. The apartments: fill in $template if not done yet, then check and import it:"
+        else
+            say "  2. The apartments: write a template for <N> apartments (or --from-register <the code"
+            say "     find-building gives>), fill it in, then check and import it:"
+            say "     docker exec $BACKEND python -m src.core.filling building-template --out - --apartments <N> > $template"
+        fi
+        say "     docker exec -i $BACKEND python -m src.core.filling import-building --file - --dry-run < $template"
+        say "     (the same without --dry-run imports it; docs/API.md section 1, \"Filling the building\")"
         [[ -n "$SMTP_HOST" ]] || say "  3. Set the e-mail (run bash $AAP_ROOT/bin/install.sh again) so residents get their invitations."
     fi
     say "  Updates: bash $AAP_ROOT/bin/update.sh (the latest version; read its release notes first)."
@@ -980,6 +1029,7 @@ main() {
     deploy_release
     install_bin
     create_building
+    write_building_template
     invite_chairman
     log_line "done"
     finish
