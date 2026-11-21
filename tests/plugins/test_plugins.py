@@ -36,6 +36,7 @@ def row(**overrides) -> ReadingExportRow:
         "source": "RESIDENT",
         "is_anomaly_confirmed": False,
         "recorded_at": datetime(2026, 10, 25, 10, 0, tzinfo=UTC),
+        "previous_origin": "HISTORY",
     }
     values.update(overrides)
     return ReadingExportRow(**values)
@@ -54,6 +55,7 @@ def test_csv_has_bom_header_and_canonical_values() -> None:
     assert parsed[1] == [
         "2026-10", "2", "14", str(uuid.UUID(int=1)), "COLD_WATER", "SN-1", "Bathroom", "m3",
         "115.000", "120.000", "5.000", "RESIDENT", "false", "2026-10-25T10:00:00+00:00",
+        "HISTORY",
     ]  # fmt: skip
     assert parsed[2][1:3] == ["", "MASTER"]
     assert parsed[2][12] == "true"

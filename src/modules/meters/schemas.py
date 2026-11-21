@@ -62,6 +62,15 @@ class ReadingSource(StrEnum):
     IOT_WEBHOOK = "IOT_WEBHOOK"
 
 
+class PreviousOrigin(StrEnum):
+    """Where a reading's previous_value came from (epic E13 R3b, docs/API.md section 2)."""
+
+    HISTORY = "HISTORY"  # the reading of an earlier period
+    INITIAL = "INITIAL"  # the meter's initial value
+    SUBMITTED = "SUBMITTED"  # given with the first reading of a meter without a start
+    START = "START"  # the reading started the meter: previous_value == value, no consumption
+
+
 # ASCII digits only, at most 9 integer digits and 3 decimals: no exponents, signs, separators
 # ("1_000"), commas or non-ASCII digits that Python's Decimal would otherwise accept.
 _METER_VALUE_TEXT = re.compile(r"[0-9]{1,9}(\.[0-9]{1,3})?")
@@ -127,6 +136,9 @@ class ReadingSubmitRequest(BaseModel):
     meter_id: uuid.UUID
     period_code: PeriodCode
     value: MeterValue
+    # Only for a meter without a start (no initial value, no earlier reading): the reading of
+    # the last bill. Any other meter refuses it (422 PREVIOUS_VALUE_NOT_ALLOWED).
+    previous_value: MeterValue | None = None
     # docs/API.md: 0 -> popup #1, 1 -> popup #2, >= 2 -> save as a confirmed anomaly.
     # Strict: true, "2" and 1.0 are not confirmation levels.
     confirmation_level: StrictInt = Field(default=0, ge=0, le=100)
@@ -165,6 +177,7 @@ class ReadingSummary(BaseModel):
     consumption_delta: MeterAmount
     source: ReadingSource
     is_anomaly_confirmed: bool
+    previous_origin: PreviousOrigin
 
 
 class ReadingResponse(BaseModel):
@@ -175,6 +188,7 @@ class ReadingResponse(BaseModel):
     consumption_delta: MeterAmount
     source: ReadingSource
     is_anomaly_confirmed: bool
+    previous_origin: PreviousOrigin
 
 
 APARTMENT_HISTORY_PERIODS = 24  # periods in GET /meters/apartments/{id}/readings
@@ -187,12 +201,13 @@ class ApartmentReading(BaseModel):
     consumption_delta: MeterAmount
     source: ReadingSource
     is_anomaly_confirmed: bool
+    previous_origin: PreviousOrigin
 
 
 class ApartmentMeterHistory(BaseModel):
     meter_id: uuid.UUID
     resource_type: ResourceType
-    serial_number: str
+    serial_number: str | None  # None until set (optional since epic E13 R3)
     location_label: str
     unit: MeterUnit
     is_active: bool
@@ -274,7 +289,9 @@ class NextSubmission(BaseModel):
     # A late reading for the previous month: the resident cannot change it afterwards.
     final: bool
     # The form's floor and hints, against this period (the shown period may be another one).
-    previous_value: MeterAmount
+    # None with needs_start: the meter has no start before this period and no reading in it.
+    previous_value: MeterAmount | None
+    needs_start: bool
     average_delta: MeterAmount | None
     reading: ReadingSummary | None  # what the user already submitted for this period
 
@@ -282,10 +299,12 @@ class NextSubmission(BaseModel):
 class DashboardMeter(BaseModel):
     meter_id: uuid.UUID
     resource_type: ResourceType
-    serial_number: str
+    serial_number: str | None  # None until set (optional since epic E13 R3)
     location_label: str
     unit: MeterUnit
-    previous_value: MeterAmount
+    previous_value: MeterAmount | None  # None with needs_start and no reading yet
+    # No initial value and no reading before the shown period (epic E13 R3b).
+    needs_start: bool
     # Hints before submitting: the anomaly check's 3-period average and last period's consumption.
     average_delta: MeterAmount | None
     previous_delta: MeterAmount | None
@@ -331,7 +350,8 @@ class MasterMeterRow(BaseModel):
     resource_type: ResourceType
     location_label: str
     unit: MeterUnit
-    previous_value: MeterAmount
+    previous_value: MeterAmount | None  # None with needs_start and no reading yet
+    needs_start: bool
     status: SubmissionStatus
     reading: ReadingSummary | None
 
@@ -342,6 +362,8 @@ class ResourceBalance(BaseModel):
     master_total: MeterAmount | None  # None while any master meter of this type has no reading
     apartments_sum: MeterAmount
     unallocated_loss: MeterAmount | None
+    # Apartment meters of this kind whose reading in the period started them (counted as 0).
+    starting_meters: int
 
 
 class MatrixResponse(BaseModel):
@@ -363,6 +385,8 @@ class EstimateResponse(BaseModel):
     period_code: str
     estimated_count: int
     estimated: list[EstimatedReading]
+    # Meters without a start cannot be estimated (epic E13 R3b).
+    skipped_without_start: list[uuid.UUID]
 
 
 class PeriodStatusUpdateRequest(BaseModel):

@@ -56,7 +56,13 @@ from src.modules.maintenance.policies import add_months
 from src.modules.maintenance.schemas import LogKind, OccurrenceStatus, PeriodUnit, TaskStatus
 from src.modules.meters.models import MeterDevice, MeterReading, MeterReadingLog, ReadingPeriod
 from src.modules.meters.policies import period_due_date
-from src.modules.meters.schemas import MeterUnit, PeriodStatus, ReadingSource, ResourceType
+from src.modules.meters.schemas import (
+    MeterUnit,
+    PeriodStatus,
+    PreviousOrigin,
+    ReadingSource,
+    ResourceType,
+)
 from src.modules.property.models import Apartment, ApartmentMembership, Building, User
 from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType
 
@@ -228,6 +234,7 @@ class _Builder:
         self.apartments: dict[str, Apartment] = {}
         self.periods: dict[str, ReadingPeriod] = {}
         self.last_value: dict[uuid.UUID, Decimal] = {}
+        self.has_reading: set[uuid.UUID] = set()  # meters whose next reading follows another
 
     def add(self, *rows: object) -> None:
         self.rows.extend(rows)
@@ -370,6 +377,9 @@ class _Builder:
             period_id=period.id,
             value=value,
             previous_value=previous,
+            previous_origin=(
+                PreviousOrigin.HISTORY if meter.id in self.has_reading else PreviousOrigin.INITIAL
+            ),
             consumption_delta=delta,
             source=source,
             is_anomaly_confirmed=anomaly,
@@ -400,6 +410,7 @@ class _Builder:
                 )
             )
         self.last_value[meter.id] = value
+        self.has_reading.add(meter.id)
         return reading
 
     # --- communication ---

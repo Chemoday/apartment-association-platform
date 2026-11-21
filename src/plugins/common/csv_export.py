@@ -22,6 +22,7 @@ COLUMNS = (
     "source",
     "is_anomaly_confirmed",
     "recorded_at",
+    "previous_origin",
 )
 MASTER_METER_LABEL = "MASTER"
 
@@ -42,7 +43,7 @@ def _cells(row: ReadingExportRow) -> list[object]:
         neutralize_formula(row.apartment_number or MASTER_METER_LABEL),
         row.meter_id,
         row.resource_type,
-        neutralize_formula(row.serial_number),
+        neutralize_formula(row.serial_number or ""),
         neutralize_formula(row.location_label),
         row.unit,
         row.previous_value,
@@ -51,6 +52,7 @@ def _cells(row: ReadingExportRow) -> list[object]:
         row.source,
         "true" if row.is_anomaly_confirmed else "false",
         row.recorded_at.isoformat(),
+        row.previous_origin,
     ]
 
 

@@ -71,7 +71,7 @@ async def test_device_server_defaults(db_session: AsyncSession, setup) -> None:
 
     assert meter.location_label == "Main"
     assert meter.unit == MeterUnit.M3
-    assert meter.initial_value == D("0.000")
+    assert meter.initial_value is None  # no known start (epic E13 R3b)
     assert meter.max_monthly_delta == D("25.000")
     assert meter.is_active is True
 
@@ -186,6 +186,9 @@ async def test_stored_delta_must_match_the_values(db_session: AsyncSession, setu
             "ck_meters_readings_previous_value_non_negative",
         ),
         ("source = 'GUESS'", "ck_meters_readings_source"),
+        ("previous_origin = 'GUESS'", "ck_meters_readings_previous_origin"),
+        # A start has no consumption: its previous value is its own value (epic E13 R3b).
+        ("previous_origin = 'START'", "ck_meters_readings_start_without_consumption"),
     ],
 )
 async def test_reading_constraints(
@@ -256,8 +259,8 @@ async def test_reading_cannot_join_a_meter_and_a_period_of_different_buildings(
     await expect_rejected(
         db_session,
         "INSERT INTO meters_readings (id, building_id, meter_id, period_id, value, previous_value,"
-        " consumption_delta, source) VALUES (gen_random_uuid(), :building, :meter, :period,"
-        " 125, 120, 5, 'RESIDENT')",
+        " consumption_delta, source, previous_origin) VALUES (gen_random_uuid(), :building,"
+        " :meter, :period, 125, 120, 5, 'RESIDENT', 'HISTORY')",
         params,
         match="fk_meters_readings_period_building",
     )
@@ -274,8 +277,8 @@ async def test_reading_building_must_be_the_meters_building(
     await expect_rejected(
         db_session,
         "INSERT INTO meters_readings (id, building_id, meter_id, period_id, value, previous_value,"
-        " consumption_delta, source) VALUES (gen_random_uuid(), :building, :meter, :period,"
-        " 125, 120, 5, 'RESIDENT')",
+        " consumption_delta, source, previous_origin) VALUES (gen_random_uuid(), :building,"
+        " :meter, :period, 125, 120, 5, 'RESIDENT', 'HISTORY')",
         params,
         match="fk_meters_readings_meter_building",
     )

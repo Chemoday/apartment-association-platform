@@ -33,7 +33,7 @@ class ReadingExportRow:
     apartment_number: str | None  # None for a Building Master Meter
     meter_id: uuid.UUID
     resource_type: str
-    serial_number: str
+    serial_number: str | None  # None until set (optional since epic E13 R3)
     location_label: str
     unit: str
     previous_value: Decimal
@@ -42,6 +42,8 @@ class ReadingExportRow:
     source: str
     is_anomaly_confirmed: bool
     recorded_at: datetime
+    # Where previous_value came from: HISTORY, INITIAL, SUBMITTED or START (epic E13 R3b).
+    previous_origin: str
 
 
 class ReadingExporter(Protocol):
