@@ -5,8 +5,10 @@ role. No account exists until it is accepted: a new person registers through the
 with an account signs in and accepts. Nothing here tells an inviter whether an e-mail has an
 account: every invitation answers the same and sends the same e-mail.
 
-E-mails are returned as AuthMail values and sent by detached work after the commit, so the plain
-token lives only in memory. Nothing personal is logged.
+Invitation e-mails go through the queue (epic E13 R4a, src/modules/auth/queue.py): an invitation
+is stored with its e-mail due, and the link is made only when the queue sends it (claim_due), so
+the plain token lives only in memory. The e-mails of resend_for_sign_in and of the first chairman
+are returned as AuthMail values and sent right after the commit. Nothing personal is logged.
 """
 
 import secrets
@@ -15,26 +17,32 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, delete, func, select, text
+from sqlalchemy import and_, delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import Settings
 from src.core.exceptions import DomainError
+from src.modules.auth.bulk import BulkListTooLong, ParsedRow, parse_bulk_list
 from src.modules.auth.errors import (
     apartment_not_found,
+    bulk_list_too_long,
     conflict,
     forbidden,
     invalid_link,
     invitation_not_found,
+    locale_not_offered,
     rate_limited,
 )
 from src.modules.auth.mail import AuthMail, invitation_target
 from src.modules.auth.models import AuthAttempt, AuthInvitation, AuthToken
 from src.modules.auth.policies import (
     INVITATION_RETENTION,
+    INVITATION_RETRY_LAST,
+    INVITATION_SEND_LEASE,
     INVITATION_TTL,
     INVITATIONS_PER_INVITER_PER_HOUR,
     REGISTRATION_TTL,
+    invitation_retry_delay,
     invitation_status,
     keyed_hash,
     mask_email,
@@ -45,7 +53,11 @@ from src.modules.auth.policies import (
 from src.modules.auth.schemas import (
     AttemptKind,
     AuthMethod,
+    BulkInvitationReport,
+    BulkInvitationRow,
+    BulkRowOutcome,
     InvitationCreate,
+    InvitationDelivery,
     InvitationKind,
     InvitationPreview,
     InvitationStatus,
@@ -65,17 +77,34 @@ from src.modules.property.schemas import (
     BuildingRole,
     CurrentUserDTO,
     DisplayMode,
+    Locale,
     RelationType,
 )
 from src.modules.property.service import PropertyService
 
 HOUR = timedelta(hours=1)
+DAY = timedelta(hours=24)
 TOKEN_BYTES = 32
+# The building limit of bulk invitations (E13 R4a): this many per apartment in any 24 hours.
+BULK_INVITATIONS_PER_APARTMENT_PER_DAY = 2
+# What the INVITATION_MAIL attempts of the queue's pacing count: the whole installation.
+QUEUE_SUBJECT = "queue:invitation-mails"
 _RELATION = {InvitationKind.OWNER: RelationType.OWNER, InvitationKind.TENANT: RelationType.TENANT}
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+@dataclass(frozen=True)
+class QueuedMail:
+    """A claimed e-mail of the invitation queue; `mail` holds the plain link, memory only."""
+
+    invitation_id: uuid.UUID
+    attempt: int
+    lease: datetime
+    expires_at: datetime
+    mail: AuthMail
 
 
 @dataclass(frozen=True)
@@ -118,13 +147,15 @@ class InvitationService:
 
     # --- Creating, resending, deleting ----------------------------------------------------------
 
-    async def create(
-        self, caller: CurrentUserDTO, body: InvitationCreate
-    ) -> tuple[InvitationView, AuthMail]:
-        """Invite someone (201). The answer is the same whether the e-mail has an account."""
+    def offered_locales(self) -> frozenset[str]:
+        """The languages a first invitation may be written in: the default and en."""
+        return frozenset({self.settings.DEFAULT_LOCALE, Locale.EN.value})
+
+    async def create(self, caller: CurrentUserDTO, body: InvitationCreate) -> InvitationView:
+        """Invite someone (201); the e-mail is queued. The answer is the same whether the
+        e-mail has an account."""
         now = _now()
         apartment_id: uuid.UUID | None = None
-        apartment_number: str | None = None
         if isinstance(body, OwnerInvitationCreate | StaffInvitationCreate):
             if caller.building_role != BuildingRole.CHAIRMAN:
                 raise forbidden()
@@ -134,36 +165,38 @@ class InvitationService:
             )
             if apartment is None:
                 raise apartment_not_found()
-            apartment_id, apartment_number = apartment.apartment_id, apartment.number
+            apartment_id = apartment.apartment_id
         elif isinstance(body, TenantInvitationCreate):
             apartment = await self.properties.apartment_ref(body.apartment_id)
             if apartment is None or apartment.building_id != caller.building_id:
                 raise apartment_not_found()
             if not await self.properties.is_owner_of(caller.id, apartment.apartment_id):
                 raise forbidden()
-            apartment_id, apartment_number = apartment.apartment_id, apartment.number
+            apartment_id = apartment.apartment_id
+        if body.locale is not None and body.locale.value not in self.offered_locales():
+            raise locale_not_offered()  # after the checks of who may invite
         building_role = body.building_role if isinstance(body, StaffInvitationCreate) else None
         return await self._invite(
             caller,
             kind=body.kind,
             email=body.email,
             apartment_id=apartment_id,
-            apartment_number=apartment_number,
             building_role=building_role,
+            locale=body.locale,
             now=now,
         )
 
     async def invite_tenant(
-        self, caller: CurrentUserDTO, apartment_id: uuid.UUID, apartment_number: str, email: str
-    ) -> tuple[InvitationView, AuthMail]:
+        self, caller: CurrentUserDTO, apartment_id: uuid.UUID, email: str
+    ) -> InvitationView:
         """A TENANT invitation whose caller is already known to own the apartment (replace)."""
         return await self._invite(
             caller,
             kind=InvitationKind.TENANT,
             email=email,
             apartment_id=apartment_id,
-            apartment_number=apartment_number,
             building_role=None,
+            locale=None,
             now=_now(),
         )
 
@@ -174,12 +207,38 @@ class InvitationService:
         kind: InvitationKind,
         email: str,
         apartment_id: uuid.UUID | None,
-        apartment_number: str | None,
         building_role: StaffRole | None,
+        locale: Locale | None,
         now: datetime,
-    ) -> tuple[InvitationView, AuthMail]:
+    ) -> InvitationView:
         await self.properties.lock_people(caller.building_id)  # the one lock order, see there
         await self._check_limit(caller.id, now)
+        invitation = await self._open(
+            caller,
+            kind=kind,
+            email=email,
+            apartment_id=apartment_id,
+            building_role=building_role,
+            locale=locale,
+            now=now,
+        )
+        self._record_send(caller.id, now)
+        await self.session.flush()
+        return (await self._views([invitation], caller.id, now))[0]
+
+    async def _open(
+        self,
+        caller: CurrentUserDTO,
+        *,
+        kind: InvitationKind,
+        email: str,
+        apartment_id: uuid.UUID | None,
+        building_role: StaffRole | None,
+        locale: Locale | None,
+        now: datetime,
+    ) -> AuthInvitation:
+        """A new invitation with its e-mail queued, under the people lock the caller holds; an
+        expired or no longer valid one of the same target is replaced."""
         if apartment_id is not None:
             await self.properties.lock_apartment(apartment_id)
         # One request per target at a time (a double click, two chairmen), so the second one
@@ -228,19 +287,17 @@ class InvitationService:
             created_at=now,
             last_sent_at=now,
             expires_at=now + INVITATION_TTL,
+            locale=locale,
+            send_due_at=now,
+            send_attempts=0,
         )
         self.session.add(invitation)
         await self.session.flush()
-        token = await self._new_link(invitation, now)
-        self._record_send(caller.id, now)
-        await self.session.flush()
-        view = (await self._views([invitation], caller.id, now))[0]
-        return view, await self._mail(invitation, apartment_number, token)
+        return invitation
 
-    async def resend(
-        self, caller: CurrentUserDTO, invitation_id: uuid.UUID
-    ) -> tuple[InvitationView, AuthMail]:
-        """A new link for a pending or expired invitation; the 7 days start again."""
+    async def resend(self, caller: CurrentUserDTO, invitation_id: uuid.UUID) -> InvitationView:
+        """Queue a pending or expired invitation again: a new link when it goes out, and the 7
+        days start again."""
         now = _now()
         await self.properties.lock_people(caller.building_id)
         invitation = await self._visible_for_update(caller, invitation_id)
@@ -257,13 +314,19 @@ class InvitationService:
             # An expired invitation does not count toward the limit; a resent one does again.
             await self.properties.lock_apartment(invitation.apartment_id)
             await self._check_tenant_limit(invitation.apartment_id, now)
-        invitation.last_sent_at = now
-        invitation.expires_at = now + INVITATION_TTL
-        token = await self._new_link(invitation, now)
+        await self._drop_links(invitation.id)  # the old link stops working at once
+        self._queue(invitation, now)
         self._record_send(caller.id, now)
         await self.session.flush()
-        view = (await self._views([invitation], caller.id, now))[0]
-        return view, await self._mail(invitation, view.apartment_number, token)
+        return (await self._views([invitation], caller.id, now))[0]
+
+    @staticmethod
+    def _queue(invitation: AuthInvitation, now: datetime) -> None:
+        """Put the invitation's e-mail into the queue, due now; it is pending for 7 days from
+        now, and again from the moment the e-mail goes out."""
+        invitation.expires_at = now + INVITATION_TTL
+        invitation.send_due_at = now
+        invitation.send_attempts = 0
 
     async def delete(self, caller: CurrentUserDTO, invitation_id: uuid.UUID) -> None:
         await self.properties.lock_people(caller.building_id)
@@ -272,6 +335,268 @@ class InvitationService:
             raise self._accepted()
         await self.session.delete(invitation)  # its links cascade
         await self.session.flush()
+
+    # --- Bulk invitations and "resend expired" (E13 R4a) -----------------------------------------
+
+    async def bulk(
+        self, caller: CurrentUserDTO, list_text: str, *, send: bool
+    ) -> BulkInvitationReport:
+        """The preview (send=False, changes nothing) or the send of a bulk list of owners. The
+        send checks every row again and creates all READY rows in this transaction, or nothing
+        (429) when the building limit does not allow them all."""
+        if caller.building_role != BuildingRole.CHAIRMAN:
+            raise forbidden()
+        now = _now()
+        if send:
+            await self.properties.lock_people(caller.building_id)  # rows and limit stay put
+        apartments = {
+            a.number: a.id for a in await self.properties.list_apartments(caller.building_id)
+        }
+        limit = BULK_INVITATIONS_PER_APARTMENT_PER_DAY * len(apartments)
+        try:
+            parsed = parse_bulk_list(
+                list_text, max_rows=limit, offered_locales=self.offered_locales()
+            )
+        except BulkListTooLong:
+            raise bulk_list_too_long() from None
+        outcomes = await self._bulk_outcomes(caller, parsed, apartments, now)
+        used = await self._bulk_used(caller.building_id, now)
+        ready = [row for row, outcome in zip(parsed, outcomes, strict=True) if outcome is None]
+        remaining = max(limit - len(used), 0)
+        if send:
+            self._check_bulk_limit(used, len(ready), limit, now)
+            for row in ready:
+                assert row.email is not None and row.apartment_number is not None
+                await self._open(
+                    caller,
+                    kind=InvitationKind.OWNER,
+                    email=row.email,
+                    apartment_id=apartments[row.apartment_number],
+                    building_role=None,
+                    locale=Locale(row.locale) if row.locale else None,
+                    now=now,
+                )
+            self._record_bulk(caller.building_id, len(ready), now)
+            await self.session.flush()
+            remaining -= len(ready)
+        done = BulkRowOutcome.INVITED if send else BulkRowOutcome.READY
+        rows = [
+            BulkInvitationRow(
+                line=row.line,
+                apartment_number=row.apartment_number,
+                email=row.email,
+                locale=row.locale,
+                outcome=outcome or done,
+            )
+            for row, outcome in zip(parsed, outcomes, strict=True)
+        ]
+        counts: dict[BulkRowOutcome, int] = {}
+        for row_view in rows:
+            counts[row_view.outcome] = counts.get(row_view.outcome, 0) + 1
+        return BulkInvitationReport(rows=rows, counts=counts, limit_remaining=remaining)
+
+    async def _bulk_outcomes(
+        self,
+        caller: CurrentUserDTO,
+        parsed: list[ParsedRow],
+        apartments: dict[str, uuid.UUID],
+        now: datetime,
+    ) -> list[BulkRowOutcome | None]:
+        """The outcome of each row that is not READY, in the order of the contract."""
+        emails = {row.email for row in parsed if row.outcome is None and row.email}
+        open_rows = (
+            list(
+                await self.session.scalars(
+                    select(AuthInvitation).where(
+                        AuthInvitation.building_id == caller.building_id,
+                        AuthInvitation.kind == InvitationKind.OWNER,
+                        AuthInvitation.email.in_(emails),
+                        AuthInvitation.accepted_at.is_(None),
+                    )
+                )
+            )
+            if emails
+            else []
+        )
+        cache: dict[object, bool] = {}
+        pending = {
+            (invitation.email, invitation.apartment_id)
+            for invitation in open_rows
+            if await self._status(invitation, now, cache) == InvitationStatus.PENDING
+        }
+        seen: set[tuple[str, uuid.UUID]] = set()
+        outcomes: list[BulkRowOutcome | None] = []
+        for row in parsed:
+            if row.outcome is not None:
+                outcomes.append(row.outcome)
+                continue
+            assert row.email is not None and row.apartment_number is not None
+            apartment_id = apartments.get(row.apartment_number)
+            if apartment_id is None:
+                outcomes.append(BulkRowOutcome.APARTMENT_NOT_FOUND)
+            elif (row.email, apartment_id) in seen:
+                outcomes.append(BulkRowOutcome.DUPLICATE_IN_LIST)
+            elif (row.email, apartment_id) in pending:
+                seen.add((row.email, apartment_id))
+                outcomes.append(BulkRowOutcome.ALREADY_PENDING)
+            else:
+                seen.add((row.email, apartment_id))
+                outcomes.append(None)
+        return outcomes
+
+    async def resend_expired(self, caller: CurrentUserDTO) -> tuple[int, int]:
+        """Queue the expired OWNER and STAFF invitations of the building that still apply, oldest
+        first, as many as the building limit still allows; returns (queued, left). 429 when it
+        allows none."""
+        if caller.building_role != BuildingRole.CHAIRMAN:
+            raise forbidden()
+        now = _now()
+        await self.properties.lock_people(caller.building_id)
+        rows = list(
+            await self.session.scalars(
+                select(AuthInvitation)
+                .where(
+                    AuthInvitation.building_id == caller.building_id,
+                    AuthInvitation.kind.in_([InvitationKind.OWNER, InvitationKind.STAFF]),
+                    AuthInvitation.accepted_at.is_(None),
+                    AuthInvitation.expires_at <= now,
+                )
+                .order_by(AuthInvitation.created_at, AuthInvitation.id)
+                .with_for_update()
+            )
+        )
+        cache: dict[object, bool] = {}
+        expired = [row for row in rows if await self._applies(row, cache)]
+        apartments = len(await self.properties.list_apartments(caller.building_id))
+        limit = BULK_INVITATIONS_PER_APARTMENT_PER_DAY * apartments
+        used = await self._bulk_used(caller.building_id, now)
+        remaining = max(limit - len(used), 0)
+        if expired and remaining == 0:
+            self._check_bulk_limit(used, 1, limit, now)  # 429 until the oldest one ages out
+        chosen = expired[:remaining]
+        for invitation in chosen:
+            await self._drop_links(invitation.id)
+            self._queue(invitation, now)
+        self._record_bulk(caller.building_id, len(chosen), now)
+        await self.session.flush()
+        return len(chosen), len(expired) - len(chosen)
+
+    def _bulk_subject(self, building_id: uuid.UUID) -> str:
+        return self._hash(f"building:{building_id}")
+
+    async def _bulk_used(self, building_id: uuid.UUID, now: datetime) -> list[datetime]:
+        """When each invitation counted against the building limit in the last 24 hours."""
+        return list(
+            await self.session.scalars(
+                select(AuthAttempt.attempted_at)
+                .where(
+                    AuthAttempt.kind == AttemptKind.BULK_INVITATION,
+                    AuthAttempt.subject_hash == self._bulk_subject(building_id),
+                    AuthAttempt.attempted_at > now - DAY,
+                )
+                .order_by(AuthAttempt.attempted_at)
+            )
+        )
+
+    @staticmethod
+    def _check_bulk_limit(used: list[datetime], wanted: int, limit: int, now: datetime) -> None:
+        """429 when `wanted` more do not fit; Retry-After is when enough old ones have aged out."""
+        over = len(used) + wanted - limit
+        if wanted == 0 or over <= 0:
+            return
+        if over > len(used):  # more than the whole limit: never fits (the bulk row cap prevents it)
+            raise rate_limited(int(DAY.total_seconds()))
+        raise rate_limited(max(int((used[over - 1] + DAY - now).total_seconds()), 1))
+
+    def _record_bulk(self, building_id: uuid.UUID, count: int, now: datetime) -> None:
+        subject = self._bulk_subject(building_id)
+        self.session.add_all(
+            AuthAttempt(
+                kind=AttemptKind.BULK_INVITATION,
+                subject_hash=subject,
+                succeeded=True,
+                attempted_at=now,
+            )
+            for _ in range(count)
+        )
+
+    # --- The invitation queue (E13 R4a; docs/ARCHITECTURE.md 4.9) ------------------------------
+
+    async def claim_due(self, now: datetime, limit: int) -> tuple[list[QueuedMail], int]:
+        """Step 1 of a queue tick: claim up to `limit` due e-mails under a lease and make their
+        links; also how many due rows were looked at (a row that no longer applies is pushed back,
+        not claimed). The caller commits, then sends with no transaction open."""
+        rows = list(
+            await self.session.scalars(
+                select(AuthInvitation)
+                .where(
+                    AuthInvitation.send_due_at <= now,
+                    AuthInvitation.accepted_at.is_(None),
+                    AuthInvitation.expires_at > now,
+                )
+                .order_by(AuthInvitation.send_due_at, AuthInvitation.created_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        claimed = []
+        cache: dict[object, bool] = {}
+        for invitation in rows:
+            if not await self._applies(invitation, cache):
+                # It may apply again (a new chairman); never sent while it does not.
+                invitation.send_due_at = now + INVITATION_RETRY_LAST
+                continue
+            invitation.send_attempts += 1
+            invitation.send_due_at = now + INVITATION_SEND_LEASE
+            expires_at = now + INVITATION_TTL
+            token = await self._new_link(invitation, now, expires_at)
+            number = await self._apartment_number(invitation)
+            claimed.append(
+                QueuedMail(
+                    invitation_id=invitation.id,
+                    attempt=invitation.send_attempts,
+                    lease=invitation.send_due_at,
+                    expires_at=expires_at,
+                    mail=await self._mail(invitation, number, token),
+                )
+            )
+        await self.session.flush()
+        return claimed, len(rows)
+
+    async def record_send(self, queued: QueuedMail, *, ok: bool, now: datetime) -> bool:
+        """Step 3: record one result, fenced on the attempt and the lease, so a stale worker or a
+        resend in between never gets overwritten. False when the row moved on."""
+        values = (
+            {
+                "send_due_at": None,
+                "last_sent_at": now,
+                "expires_at": queued.expires_at,
+            }
+            if ok
+            else {"send_due_at": now + invitation_retry_delay(queued.attempt)}
+        )
+        if ok:  # the pacing counts e-mails that went out, whatever happens to the row
+            self.session.add(
+                AuthAttempt(
+                    kind=AttemptKind.INVITATION_MAIL,
+                    subject_hash=self._hash(QUEUE_SUBJECT),
+                    succeeded=True,
+                    attempted_at=now,
+                )
+            )
+        result = await self.session.execute(
+            update(AuthInvitation)
+            .where(
+                AuthInvitation.id == queued.invitation_id,
+                AuthInvitation.send_attempts == queued.attempt,
+                AuthInvitation.send_due_at == queued.lease,
+                AuthInvitation.accepted_at.is_(None),
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.flush()
+        return bool(result.rowcount)
 
     # --- Listing ---------------------------------------------------------------------------------
 
@@ -481,7 +806,8 @@ class InvitationService:
 
     async def resend_for_sign_in(self, email: str, now: datetime) -> list[AuthMail]:
         """`POST /auth/magic-link` for an e-mail without an account: each of its pending
-        invitations gets a new link with the same expiry (the old links stop working)."""
+        invitations gets a new link with the same expiry (the old links stop working). One whose
+        e-mail is still queued is left to the queue, so the person never gets two links."""
         rows = list(
             await self.session.scalars(
                 select(AuthInvitation)
@@ -489,6 +815,7 @@ class InvitationService:
                     AuthInvitation.email == email,
                     AuthInvitation.accepted_at.is_(None),
                     AuthInvitation.expires_at > now,
+                    AuthInvitation.send_due_at.is_(None),
                 )
                 .order_by(AuthInvitation.created_at)
                 .with_for_update()
@@ -714,9 +1041,12 @@ class InvitationService:
                 "The apartment has the most tenants allowed, pending invitations included.",
             )
 
-    async def _new_link(self, invitation: AuthInvitation, now: datetime) -> str:
-        """A new invitation link that lives as long as the invitation; every older link of the
-        invitation (and a registration form in progress) stops working."""
+    async def _new_link(
+        self, invitation: AuthInvitation, now: datetime, expires_at: datetime | None = None
+    ) -> str:
+        """A new invitation link that lives as long as the invitation (or until `expires_at`, the
+        expiry the queue sets once the e-mail went out); every older link of the invitation (and a
+        registration form in progress) stops working."""
         await self._drop_links(invitation.id)
         token = secrets.token_urlsafe(TOKEN_BYTES)
         self.session.add(
@@ -725,7 +1055,7 @@ class InvitationService:
                 token_hash=self._hash(token),
                 invitation_id=invitation.id,
                 created_at=now,
-                expires_at=invitation.expires_at,
+                expires_at=expires_at or invitation.expires_at,
             )
         )
         await self.session.flush()
@@ -751,6 +1081,7 @@ class InvitationService:
         invitation.accepted_user_id = user_id
         invitation.membership_id = membership_id
         invitation.applied = applied
+        invitation.send_due_at = None  # nothing more to send
 
     async def _status(
         self, invitation: AuthInvitation, now: datetime, cache: dict[object, bool]
@@ -797,6 +1128,10 @@ class InvitationService:
                     building_role=invitation.building_role,
                     status=await self._status(invitation, now, cache),
                     mine=mine,
+                    locale=invitation.locale,
+                    delivery=InvitationDelivery.SENT
+                    if invitation.send_due_at is None
+                    else InvitationDelivery.QUEUED,
                     created_at=invitation.created_at,
                     expires_at=invitation.expires_at,
                 )
@@ -807,9 +1142,13 @@ class InvitationService:
         self, invitation: AuthInvitation, apartment_number: str | None, token: str
     ) -> AuthMail:
         """The invitation e-mail, in the language of the account if the e-mail has one (only the
-        mailbox owner sees which), else the instance default."""
+        mailbox owner sees which), else the invitation's language, else the instance default."""
         account = await self.properties.find_active_user_by_email(invitation.email)
-        locale = (account.locale if account else None) or self.settings.DEFAULT_LOCALE
+        locale = (
+            (account.locale if account else None)
+            or invitation.locale
+            or self.settings.DEFAULT_LOCALE
+        )
         return AuthMail(
             email=invitation.email,
             locale=locale,

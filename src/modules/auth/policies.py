@@ -52,6 +52,29 @@ INVITATIONS_PER_INVITER_PER_HOUR = 10
 # Expired, accepted or ended invitations are kept this long, then deleted (docs/SCHEMA.md 7).
 INVITATION_RETENTION = timedelta(days=30)
 
+# The invitation queue (E13 R4a, docs/ARCHITECTURE.md 4.9): a batch of claimed e-mails, each send
+# cut off after the timeout; the lease outlasts a whole batch of timed-out sends, so no second run
+# re-claims (and re-links) an e-mail still being sent. A claimed e-mail is due again after the
+# lease (a crashed attempt); a failed one after these delays, then every INVITATION_RETRY_LAST.
+INVITATION_SEND_BATCH = 10
+INVITATION_SEND_TIMEOUT = timedelta(seconds=30)
+INVITATION_SEND_LEASE = INVITATION_SEND_BATCH * INVITATION_SEND_TIMEOUT + timedelta(minutes=1)
+INVITATION_RETRY_DELAYS = (
+    timedelta(minutes=1),
+    timedelta(minutes=5),
+    timedelta(minutes=15),
+    timedelta(minutes=60),
+)
+INVITATION_RETRY_LAST = timedelta(hours=3)
+
+
+def invitation_retry_delay(attempt: int) -> timedelta:
+    """The wait after failed attempt number `attempt` (from 1)."""
+    if 1 <= attempt <= len(INVITATION_RETRY_DELAYS):
+        return INVITATION_RETRY_DELAYS[attempt - 1]
+    return INVITATION_RETRY_LAST
+
+
 # Passwords (A5, docs/API.md 7). Lengths count Unicode code points after NFKC.
 PASSWORD_PROVIDER = "password"
 MIN_PASSWORD_LENGTH = 15

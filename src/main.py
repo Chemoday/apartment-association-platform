@@ -34,6 +34,7 @@ from src.modules.auth.cleanup import run_cleanup_loop
 from src.modules.auth.mail import auth_catalog
 from src.modules.auth.passwords import PasswordHashing
 from src.modules.auth.policies import validate_auth_settings
+from src.modules.auth.queue import InvitationQueue
 from src.modules.auth.router import router as auth_router
 from src.modules.chat.purge import run_purge_loop as run_chat_purge_loop
 from src.modules.chat.router import router as chat_router
@@ -115,6 +116,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 run_cleanup_loop(lambda: app.state.auth_session_factory), name="auth-cleanup"
             )
         )
+    if settings.AUTH_INVITATION_QUEUE_ENABLED:
+        loops.append(
+            asyncio.create_task(app.state.invitation_queue.run_loop(), name="auth-invitation-queue")
+        )
     if settings.REGISTRY_WATCH_ENABLED:
         loops.append(
             asyncio.create_task(run_watch_loop(app.state.registry_watch), name="registry-watch")
@@ -195,6 +200,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.file_reservations = Reservations()
     app.state.files_session_factory = async_session_factory  # the janitor; tests swap it
     app.state.auth_background = BackgroundWork()
+    app.state.invitation_queue = InvitationQueue(  # one drain at a time (docs/ARCHITECTURE.md 4.9)
+        lambda: app.state.auth_session_factory,
+        lambda: app.state.plugin_registry,
+        lambda: app.state.settings,
+    )
     app.state.auth_passwords = PasswordHashing()  # at most 2 Argon2id hashes at once
     if settings.NOTIFICATIONS_ENABLED:
         validate_channel_settings(settings, plugins)

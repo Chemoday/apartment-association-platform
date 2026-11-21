@@ -54,6 +54,8 @@ class AttemptKind(StrEnum):
     REDEEM = "REDEEM"
     PASSWORD = "PASSWORD"
     INVITATION = "INVITATION"
+    BULK_INVITATION = "BULK_INVITATION"
+    INVITATION_MAIL = "INVITATION_MAIL"
 
 
 class PasswordWeakness(StrEnum):
@@ -87,6 +89,26 @@ class InvitationStatus(StrEnum):
     ACCEPTED = "ACCEPTED"
     EXPIRED = "EXPIRED"
     NO_LONGER_VALID = "NO_LONGER_VALID"
+
+
+class InvitationDelivery(StrEnum):
+    """Whether the e-mail of an invitation went out (the invitation queue, E13 R4a)."""
+
+    QUEUED = "QUEUED"
+    SENT = "SENT"
+
+
+class BulkRowOutcome(StrEnum):
+    """docs/API.md 7, "Bulk invitations of owners": the first that applies."""
+
+    INVALID_ROW = "INVALID_ROW"
+    INVALID_EMAIL = "INVALID_EMAIL"
+    INVALID_LOCALE = "INVALID_LOCALE"
+    APARTMENT_NOT_FOUND = "APARTMENT_NOT_FOUND"
+    DUPLICATE_IN_LIST = "DUPLICATE_IN_LIST"
+    ALREADY_PENDING = "ALREADY_PENDING"
+    READY = "READY"
+    INVITED = "INVITED"
 
 
 class MagicLinkRequest(BaseModel):
@@ -162,6 +184,8 @@ class OwnerInvitationCreate(BaseModel):
     kind: Literal[InvitationKind.OWNER]
     email: EmailAddress
     apartment_number: safe_text(32)  # type: ignore[valid-type]
+    # The instance default or en (checked by the service, which knows the default).
+    locale: Locale | None = None
 
 
 class TenantInvitationCreate(BaseModel):
@@ -170,6 +194,8 @@ class TenantInvitationCreate(BaseModel):
     kind: Literal[InvitationKind.TENANT]
     email: EmailAddress
     apartment_id: uuid.UUID
+    # The instance default or en (checked by the service, which knows the default).
+    locale: Locale | None = None
 
 
 class StaffInvitationCreate(BaseModel):
@@ -178,6 +204,8 @@ class StaffInvitationCreate(BaseModel):
     kind: Literal[InvitationKind.STAFF]
     email: EmailAddress
     building_role: StaffRole
+    # The instance default or en (checked by the service, which knows the default).
+    locale: Locale | None = None
 
 
 InvitationCreate = Annotated[
@@ -196,8 +224,44 @@ class InvitationView(BaseModel):
     building_role: StaffRole | None
     status: InvitationStatus
     mine: bool
+    locale: Locale | None
+    delivery: InvitationDelivery
     created_at: datetime
     expires_at: datetime
+
+
+# A bulk list is at most 1 MB of UTF-8 (422 BULK_LIST_TOO_LONG, checked by the service); this
+# bound only keeps an absurd body out of memory.
+BULK_TEXT_MAX_CHARS = 4 * 1024 * 1024
+
+
+class BulkInvitationRequest(BaseModel):
+    """The list of POST /auth/invitations/bulk[/preview]: parsed in memory, never stored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: Annotated[str, Field(max_length=BULK_TEXT_MAX_CHARS), AfterValidator(clean_text)]
+
+
+class BulkInvitationRow(BaseModel):
+    line: int
+    # The cells as typed (the e-mail in canonical form when valid); None when the row lacks it.
+    apartment_number: str | None
+    email: str | None
+    locale: str | None
+    outcome: BulkRowOutcome
+
+
+class BulkInvitationReport(BaseModel):
+    rows: list[BulkInvitationRow]
+    counts: dict[BulkRowOutcome, int]
+    limit_remaining: int
+
+
+class ResendExpiredResponse(BaseModel):
+    queued: int
+    # Expired ones the building limit did not allow this time (the oldest go first).
+    left: int
 
 
 class RegistrationRequest(BaseModel):

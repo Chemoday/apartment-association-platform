@@ -74,6 +74,22 @@ async def caller(session: AsyncSession, user_id: uuid.UUID):
     return current
 
 
+async def invite_with_link(engine: AsyncEngine, inviter_id: uuid.UUID, body: object):
+    """Create an invitation, then let the queue claim it: the link exists only once its e-mail
+    goes out (E13 R4a). Returns the view and the mail."""
+    async with unit(engine) as session:
+        view = await InvitationService(session, get_settings()).create(
+            await caller(session, inviter_id),
+            body,  # type: ignore[arg-type]
+        )
+    async with unit(engine) as session:
+        claimed, _ = await InvitationService(session, get_settings()).claim_due(
+            datetime.now(UTC), 1000
+        )
+    mail = next(queued.mail for queued in claimed if queued.invitation_id == view.invitation_id)
+    return view, mail
+
+
 def accounts(session: AsyncSession) -> AccountService:
     return AccountService(session, get_settings(), session_outbox(session, InMemoryEventBus()))
 
@@ -176,11 +192,11 @@ async def _accept_against_closing(engine: AsyncEngine, round_: int) -> None:
             session, person, await create_apartment(session, building, "14")
         )
         await create_apartment(session, building, "2")
-    async with unit(engine) as session:
-        _, mail = await InvitationService(session, get_settings()).create(
-            await caller(session, chairman.id),
-            OwnerInvitationCreate(kind=InvitationKind.OWNER, email=email, apartment_number="2"),
-        )
+    _, mail = await invite_with_link(
+        engine,
+        chairman.id,
+        OwnerInvitationCreate(kind=InvitationKind.OWNER, email=email, apartment_number="2"),
+    )
     token = mail.link.rpartition("#")[2]
 
     async def accept(session: AsyncSession) -> None:
@@ -219,10 +235,7 @@ async def test_re_inviting_while_a_co_owner_resends(engine: AsyncEngine) -> None
     body = TenantInvitationCreate(
         kind=InvitationKind.TENANT, email="tenant@example.com", apartment_id=flat.id
     )
-    async with unit(engine) as session:
-        view, _ = await InvitationService(session, get_settings()).create(
-            await caller(session, first.id), body
-        )
+    view, _ = await invite_with_link(engine, first.id, body)
     async with unit(engine) as session:
         await session.execute(
             update(AuthInvitation).values(expires_at=datetime.now(UTC) - timedelta(days=1))
@@ -268,13 +281,13 @@ async def test_closing_while_the_person_accepts(engine: AsyncEngine, slow_people
         person = await create_user(session, building, "X", email="x.close@example.com")
         await create_membership(session, person, await create_apartment(session, building, "14"))
         await create_apartment(session, building, "2")
-    async with unit(engine) as session:
-        _, mail = await InvitationService(session, get_settings()).create(
-            await caller(session, chairman.id),
-            OwnerInvitationCreate(
-                kind=InvitationKind.OWNER, email="x.close@example.com", apartment_number="2"
-            ),
-        )
+    _, mail = await invite_with_link(
+        engine,
+        chairman.id,
+        OwnerInvitationCreate(
+            kind=InvitationKind.OWNER, email="x.close@example.com", apartment_number="2"
+        ),
+    )
     token = mail.link.rpartition("#")[2]
 
     async def close(session: AsyncSession) -> None:
@@ -298,13 +311,13 @@ async def test_registering_while_the_inviter_resends(engine: AsyncEngine, slow_p
         building = await create_building(session)
         chairman = await create_user(session, building, "Chair", role=BuildingRole.CHAIRMAN)
         await create_apartment(session, building, "2")
-    async with unit(engine) as session:
-        view, mail = await InvitationService(session, get_settings()).create(
-            await caller(session, chairman.id),
-            OwnerInvitationCreate(
-                kind=InvitationKind.OWNER, email="new.owner@example.com", apartment_number="2"
-            ),
-        )
+    view, mail = await invite_with_link(
+        engine,
+        chairman.id,
+        OwnerInvitationCreate(
+            kind=InvitationKind.OWNER, email="new.owner@example.com", apartment_number="2"
+        ),
+    )
     async with unit(engine) as session:
         opened, _ = await LinkService(session, get_settings()).redeem(
             mail.link.rpartition("#")[2], "198.51.100.9", None
@@ -351,13 +364,13 @@ async def test_registering_while_the_link_opens_again(
         building = await create_building(session)
         chairman = await create_user(session, building, "Chair", role=BuildingRole.CHAIRMAN)
         await create_apartment(session, building, "2")
-    async with unit(engine) as session:
-        _, mail = await InvitationService(session, get_settings()).create(
-            await caller(session, chairman.id),
-            OwnerInvitationCreate(
-                kind=InvitationKind.OWNER, email="two.tabs@example.com", apartment_number="2"
-            ),
-        )
+    _, mail = await invite_with_link(
+        engine,
+        chairman.id,
+        OwnerInvitationCreate(
+            kind=InvitationKind.OWNER, email="two.tabs@example.com", apartment_number="2"
+        ),
+    )
     link = mail.link.rpartition("#")[2]
     async with unit(engine) as session:
         opened, _ = await LinkService(session, get_settings()).redeem(link, "198.51.100.10", None)
@@ -376,3 +389,43 @@ async def test_registering_while_the_link_opens_again(
 
     results = await asyncio.gather(outcome(engine, register), outcome(engine, reopen))
     assert sorted(results) == ["INVALID_LINK", "ok"]  # registered; the used link is refused
+
+
+async def test_two_queue_runs_never_claim_the_same_e_mail(engine: AsyncEngine) -> None:
+    """The queue claims with SKIP LOCKED (E13 R4a): two runs at once split the due e-mails."""
+    async with unit(engine) as session:
+        building = await create_building(session)
+        chairman = await create_user(session, building, "Chair", role=BuildingRole.CHAIRMAN)
+        for number in ("1", "2", "3", "4"):
+            await create_apartment(session, building, number)
+    ids = set()
+    for number in ("1", "2", "3", "4"):
+        async with unit(engine) as session:
+            view = await InvitationService(session, get_settings()).create(
+                await caller(session, chairman.id),
+                OwnerInvitationCreate(
+                    kind=InvitationKind.OWNER,
+                    email=f"q{number}.{uuid.uuid4().hex[:6]}@example.com",
+                    apartment_number=number,
+                ),
+            )
+            ids.add(view.invitation_id)
+    entered = asyncio.Event()
+    claims: list[set[uuid.UUID]] = []
+
+    async def claim(session: AsyncSession, first: bool) -> None:
+        if not first:
+            await entered.wait()  # the other transaction holds its rows now
+        claimed, _ = await InvitationService(session, get_settings()).claim_due(
+            datetime.now(UTC), 2
+        )
+        claims.append({q.invitation_id for q in claimed} & ids)
+        if first:
+            entered.set()
+            await asyncio.sleep(0.3)  # keep the row locks while the other one claims
+
+    await asyncio.gather(
+        outcome(engine, lambda s: claim(s, True)), outcome(engine, lambda s: claim(s, False))
+    )
+    assert len(claims) == 2 and not (claims[0] & claims[1])
+    assert claims[0] | claims[1] == ids

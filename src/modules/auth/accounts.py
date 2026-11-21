@@ -17,7 +17,6 @@ from src.core.event_bus import EventOutbox
 from src.modules.auth.errors import forbidden, membership_not_found, user_not_found
 from src.modules.auth.events import UserAccountClosed
 from src.modules.auth.invitations import InvitationService
-from src.modules.auth.mail import AuthMail
 from src.modules.auth.models import AuthToken
 from src.modules.auth.passwords import delete_identities
 from src.modules.auth.schemas import (
@@ -80,14 +79,12 @@ class AccountService:
 
     async def replace_tenant(
         self, caller: CurrentUserDTO, apartment_id: uuid.UUID, user_id: uuid.UUID, email: str
-    ) -> tuple[InvitationView, AuthMail]:
+    ) -> InvitationView:
         """One transaction: end the old tenant's membership, then invite the new e-mail (the
         tenant limit counts without the replaced tenant). Any error undoes both."""
         apartment = await self._owner(caller, apartment_id)
         await self._end_tenant(apartment_id, user_id, caller.building_id)
-        return await self.invitations.invite_tenant(
-            caller, apartment.apartment_id, apartment.number, email
-        )
+        return await self.invitations.invite_tenant(caller, apartment.apartment_id, email)
 
     # --- The chairman's administration -------------------------------------------------------
 

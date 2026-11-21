@@ -23,6 +23,8 @@ from src.modules.auth.policies import CSRF_HEADER, REFRESH_COOKIE
 from src.modules.auth.schemas import (
     AcceptRequest,
     AcceptResponse,
+    BulkInvitationReport,
+    BulkInvitationRequest,
     InvitationCreate,
     InvitationView,
     IssuedSession,
@@ -36,6 +38,7 @@ from src.modules.auth.schemas import (
     RedeemRequest,
     RegistrationRequest,
     ReplaceTenantRequest,
+    ResendExpiredResponse,
     ResidentsResponse,
     RoleUpdate,
     RoleUpdateResponse,
@@ -244,6 +247,17 @@ def get_account_service(
     return AccountService(session, request.app.state.settings, outbox)
 
 
+async def _queue_after_commit(request: Request, session: DbSession) -> None:
+    """Commit the queued invitations, then let the queue send them by detached work, so the
+    answer never waits for the mail server (switched off in tests, which drain it by hand)."""
+    await session.commit()
+    app = request.app
+    if app.state.settings.AUTH_INVITATION_QUEUE_ENABLED:
+        app.state.auth_background.spawn(
+            app.state.invitation_queue.drain(), name="auth-invitation-queue"
+        )
+
+
 async def _send_after_commit(request: Request, session: DbSession, mails: list[AuthMail]) -> None:
     """Commit first, so a link in an e-mail always exists; then send by detached work."""
     await session.commit()
@@ -269,9 +283,66 @@ async def create_invitation(
 ) -> InvitationView:
     """Invite an owner or staff (the chairman) or a tenant (an owner of the apartment). The
     answer is the same whether the e-mail has an account."""
-    view, mail = await invitations.create(user, body)
-    await _send_after_commit(request, session, [mail])
+    view = await invitations.create(user, body)
+    await _queue_after_commit(request, session)
     return view
+
+
+BULK_ERRORS = {
+    **SIGNED_IN,
+    403: ["FORBIDDEN"],
+    422: ["VALIDATION_ERROR", "BULK_LIST_TOO_LONG"],
+}
+
+
+@router.post(
+    "/invitations/bulk/preview",
+    response_model=BulkInvitationReport,
+    responses=error_responses(BULK_ERRORS),
+)
+async def preview_bulk_invitations(
+    body: BulkInvitationRequest,
+    user: CurrentUserDTO = Depends(get_bearer_user),
+    invitations: InvitationService = Depends(get_invitation_service),
+) -> BulkInvitationReport:
+    """The chairman: what a bulk list of owners would do, row by row; changes nothing."""
+    return await invitations.bulk(user, body.text, send=False)
+
+
+@router.post(
+    "/invitations/bulk",
+    response_model=BulkInvitationReport,
+    responses=error_responses({**BULK_ERRORS, 429: ["RATE_LIMITED"]}),
+)
+async def send_bulk_invitations(
+    body: BulkInvitationRequest,
+    request: Request,
+    session: DbSession,
+    user: CurrentUserDTO = Depends(get_bearer_user),
+    invitations: InvitationService = Depends(get_invitation_service),
+) -> BulkInvitationReport:
+    """The chairman: invite the owners of a bulk list; every READY row, or none (429)."""
+    report = await invitations.bulk(user, body.text, send=True)
+    await _queue_after_commit(request, session)
+    return report
+
+
+@router.post(
+    "/invitations/resend-expired",
+    response_model=ResendExpiredResponse,
+    responses=error_responses({**SIGNED_IN, 403: ["FORBIDDEN"], 429: ["RATE_LIMITED"]}),
+)
+async def resend_expired_invitations(
+    request: Request,
+    session: DbSession,
+    user: CurrentUserDTO = Depends(get_bearer_user),
+    invitations: InvitationService = Depends(get_invitation_service),
+) -> ResendExpiredResponse:
+    """The chairman: queue the expired OWNER and STAFF invitations again, oldest first, as many
+    as the building limit allows."""
+    queued, left = await invitations.resend_expired(user)
+    await _queue_after_commit(request, session)
+    return ResendExpiredResponse(queued=queued, left=left)
 
 
 @router.get(
@@ -319,8 +390,8 @@ async def resend_invitation(
     user: CurrentUserDTO = Depends(get_bearer_user),
     invitations: InvitationService = Depends(get_invitation_service),
 ) -> InvitationView:
-    view, mail = await invitations.resend(user, invitation_id)
-    await _send_after_commit(request, session, [mail])
+    view = await invitations.resend(user, invitation_id)
+    await _queue_after_commit(request, session)
     return view
 
 
@@ -416,8 +487,8 @@ async def replace_tenant(
     accounts: AccountService = Depends(get_account_service),
 ) -> InvitationView:
     """End a tenant's membership and invite the new e-mail, in one transaction."""
-    view, mail = await accounts.replace_tenant(user, apartment_id, user_id, body.email)
-    await _send_after_commit(request, session, [mail])
+    view = await accounts.replace_tenant(user, apartment_id, user_id, body.email)
+    await _queue_after_commit(request, session)
     return view
 
 
