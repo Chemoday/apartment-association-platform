@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.core.config import NON_PRODUCTION_ENVIRONMENTS, Settings
-from src.modules.auth.schemas import DeviceKind, InvitationStatus, PasswordWeakness, StaffRole
+from src.modules.auth.schemas import (
+    ConnectionStatus,
+    DeviceKind,
+    InvitationStatus,
+    PasswordWeakness,
+    StaffRole,
+)
 from src.modules.property.schemas import BuildingRole
 
 if TYPE_CHECKING:
@@ -142,6 +148,25 @@ def invitation_status(
     if expires_at <= now:
         return InvitationStatus.EXPIRED
     return InvitationStatus.PENDING
+
+
+def connection_status(
+    *, owners: int, tenants: int, on_paper: bool, invited: bool, newest_expired_unused: bool
+) -> ConnectionStatus:
+    """The status of an apartment in the connection overview (E13 R4b, docs/API.md 7): the
+    first that applies. `invited`: an OWNER invitation is pending; `newest_expired_unused`: the
+    newest OWNER invitation ran out unaccepted. JOIN_REQUEST and CODE_ISSUED come with R4c."""
+    if owners > 0:
+        return ConnectionStatus.CONNECTED
+    if invited:
+        return ConnectionStatus.INVITED
+    if tenants > 0:
+        return ConnectionStatus.TENANT_ONLY
+    if on_paper:
+        return ConnectionStatus.PAPER
+    if newest_expired_unused:
+        return ConnectionStatus.EXPIRED
+    return ConnectionStatus.NOT_INVITED
 
 
 def staff_invitation_applies(current: BuildingRole, invited: StaffRole) -> bool:

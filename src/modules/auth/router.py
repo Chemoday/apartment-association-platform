@@ -7,7 +7,7 @@ request's commit, so the plain token lives only in memory and never in a stored 
 
 import uuid
 
-from fastapi import APIRouter, Cookie, Depends, Header, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from src.core.database import DbSession, get_event_outbox
@@ -15,6 +15,7 @@ from src.core.event_bus import EventOutbox
 from src.core.exceptions import AUTH_ERRORS, DomainError, domain_error_handler, error_responses
 from src.core.security import TokenClaims, get_bearer_user
 from src.modules.auth.accounts import AccountService
+from src.modules.auth.connections import ConnectionService
 from src.modules.auth.invitations import InvitationService
 from src.modules.auth.links import LinkService, deliver_magic_link
 from src.modules.auth.mail import AuthMail, send_auth_mails
@@ -25,11 +26,15 @@ from src.modules.auth.schemas import (
     AcceptResponse,
     BulkInvitationReport,
     BulkInvitationRequest,
+    ConnectionItem,
+    ConnectionOverview,
+    ConnectionStatus,
     InvitationCreate,
     InvitationView,
     IssuedSession,
     MagicLinkAccepted,
     MagicLinkRequest,
+    PaperUpdate,
     PasswordLoginRequest,
     PasswordRemove,
     PasswordStatus,
@@ -369,6 +374,40 @@ async def accept_invitation(
 ) -> AcceptResponse:
     """An existing account accepts an invitation after SIGN_IN_TO_ACCEPT."""
     return AcceptResponse(applied=await invitations.accept(user, body.token))
+
+
+# --- The connection overview (E13 R4b) ----------------------------------------------------------
+
+
+@router.get(
+    "/connections",
+    response_model=ConnectionOverview,
+    responses=error_responses({**SIGNED_IN, 403: ["FORBIDDEN"]}),
+)
+async def connection_overview(
+    session: DbSession,
+    status: ConnectionStatus | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> ConnectionOverview:
+    """The chairman: every apartment with its status and counts, never names or e-mails."""
+    return await ConnectionService(session).overview(user, status, limit, offset)
+
+
+@router.put(
+    "/connections/{apartment_id}/paper",
+    response_model=ConnectionItem,
+    responses=error_responses({**SIGNED_IN, 403: ["FORBIDDEN"], 404: ["APARTMENT_NOT_FOUND"]}),
+)
+async def set_paper_mark(
+    apartment_id: uuid.UUID,
+    body: PaperUpdate,
+    session: DbSession,
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> ConnectionItem:
+    """The chairman marks an apartment as worked on paper, or takes the mark away."""
+    return await ConnectionService(session).set_paper(user, apartment_id, body.on_paper)
 
 
 @router.post(

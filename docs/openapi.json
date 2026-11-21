@@ -1105,6 +1105,214 @@
         ]
       }
     },
+    "/api/v1/auth/connections": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Connection Overview",
+        "description": "The chairman: every apartment with its status and counts, never names or e-mails.",
+        "operationId": "connection_overview_api_v1_auth_connections_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ConnectionStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionOverview"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/connections/{apartment_id}/paper": {
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Set Paper Mark",
+        "description": "The chairman marks an apartment as worked on paper, or takes the mark away.",
+        "operationId": "set_paper_mark_api_v1_auth_connections__apartment_id__paper_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "apartment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Apartment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionItem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `APARTMENT_NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/invitations/{invitation_id}/resend": {
       "post": {
         "tags": [
@@ -13045,6 +13253,142 @@
         ],
         "title": "CommentView"
       },
+      "ConnectionItem": {
+        "properties": {
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Apartment Id"
+          },
+          "apartment_number": {
+            "type": "string",
+            "title": "Apartment Number"
+          },
+          "entrance": {
+            "type": "integer",
+            "title": "Entrance"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectionStatus"
+          },
+          "owners": {
+            "type": "integer",
+            "title": "Owners"
+          },
+          "tenants": {
+            "type": "integer",
+            "title": "Tenants"
+          },
+          "on_paper": {
+            "type": "boolean",
+            "title": "On Paper"
+          },
+          "last_invited_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Invited At"
+          },
+          "invitation_delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvitationDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "apartment_id",
+          "apartment_number",
+          "entrance",
+          "status",
+          "owners",
+          "tenants",
+          "on_paper",
+          "last_invited_at",
+          "invitation_delivery"
+        ],
+        "title": "ConnectionItem"
+      },
+      "ConnectionOverview": {
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/ConnectionSummary"
+          },
+          "matching": {
+            "type": "integer",
+            "title": "Matching"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "summary",
+          "matching",
+          "items"
+        ],
+        "title": "ConnectionOverview"
+      },
+      "ConnectionStatus": {
+        "type": "string",
+        "enum": [
+          "CONNECTED",
+          "JOIN_REQUEST",
+          "INVITED",
+          "CODE_ISSUED",
+          "TENANT_ONLY",
+          "PAPER",
+          "EXPIRED",
+          "NOT_INVITED"
+        ],
+        "title": "ConnectionStatus",
+        "description": "docs/API.md 7, \"The connection overview\": the first that applies. JOIN_REQUEST and\nCODE_ISSUED come with task R4c and are never returned before it."
+      },
+      "ConnectionSummary": {
+        "properties": {
+          "apartments": {
+            "type": "integer",
+            "title": "Apartments"
+          },
+          "connected": {
+            "type": "integer",
+            "title": "Connected"
+          },
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/ConnectionStatus"
+            },
+            "type": "object",
+            "title": "By Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "apartments",
+          "connected",
+          "by_status"
+        ],
+        "title": "ConnectionSummary"
+      },
       "CurrentOccurrence": {
         "properties": {
           "occurrence_id": {
@@ -16178,6 +16522,20 @@
           "apartment_number"
         ],
         "title": "OwnerInvitationCreate"
+      },
+      "PaperUpdate": {
+        "properties": {
+          "on_paper": {
+            "type": "boolean",
+            "title": "On Paper"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on_paper"
+        ],
+        "title": "PaperUpdate"
       },
       "Participation": {
         "properties": {

@@ -94,6 +94,10 @@ class Apartment(Base):
     floor: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
     riser_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
     area_m2: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+    # The chairman's mark "worked on paper" (epic E13 R4b; the connection overview).
+    on_paper: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
 
 class ApartmentMembership(Base):

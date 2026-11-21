@@ -386,3 +386,47 @@ class PasswordRemove(BaseModel):
 
 class PasswordStatus(BaseModel):
     is_set: bool
+
+
+class ConnectionStatus(StrEnum):
+    """docs/API.md 7, "The connection overview": the first that applies. JOIN_REQUEST and
+    CODE_ISSUED come with task R4c and are never returned before it."""
+
+    CONNECTED = "CONNECTED"
+    JOIN_REQUEST = "JOIN_REQUEST"
+    INVITED = "INVITED"
+    CODE_ISSUED = "CODE_ISSUED"
+    TENANT_ONLY = "TENANT_ONLY"
+    PAPER = "PAPER"
+    EXPIRED = "EXPIRED"
+    NOT_INVITED = "NOT_INVITED"
+
+
+class ConnectionItem(BaseModel):
+    apartment_id: uuid.UUID
+    apartment_number: str
+    entrance: int
+    status: ConnectionStatus
+    owners: int
+    tenants: int
+    on_paper: bool
+    last_invited_at: datetime | None
+    invitation_delivery: InvitationDelivery | None
+
+
+class ConnectionSummary(BaseModel):
+    apartments: int
+    connected: int
+    by_status: dict[ConnectionStatus, int]
+
+
+class ConnectionOverview(BaseModel):
+    summary: ConnectionSummary
+    matching: int
+    items: list[ConnectionItem]
+
+
+class PaperUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    on_paper: bool
