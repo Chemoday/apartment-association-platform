@@ -50,7 +50,9 @@ def read_template(data: bytes) -> list[RowInput]:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise TemplateError('the file is not UTF-8: save it as "CSV UTF-8"') from None
-    first_line = text.split("\n", 1)[0]
+    first_line = text.splitlines()[0] if text else ""
+    if "\t" in first_line and ";" not in first_line and "," not in first_line:
+        raise TemplateError("row 1: the separator must be ; or , (this file uses tabs)")
     delimiter = ";" if ";" in first_line else ","
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
     try:
@@ -60,21 +62,44 @@ def read_template(data: bytes) -> list[RowInput]:
     except csv.Error as error:
         raise TemplateError(f"row 1: {error}") from None
     names = [cell.strip().lstrip(BOM) for cell in header]
-    if sorted(names) != sorted(COLUMNS) or len(set(names)) != len(names):
-        raise TemplateError("row 1: the header must be exactly: " + ", ".join(COLUMNS))
+    # A spreadsheet keeps a cleared column after the last one as an empty column on every line:
+    # its empty header cells, and the same empty cells of each row, are not part of the file.
+    width = len(names)
+    while names and not names[-1]:
+        names.pop()
+    missing = [column for column in COLUMNS if column not in names]
+    unexpected = [name for name in names if name not in COLUMNS]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if missing or unexpected or repeated:
+        details = [
+            *(["missing: " + ", ".join(missing)] if 0 < len(missing) < len(COLUMNS) else []),
+            *([f"{len(unexpected)} unexpected column(s)"] if unexpected else []),
+            *(["twice: " + ", ".join(repeated)] if repeated else []),
+        ]
+        raise TemplateError(
+            "row 1: the header must be exactly: "
+            + ", ".join(COLUMNS)
+            + (f" ({'; '.join(details)})" if details else "")
+        )
     rows: list[RowInput] = []
+    # Rows are counted like the spreadsheet does: one per record, so a line break inside a
+    # quoted cell (Alt+Enter) does not shift the numbers of the rows after it.
+    row_number = 1
     try:
         for cells in reader:
+            row_number += 1
+            if len(names) < len(cells) <= width and not any(c.strip() for c in cells[len(names) :]):
+                cells = cells[: len(names)]
             if not any(cell.strip() for cell in cells):
                 continue
             if len(cells) != len(names):
                 raise TemplateError(
-                    f"row {reader.line_num}: {len(cells)} cells instead of {len(names)}"
+                    f"row {row_number}: {len(cells)} cells instead of {len(names)}"
                     + (" (a decimal comma needs ';' as the separator)" if delimiter == "," else "")
                 )
-            rows.append(RowInput(ref=reader.line_num, cells=dict(zip(names, cells, strict=True))))
+            rows.append(RowInput(ref=row_number, cells=dict(zip(names, cells, strict=True))))
             if len(rows) > MAX_ROWS:
                 raise TemplateError(f"more than {MAX_ROWS} rows")
     except csv.Error as error:
-        raise TemplateError(f"row {reader.line_num}: {error}") from None
+        raise TemplateError(f"row {row_number + 1}: {error}") from None
     return rows

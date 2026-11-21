@@ -594,3 +594,75 @@ def test_main_keeps_its_logs_and_messages_off_the_template_output(capsys, monkey
     assert captured.out == ""
     assert "registry_proposal_fetched" in captured.err
     assert "error: refused" in captured.err
+
+
+def test_a_serial_number_a_spreadsheet_turned_into_an_exponent_is_refused() -> None:
+    _, problems = check_layout(
+        rows(apartment("1", resource="COLD_WATER", serial_number="1,23E+16"))
+    )
+
+    assert [(p.ref, p.column) for p in problems] == [(2, "serial_number")]
+    assert "format the column as text" in problems[0].message
+
+
+def test_a_building_meter_limit_grows_with_the_building() -> None:
+    many = [apartment(str(n), resource="COLD_WATER") for n in range(1, 151)]
+    layout, problems = check_layout(
+        rows(
+            *many,
+            {"resource": "COLD_WATER", "location": "Basement"},
+            {"resource": "HOT_WATER", "max_monthly_delta": "600"},  # given: kept as it is
+        )
+    )
+
+    assert problems == []
+    building = [m for m in layout.meters if m.apartment is None]
+    assert [m.max_monthly_delta for m in building] == [D("7500.000"), D("600.000")]
+
+
+def test_a_small_building_keeps_the_table_default_of_a_building_meter() -> None:
+    layout, _ = check_layout(rows(apartment("1"), {"resource": "COLD_WATER"}))
+
+    assert layout.meters[0].max_monthly_delta == D("500.000")
+
+
+def test_register_numbers_with_control_characters_are_left_out() -> None:
+    apartments, left_out = from_register(
+        ApartmentDraft(apartments=[DraftApartment("5\x1b[2J", D("40"), 1)], left_out=[])
+    )
+
+    assert apartments == []
+    assert [(p.number, p.reason) for p in left_out] == [(None, "NUMBER_NOT_TEXT")]
+
+
+async def test_a_code_for_another_building_replaces_the_stored_block(
+    db_session: AsyncSession, real_installation, tmp_path: Path, monkeypatch
+) -> None:
+    """The lookup picked the wrong building; the operator names the right one."""
+    building_id = (await create_building(db_session)).id
+    wrong = EEBuildingFacts(
+        source=EESource(building_code="100000001", fetched_at=datetime(2026, 11, 20, tzinfo=UTC)),
+        building=EEBuilding(),
+        units=[EEUnit(number="1", kind=UnitKind.APARTMENT, area_m2=D("40"))],
+    )
+    db_session.add(BuildingRegistryRecord(building_id=building_id, proposal=dump_block(wrong)))
+    await db_session.commit()
+
+    async def fetch(self, code: str) -> EEBuildingFacts:
+        return EEBuildingFacts(
+            source=EESource(building_code=code, fetched_at=datetime(2026, 11, 21, tzinfo=UTC)),
+            building=EEBuilding(),
+            units=[EEUnit(number="9", kind=UnitKind.APARTMENT, area_m2=D("55"))],
+        )
+
+    monkeypatch.setattr(EEBuildingRegistry, "fetch", fetch)
+    path = tmp_path / "building.csv"
+    code, printed = await template(
+        db_session, path, with_register(), from_register_code="100000002", building_meters=False
+    )
+
+    assert code == 0, printed
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    assert [line.split(";")[0] for line in lines[1:]] == ["9", "9"]
+    record = await db_session.get(BuildingRegistryRecord, building_id)
+    assert record.proposal["source"]["building_code"] == "100000002"

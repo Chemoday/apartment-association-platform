@@ -7,7 +7,7 @@ setup wizard of epic E13 R7 later), so every rule lives here once. Pure: no I/O,
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 
 from src.core.csv_safety import neutralize_formula
@@ -58,6 +58,11 @@ LIMITS: dict[ResourceType, tuple[Decimal, Decimal]] = {
 _NOT_ONE_LINE = frozenset({"Cc", "Cf", "Zl", "Zp"})  # the rule of create-building
 _INTEGER = re.compile(r"-?[0-9]{1,6}")
 _DECIMAL = re.compile(r"[0-9]{1,12}([.,][0-9]+)?")
+# What a spreadsheet makes of a long number typed into a General cell: "1,23457E+16".
+_SPREADSHEET_EXPONENT = re.compile(r"[0-9]+([.,][0-9]+)?[eE][+-]?[0-9]+")
+# A building meter's default limit grows with the building: the apartment default per apartment,
+# twice over (one month may run high everywhere), but never below the table's building default.
+BUILDING_LIMIT_FACTOR = 2
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,21 @@ class _Checker:
         self.layout = BuildingLayout()
         self._apartments: dict[str, tuple[int, LayoutApartment]] = {}
         self._meter_keys: dict[tuple[str | None, ResourceType, str], int] = {}
+        self._spellings: dict[str, tuple[int, str]] = {}  # casefolded number -> its first row
+        self._scaled: list[int] = []  # building meters whose limit took the default
+
+    def scale_building_limits(self) -> None:
+        """A building meter carries the whole building: its default limit grows with the count
+        of apartments, so a large building is not flagged as an anomaly every month."""
+        count = len(self.layout.apartments)
+        for index in self._scaled:
+            meter = self.layout.meters[index]
+            apartment_default = default_limit(meter.resource, meter.unit, building=False)
+            scaled = (apartment_default * count * BUILDING_LIMIT_FACTOR).quantize(METER_PRECISION)
+            if scaled > meter.max_monthly_delta:
+                self.layout.meters[index] = replace(
+                    meter, max_monthly_delta=min(scaled, METER_VALUE_MAX)
+                )
 
     def problem(self, ref: int, column: str, message: str) -> None:
         self.problems.append(Problem(ref, column, message))
@@ -235,6 +255,13 @@ class _Checker:
         apartment = LayoutApartment(number=number, entrance=entrance, floor=floor, area_m2=area)
         first = self._apartments.get(number)
         if first is None:
+            other = self._spellings.get(number.casefold())
+            if other is not None:
+                self.problem(
+                    ref, "apartment", f"the same number as row {other[0]}, written differently"
+                )
+                return False
+            self._spellings[number.casefold()] = (ref, number)
             self._apartments[number] = (ref, apartment)
             self.layout.apartments.append(apartment)
             if area != raw:
@@ -273,6 +300,14 @@ class _Checker:
             if cells["serial_number"]
             else None
         )
+        if serial is not None and _SPREADSHEET_EXPONENT.fullmatch(serial):
+            self.problem(
+                ref,
+                "serial_number",
+                "the spreadsheet turned it into an exponent: format the column as text and "
+                "type the number again",
+            )
+            serial = None
         location = (
             self.text(ref, "location", cells["location"], TEXT_MAX_LENGTH)
             if cells["location"]
@@ -288,6 +323,7 @@ class _Checker:
             if cells["max_monthly_delta"]
             else None
         )
+        defaulted = not cells["max_monthly_delta"]
         if len(self.problems) > before or not add or resource is None or unit is None:
             return
         if location is None:  # cannot happen without a problem; keeps the type checker sure
@@ -304,6 +340,8 @@ class _Checker:
             )
             return
         self._meter_keys[key] = ref
+        if defaulted and apartment is None:
+            self._scaled.append(len(self.layout.meters))
         self.layout.meters.append(
             LayoutMeter(
                 apartment=apartment,
@@ -327,4 +365,5 @@ def check_layout(rows: list[RowInput]) -> tuple[BuildingLayout, list[Problem]]:
         checker.row(row)
     if not checker.problems and not checker.layout.apartments:
         checker.problems.append(Problem(0, "apartment", "the layout has no apartments"))
+    checker.scale_building_limits()
     return checker.layout, checker.problems

@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
-from src.core.filling.layout import NUMBER_MAX_LENGTH, UNITS, round_area
+from src.core.filling.layout import NUMBER_MAX_LENGTH, UNITS, one_line, round_area
 from src.core.filling.template import TemplateRow
 from src.modules.meters.schemas import ResourceType
 from src.plugins.registry import ApartmentDraft
@@ -88,7 +88,9 @@ def from_register(draft: ApartmentDraft) -> tuple[list[DraftApartmentRow], list[
     seen: set[str] = set()
     for apartment in draft.apartments:
         number = apartment.number.strip()
-        if len(number) > NUMBER_MAX_LENGTH:
+        if not number or not one_line(number) or not number.isprintable():
+            left_out.append(LeftOut(None, "NUMBER_NOT_TEXT"))
+        elif len(number) > NUMBER_MAX_LENGTH:
             left_out.append(LeftOut(number, "NUMBER_TOO_LONG"))
         elif number in seen:
             left_out.append(LeftOut(number, "NUMBER_REPEATED"))
@@ -127,10 +129,18 @@ def template_rows(
             "area_m2": _area(apartment.area_m2),
         }
         for resource, count in meters:
-            for _ in range(count):
+            for index in range(1, count + 1):
+                # Two meters of a type need different locations: "1", "2" until the chairman
+                # names them (kitchen, bathroom); one meter keeps the default.
+                location = {"location": str(index)} if count > 1 else {}
                 rows.append(
                     TemplateRow(
-                        {**place, "resource": resource.value, "unit": UNITS[resource][0].value}
+                        {
+                            **place,
+                            "resource": resource.value,
+                            "unit": UNITS[resource][0].value,
+                            **location,
+                        }
                     )
                 )
     if building_meters:

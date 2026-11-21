@@ -81,6 +81,13 @@ async def _register_draft(
     if provider is None:
         raise _Exit(4, f"no register provider of {country_code} is enabled")
     block = await registry.stored_block(building_id)
+    if code is not None:
+        code = code.strip()
+        stored_code = getattr(getattr(block, "source", None), "building_code", None)
+        if block is not None and stored_code != code:
+            # The operator names another building than the one stored (a wrong pick of the
+            # lookup): fetch that one and keep it as the proposal instead of drafting the old.
+            block = None
     if block is None:
         if code is None:
             raise _Exit(
@@ -88,7 +95,6 @@ async def _register_draft(
                 "--from-register needs the register's building code: the building has no "
                 "passport block yet (find it with find-building)",
             )
-        code = code.strip()
         if not provider.valid_code(code):
             raise _Exit(2, "--from-register the building code has the wrong form")
         try:
@@ -154,6 +160,12 @@ async def building_template(
                     await asyncio.to_thread(_write_new, out_path, write_template(rows))
             except FileExistsError:
                 raise _Exit(1, f"{out_path} exists already; give another --out") from None
+            except OSError as error:
+                raise _Exit(
+                    2,
+                    f"--out cannot be written ({error.strerror or 'error'}); inside the backend "
+                    "container use --out - and redirect it on the host",
+                ) from None
     except FillingRefused as refused:
         print(f"error: {refused.message}", file=out)
         return 1
@@ -167,7 +179,9 @@ async def building_template(
         file=out,
     )
     for part in left_out:
-        print(f"left out: part {part.number or 'without a number'} ({part.reason})", file=out)
+        # Register text, never personal data, but shown on a terminal: printable only.
+        number = "".join(c if c.isprintable() else "?" for c in part.number or "")
+        print(f"left out: part {number or 'without a number'} ({part.reason})", file=out)
     return 0
 
 
