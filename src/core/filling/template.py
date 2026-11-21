@@ -1,0 +1,80 @@
+"""The building template as a CSV file: written for a spreadsheet, read back from one.
+
+docs/API.md section 1, "Filling the building of a new installation". Writing: UTF-8 with a byte
+order mark, `;`, decimal commas, CRLF, every cell guarded against formulas, so the file opens
+in a spreadsheet with Estonian settings as it is. Reading: the separator of the header line,
+`;` or `,`, a byte order mark skipped, UTF-8 only.
+"""
+
+import csv
+import io
+from collections.abc import Iterable
+from dataclasses import dataclass
+
+from src.core.csv_safety import BOM, neutralize_formula
+from src.core.filling.layout import COLUMNS, RowInput
+
+MAX_FILE_BYTES = 5 * 1024 * 1024
+MAX_ROWS = 10_000
+
+
+class TemplateError(Exception):
+    """The file as a whole cannot be read; the message is shown as `error: <message>`."""
+
+
+@dataclass(frozen=True)
+class TemplateRow:
+    """One row to write, cells by column name (missing ones stay empty)."""
+
+    cells: dict[str, str]
+
+
+def write_template(rows: Iterable[TemplateRow]) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";", lineterminator="\r\n")
+    buffer.write(BOM)
+    writer.writerow(COLUMNS)
+    for row in rows:
+        writer.writerow([neutralize_formula(row.cells.get(column, "")) for column in COLUMNS])
+    return buffer.getvalue()
+
+
+def read_template(data: bytes) -> list[RowInput]:
+    """The rows of the file (empty lines skipped), each with its line number as `ref`.
+
+    Raises TemplateError for a file that cannot be read as a template at all; a row with the
+    wrong number of cells is a TemplateError too, because its cells cannot be named."""
+    if len(data) > MAX_FILE_BYTES:
+        raise TemplateError(f"the file is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise TemplateError('the file is not UTF-8: save it as "CSV UTF-8"') from None
+    first_line = text.split("\n", 1)[0]
+    delimiter = ";" if ";" in first_line else ","
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    try:
+        header = next(reader)
+    except StopIteration:
+        raise TemplateError("the file is empty") from None
+    except csv.Error as error:
+        raise TemplateError(f"row 1: {error}") from None
+    names = [cell.strip().lstrip(BOM) for cell in header]
+    if sorted(names) != sorted(COLUMNS) or len(set(names)) != len(names):
+        raise TemplateError("row 1: the header must be exactly: " + ", ".join(COLUMNS))
+    rows: list[RowInput] = []
+    try:
+        for cells in reader:
+            if not any(cell.strip() for cell in cells):
+                continue
+            if len(cells) != len(names):
+                raise TemplateError(
+                    f"row {reader.line_num}: {len(cells)} cells instead of {len(names)}"
+                    + (" (a decimal comma needs ';' as the separator)" if delimiter == "," else "")
+                )
+            rows.append(RowInput(ref=reader.line_num, cells=dict(zip(names, cells, strict=True))))
+            if len(rows) > MAX_ROWS:
+                raise TemplateError(f"more than {MAX_ROWS} rows")
+    except csv.Error as error:
+        raise TemplateError(f"row {reader.line_num}: {error}") from None
+    return rows

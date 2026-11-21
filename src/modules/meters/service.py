@@ -69,6 +69,7 @@ from src.modules.meters.schemas import (
     MatrixMeter,
     MatrixResponse,
     MeterUnit,
+    NewMeter,
     NextSubmission,
     PeriodDTO,
     PeriodListResponse,
@@ -179,6 +180,34 @@ class MetersService:
         # None only for system-level readers (e.g. notifications), which never write.
         self.outbox = outbox
         self.timezone = ZoneInfo(get_settings().INSTANCE_TIMEZONE)
+
+    # --- A new building (the filling core, src/core/filling, epic E13 R3) -------------------------
+
+    async def has_meters(self, building_id: uuid.UUID) -> bool:
+        """Whether the building has any meter (the filling core fills a new one once)."""
+        found = await self.session.scalar(
+            select(MeterDevice.id).where(MeterDevice.building_id == building_id).limit(1)
+        )
+        return found is not None
+
+    async def create_meters(self, building_id: uuid.UUID, meters: list[NewMeter]) -> None:
+        """Meters of a new building, checked by the filling core; publishes nothing (the period
+        opener already opened the month, and a new meter is simply due a reading in it). The
+        caller commits."""
+        self.session.add_all(
+            MeterDevice(
+                building_id=building_id,
+                apartment_id=meter.apartment_id,
+                resource_type=meter.resource_type,
+                unit=meter.unit,
+                serial_number=meter.serial_number,
+                location_label=meter.location_label,
+                initial_value=meter.initial_value,
+                max_monthly_delta=meter.max_monthly_delta,
+            )
+            for meter in meters
+        )
+        await self.session.flush()
 
     # --- System-level reads (no caller; used by the notifications module) -----------------------
 

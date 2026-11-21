@@ -191,6 +191,43 @@ class BuildingRegistryService:
             await self.session.flush()
             logger.info("registry_block_removed")
 
+    # --- The operator's building template (src/core/filling, epic E13 R3); system-level -------
+
+    def provider_for(self, country_code: str) -> BuildingRegistryProvider | None:
+        return self.plugins.building_registry(country_code)
+
+    async def stored_block(self, building_id: uuid.UUID) -> RegistryFacts | None:
+        """The building's accepted block, else its proposal; None without either."""
+        record = await self._record(building_id)
+        if record is None:
+            return None
+        return load_block(record.accepted) or load_block(record.proposal)
+
+    async def fetch_for_operator(
+        self, building_id: uuid.UUID, provider: BuildingRegistryProvider, code: str
+    ) -> RegistryFacts:
+        """Fetch a building once for the operator's template and keep it as the proposal, like
+        the chairman's proposal action, but outside REGISTRY_CALLS_PER_DAY (like find-building).
+        Raises RegistryBuildingNotFound or RegistryUnavailable; the caller commits."""
+        block = await provider.fetch(code)
+        now = _now()
+        await self._lock_building(building_id)
+        await self.session.execute(
+            pg_insert(BuildingRegistryRecord)
+            .values(building_id=building_id, updated_at=now)
+            .on_conflict_do_nothing(index_elements=["building_id"])
+        )
+        record = await self._record(building_id)
+        if record is None:  # cannot happen under the lock; never an assert (stripped by -O)
+            raise RegistryUnavailable()
+        record.proposal = dump_block(block)
+        record.proposal_fetched_at = now
+        record.proposal_by_user_id = None
+        record.updated_at = now
+        await self.session.flush()
+        logger.info("registry_proposal_fetched", country_code=provider.country_code)
+        return block
+
     async def _provider(self, user: CurrentUserDTO) -> BuildingRegistryProvider:
         building = await self.session.get_one(Building, user.building_id)
         provider = self.plugins.building_registry(building.country_code)

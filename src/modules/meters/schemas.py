@@ -128,6 +128,20 @@ PERIOD_CODE_PATTERN = r"^[0-9]{4}-(0[1-9]|1[0-2])$"
 PeriodCode = Annotated[str, Field(pattern=PERIOD_CODE_PATTERN, examples=["2026-10"])]
 
 
+class NewMeter(BaseModel):
+    """A meter of a new building, already checked by the filling core (epic E13 R3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    apartment_id: uuid.UUID | None  # None: a Building Master Meter
+    resource_type: ResourceType
+    unit: MeterUnit
+    serial_number: str | None
+    location_label: str
+    initial_value: Decimal | None  # None: no known start (R3b)
+    max_monthly_delta: Decimal
+
+
 class ReadingSubmitRequest(BaseModel):
     """Body of POST /api/v1/meters/readings (the 2-step anomaly flow uses confirmation_level)."""
 
