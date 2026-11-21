@@ -8,6 +8,7 @@ in a spreadsheet with Estonian settings as it is. Reading: the separator of the 
 
 import csv
 import io
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -15,7 +16,22 @@ from src.core.csv_safety import BOM, neutralize_formula
 from src.core.filling.layout import COLUMNS, REQUIRED_COLUMNS, RowInput
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
+MAX_SHOWN = 10  # header names shown in one message
+MAX_NAME = 32  # characters of one shown header name
 MAX_ROWS = 10_000
+
+
+def _plain(name: str) -> str:
+    return re.sub(r"[\s_\-]+", "", name.casefold())
+
+
+_KNOWN = {_plain(column): column for column in COLUMNS}
+
+
+def shown(name: str) -> str:
+    """A header name as it may be printed: printable only, at most MAX_NAME characters."""
+    text = "".join(c if c.isprintable() else "?" for c in name)
+    return text if len(text) <= MAX_NAME else text[: MAX_NAME - 1] + "..."
 
 
 class TemplateError(Exception):
@@ -79,7 +95,9 @@ def read_template_report(data: bytes) -> TemplateRead:
     while names and not names[-1]:
         names.pop()
     # Columns are found by name, without case; optional ones may be missing, others are ignored.
-    keys = [name.casefold() for name in names]
+    # Names are compared without case, spaces, '-' and '_' ("Initial value" is initial_value), so
+    # a column the chairman renamed a little is never ignored by mistake.
+    keys = [_KNOWN.get(_plain(name), name.casefold()) for name in names]
     missing = [column for column in REQUIRED_COLUMNS if column not in keys]
     repeated = sorted({key for key in keys if key and keys.count(key) > 1 and key in COLUMNS})
     if missing or repeated:
@@ -99,6 +117,25 @@ def read_template_report(data: bytes) -> TemplateRead:
             + (f" ({'; '.join(details)})" if details else "")
         )
     ignored = [name for name, key in zip(names, keys, strict=True) if key not in COLUMNS]
+    for name in ignored:
+        plain = _plain(name)
+        # Only a name that begins with a known one ("initial_value (m3)"); short names such
+        # as unit are left out, so "units total" or a notes column is never refused.
+        like = next(
+            (c for c in COLUMNS if len(_plain(c)) >= 5 and plain.startswith(_plain(c))), None
+        )
+        if like is not None:
+            # "initial_value (m3)": ignoring it would lose every start of the file for good.
+            raise TemplateError(
+                f"row 1: the column '{shown(name)}' looks like {like}: name it {like}"
+            )
+    if ignored and delimiter == ",":
+        raise TemplateError(
+            "row 1: a file separated by ',' may only have the template's columns (a decimal "
+            "comma could move a number into another column): delete "
+            + ", ".join(f"'{shown(name)}'" for name in ignored[:MAX_SHOWN])
+            + " or save the file with ';'"
+        )
     rows: list[RowInput] = []
     # Rows are counted like the spreadsheet does: one per record, so a line break inside a
     # quoted cell (Alt+Enter) does not shift the numbers of the rows after it.

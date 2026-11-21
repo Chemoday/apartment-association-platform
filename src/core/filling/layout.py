@@ -132,7 +132,9 @@ def one_line(text: str) -> bool:
     return not any(unicodedata.category(char) in _NOT_ONE_LINE for char in text)
 
 
-_LEADING_ZEROS = re.compile(r"(?<![0-9])0+(?=[0-9])")
+# Leading zeros of the number or of a part after a letter or a space ("01", "A01"); never after a
+# digit or a separator, so "1.05" and "1.5" or "2-01" and "2-1" stay two numbers.
+_LEADING_ZEROS = re.compile(r"(?<![0-9.,/\-])0+(?=[0-9])")
 _ANY_SPACE = re.compile(r"\s+")
 
 

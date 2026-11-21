@@ -20,7 +20,9 @@ from src.core.filling.__main__ import (
     configure_cli_logging,
     import_building,
 )
+from src.core.filling.compare import register_warnings
 from src.core.filling.draft import (
+    DraftApartmentRow,
     DraftError,
     from_count,
     from_register,
@@ -724,3 +726,98 @@ async def test_the_import_warns_where_the_file_differs_from_the_register(
         "warning: apartment 1: area 4536.00 m2, the register says 45.36 m2",
         "checked: 3 apartments, 3 apartment meters, 0 building meters, 0 areas rounded",
     ]
+
+
+@pytest.mark.parametrize("name", ["Initial value", "INITIAL-VALUE", " initial_Value "])
+def test_a_slightly_renamed_column_is_still_that_column(name: str) -> None:
+    header = ";".join(name if c == "initial_value" else c for c in COLUMNS)
+
+    (row,) = read_template((header + "\n1;1;;40;COLD_WATER;;;;12,5;\n").encode("utf-8"))
+
+    assert row.cells["initial_value"] == "12,5"
+
+
+@pytest.mark.parametrize("name", ["initial_value (m3)", "max_monthly_delta m3", "Location 2"])
+def test_a_column_named_like_a_known_one_is_refused_not_ignored(name: str) -> None:
+    header = ";".join(COLUMNS) + ";" + name
+
+    with pytest.raises(TemplateError, match="looks like"):
+        read_template((header + "\n1;1;;40;COLD_WATER;;;;;;5\n").encode("utf-8"))
+
+
+def test_a_comma_file_with_another_column_is_refused() -> None:
+    """A decimal comma could move a number into the ignored column without any problem."""
+    header = ",".join(COLUMNS) + ",notes"
+
+    with pytest.raises(TemplateError, match="separated by ','"):
+        read_template((header + "\n1,1,,48.2,COLD_WATER,m3,,,1254,5,7\n").encode("utf-8"))
+
+
+async def test_ignored_header_names_are_shown_printable_short_and_few(
+    db_session: AsyncSession, real_installation, tmp_path: Path
+) -> None:
+    await create_building(db_session)
+    await db_session.commit()
+    extra = ["\x1b[31mred"] + [f"note{n}" for n in range(11)] + ["x" * 50]
+    path = tmp_path / "building.csv"
+    path.write_text(
+        ";".join([*COLUMNS, *extra]) + "\n1;1;;40;;;;;;" + ";" * len(extra) + "\n",
+        encoding="utf-8",
+    )
+
+    code, printed = await importing(db_session, path, dry_run=True)
+
+    assert code == 0, printed
+    warning = printed.splitlines()[0]
+    assert "\x1b" not in warning and "?[31mred" in warning
+    assert warning.endswith(" and 3 more")
+
+
+def test_zeros_after_a_digit_or_separator_keep_numbers_apart() -> None:
+    layout, problems = check_layout(
+        rows(apartment("1.05"), apartment("1.5"), apartment("2-01"), apartment("2-1"))
+    )
+
+    assert problems == [] and len(layout.apartments) == 4
+
+
+def _layout(*numbers_and_areas: tuple[str, str]):
+    layout, problems = check_layout(rows(*(apartment(n, area=a) for n, a in numbers_and_areas)))
+    assert problems == []
+    return layout
+
+
+def test_the_register_check_needs_both_a_large_and_a_relative_difference() -> None:
+    layout = _layout(("1", "121,5"), ("2", "40"), ("3", "10"))
+    register = [
+        DraftApartmentRow("1", D("120"), None),  # 1.5 m2 but 1.25 %: no warning
+        DraftApartmentRow("2", D("40.9"), None),  # 2.2 % but 0.9 m2: no warning
+        DraftApartmentRow("3", D("12"), None),  # 2 m2 and 20 %: a warning
+    ]
+
+    assert register_warnings(layout, register) == [
+        "warning: apartment 3: area 10.00 m2, the register says 12.00 m2"
+    ]
+
+
+def test_the_register_check_matches_spellings_and_skips_missing_areas() -> None:
+    layout = _layout(("14A", "40"), ("01", "50"))
+
+    assert (
+        register_warnings(
+            layout, [DraftApartmentRow("14a", None, None), DraftApartmentRow("1", None, None)]
+        )
+        == []
+    )
+
+
+def test_the_register_check_limits_its_lines() -> None:
+    layout = _layout(*((str(n), "10") for n in range(1, 31)))
+    register = [DraftApartmentRow(str(n), D("50"), None) for n in range(1, 31)]
+    register += [DraftApartmentRow(f"X{n}", None, None) for n in range(12)]
+
+    warnings = register_warnings(layout, register)
+
+    assert warnings[0].endswith("X9 and 2 more")
+    assert len([w for w in warnings if "area" in w]) == 21  # 20 lines and one "and 10 more"
+    assert warnings[-1] == "warning: and 10 more areas differ"

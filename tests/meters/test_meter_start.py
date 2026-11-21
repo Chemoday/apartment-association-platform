@@ -425,3 +425,43 @@ async def test_resending_the_same_first_reading_without_the_bill_is_a_retry(
     again = await submit(api_client, owner, meter, "125.000")
 
     assert again.json() == first.json()  # the bill's reading is kept, nothing changed
+
+
+async def test_a_null_on_a_meter_with_a_known_start_is_no_error(
+    api_client: AsyncClient, world: MetersWorld
+) -> None:
+    response = await submit(
+        api_client, world.owner_14, world.meter_14, "120.000", previous_value=None
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["previous_origin"] == "HISTORY"
+
+
+@pytest.mark.parametrize(("extra", "expected"), [({}, 200), ({"previous_value": None}, 409)])
+async def test_a_late_start_with_the_bill_resent_after_the_target_moved(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    world: MetersWorld,
+    fresh,
+    meters_now,
+    extra: dict,
+    expected: int,
+) -> None:
+    from tests.meters.test_monthly_periods import local
+
+    owner, meter = fresh
+    meters_now(local(2026, 11, 3))
+    await create_period(db_session, world.building, "2026-11", PeriodStatus.OPEN_FOR_RESIDENTS)
+    first = await submit(api_client, owner, meter, "125.000", previous="121.000")
+    assert first.status_code == 200
+    meters_now(local(2026, 11, 20))
+
+    again = await submit(api_client, owner, meter, "125.000", **extra)
+
+    # Leaving the bill out keeps it: a plain retry. Dropping it is a change of a closed month.
+    assert again.status_code == expected
+    if expected == 200:
+        assert again.json() == first.json()
+    else:
+        assert again.json()["error_code"] == "WRONG_PERIOD"

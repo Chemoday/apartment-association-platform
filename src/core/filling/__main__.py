@@ -5,7 +5,8 @@
         [--entrances <ranges>] [--meters <types>] [--no-building-meters]
     uv run python -m src.core.filling import-building --file <file.csv> [--dry-run]
 
-Output and logs carry row numbers and counts only, never personal data (the template has none).
+Output and logs carry row numbers, counts, apartment numbers, areas and header names (printable
+only, shortened), never cell values of persons: the template holds no personal data.
 """
 
 import argparse
@@ -34,8 +35,10 @@ from src.core.filling.layout import check_layout
 from src.core.filling.service import FillingRefused, filling_target, lay_out
 from src.core.filling.template import (
     MAX_FILE_BYTES,
+    MAX_SHOWN,
     TemplateError,
     read_template_report,
+    shown,
     write_template,
 )
 from src.core.telemetry import configure_logging
@@ -218,7 +221,15 @@ async def import_building(
         print(f"error: {len(problems)} problems, nothing written", file=out)
         return 2
     warnings = (
-        ["warning: column(s) ignored: " + ", ".join(read.ignored_columns)]
+        [
+            "warning: column(s) ignored: "
+            + ", ".join(shown(name) for name in read.ignored_columns[:MAX_SHOWN])
+            + (
+                f" and {len(read.ignored_columns) - MAX_SHOWN} more"
+                if len(read.ignored_columns) > MAX_SHOWN
+                else ""
+            )
+        ]
         if read.ignored_columns
         else []
     )
