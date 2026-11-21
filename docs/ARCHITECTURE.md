@@ -498,7 +498,10 @@ Design: docs/epics/E12_EXTERNAL_BUILDING_DATA.md. Table: docs/SCHEMA.md section 
 - **Contract:** `BuildingRegistryProvider` in `src/plugins/registry.py`: `country_code`,
   `schema`, `valid_code(code)` (the form of a building id, checked before any request),
   `search(query) -> list[RegistryCandidate]`, `fetch(code) -> <country block>` and
-  `certificate_valid_until(block) -> date | None` (pure, no request).
+  `certificate_valid_until(block) -> date | None` (pure, no request) and, since E13 R3 (the
+  apartment list proposal X3), `apartment_draft(block) -> ApartmentDraft` (pure, no request): the
+  parts of kind apartment with their number, area and floor, plus the parts it left out and why
+  (non-residential, common, no usable number), never data of a person.
   A country plugin (`src/plugins/countries/<iso>/building_registry.py`, enabled as
   `countries.<iso>.building_registry`) registers one provider per country. The block is a typed
   pydantic model of the country (`src/plugins/countries/<iso>/facts.py`); `registry.py` exposes
@@ -553,3 +556,23 @@ security backlog S-7.*
 - **No personal data:** the marker holds an id, a flag and a time; the log line of a refusal holds
   a reason code and, for a mismatch, the installation id found (only when it is a valid id), never
   other data.
+
+## 15. Filling the building (`src/core/filling/`), epic E13 tasks R3 and R3b
+
+Design: docs/epics/E13_ROLLOUT.md section 6a. Commands: docs/API.md section 1 ("Filling the
+building of a new installation").
+- **One core for every front end:** `src/core/filling/` checks a full list of apartments and
+  meters (`BuildingLayout`) and writes it in one transaction. The operator commands
+  (`python -m src.core.filling building-template | import-building`) are its first front end;
+  the setup wizard (R7) adds chairman endpoints next to it later, without new rules.
+- **Through the services, not the tables:** unlike `src/core/seed.py`, it writes only through
+  new creating methods of the services (`PropertyService` for apartments, `MeterService` for
+  meters) on one shared session, so each module keeps its own rules. It sits in `src/core`
+  because it uses both, and `meters` already depends on `property`.
+- **The draft** comes from the register provider (`apartment_draft`, section 13) or from a count;
+  the template (CSV) is only a transport between the draft and the chairman, and the import
+  parses it into the same `BuildingLayout`.
+- **No personal data:** apartments and meters only; output and logs carry row numbers and counts.
+- **A meter without a start (R3b):** `meters_devices.initial_value` may be `NULL`; module
+  `meters` then takes the first reading's `previous_value` from the request or starts the meter
+  with it, and records the origin in `meters_readings.previous_origin` (docs/API.md section 2).

@@ -119,10 +119,10 @@ The daily quota of register calls of the installation (docs/API.md section 1).
 | `building_id` | `UUID` | `FK(property_buildings.id), INDEX` | Always populated |
 | `apartment_id` | `UUID` | `FK(property_apartments.id), NULLABLE, INDEX` | **`NULL` = Building Master Meter in basement**; `UUID` = Apartment meter |
 | `resource_type` | `VARCHAR(32)` | `NOT NULL` | Enum: `COLD_WATER`, `HOT_WATER`, `ELECTRICITY`, `HEAT`, `GAS` |
-| `serial_number` | `VARCHAR(100)` | `NOT NULL` | Physical meter serial number |
+| `serial_number` | `VARCHAR(100)` | `NULLABLE` | Physical meter serial number; `NULL` until set (optional since epic E13 R3: few people know it at the start; the chairman sets it later, R8) |
 | `location_label` | `VARCHAR(100)` | `NOT NULL, DEFAULT 'Main'` | e.g., `'Kitchen'`, `'Bathroom'`, `'Basement Master'` |
 | `unit` | `VARCHAR(16)` | `NOT NULL, DEFAULT 'm3'` | `'m3'`, `'kWh'`, `'MWh'` |
-| `initial_value` | `NUMERIC(12, 3)`| `NOT NULL, DEFAULT 0.000` | Starting reading upon installation/replacement |
+| `initial_value` | `NUMERIC(12, 3)`| `NULLABLE` | Starting reading upon installation/replacement; `NULL` = no known start (a meter imported without it, epic E13 R3b): its first reading starts it |
 | `max_monthly_delta` | `NUMERIC(12, 3)`| `NOT NULL, DEFAULT 25.000` | Threshold triggering the 2-step anomaly confirmation |
 | `is_active` | `BOOLEAN` | `NOT NULL, DEFAULT TRUE` | Set to `FALSE` when meter is replaced |
 
@@ -144,9 +144,10 @@ The daily quota of register calls of the installation (docs/API.md section 1).
 | `meter_id` | `UUID` | `FK(meters_devices.id), INDEX` | Target meter |
 | `period_id` | `UUID` | `FK(meters_periods.id), INDEX` | Accounting period |
 | `value` | `NUMERIC(12, 3)`| `NOT NULL` | Current cumulative meter reading |
-| `previous_value` | `NUMERIC(12, 3)`| `NOT NULL` | Snapshot of prior period's value (or `initial_value`) |
+| `previous_value` | `NUMERIC(12, 3)`| `NOT NULL` | Snapshot of prior period's value (or `initial_value`, or the value given with the first reading of a meter without a start, or `value` itself for a start; see `previous_origin`) |
 | `consumption_delta` | `NUMERIC(12, 3)`| `NOT NULL` | `value - previous_value` |
 | `source` | `VARCHAR(32)` | `NOT NULL` | Enum: `RESIDENT`, `ADMIN_OVERRIDE`, `AUTO_ESTIMATED`, `IOT_WEBHOOK` |
+| `previous_origin` | `VARCHAR(16)` | `NOT NULL` | Where `previous_value` came from (epic E13 R3b): `HISTORY` (an earlier period's reading), `INITIAL` (the meter's `initial_value`), `SUBMITTED` (given with the first reading of a meter without a start), `START` (the reading started the meter: `previous_value = value`). The migration sets `INITIAL` on each meter's earliest reading and `HISTORY` on the others |
 | `is_anomaly_confirmed`| `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | `TRUE` if user passed 2-step popup confirmation |
 | `submitted_by_user_id`| `UUID` | `FK(core_users.id), NULLABLE`| User who submitted/modified (NULL if system `AUTO_ESTIMATED`) |
 | `recorded_at` | `TIMESTAMPTZ` | `NOT NULL` | Timestamp of last modification (ORM `onupdate`; a raw `INSERT … ON CONFLICT DO UPDATE` must set it explicitly) |
@@ -155,7 +156,8 @@ The daily quota of register calls of the installation (docs/API.md section 1).
 **Integrity constraints of `meters_*` tables** (enforced by PostgreSQL, so no code path can bypass them):
 - Every enum column (`resource_type`, `unit`, `status`, `source`) has a named `CHECK (… IN (…))`.
 - `meters_periods.period_code` must match `^[0-9]{4}-(0[1-9]|1[0-2])$`.
-- `meters_devices`: `initial_value >= 0` and `max_monthly_delta > 0`.
+- `meters_devices`: `initial_value >= 0` (when set) and `max_monthly_delta > 0`.
+- `meters_readings`: `previous_origin = 'START'` only with `previous_value = value`.
 - `meters_readings`: `value >= 0`, `previous_value >= 0`, and `consumption_delta = value - previous_value` (the stored delta can never disagree with the values).
 - `meters_reading_logs` is append-only: triggers reject every `UPDATE`, `DELETE` and `TRUNCATE`.
 - **One building per row chain.** `meters_devices` and `meters_periods` are `UNIQUE (id, building_id)`, and `property_apartments` is `UNIQUE (id, building_id)`. Composite foreign keys then guarantee that:
