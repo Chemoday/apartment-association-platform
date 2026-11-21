@@ -157,6 +157,29 @@ class RegistryCandidate:
     kind_label: str | None = None
 
 
+@dataclass(frozen=True)
+class DraftApartment:
+    """An apartment of the register, as the building template drafts it (epic E12 X3)."""
+
+    number: str
+    area_m2: Decimal | None  # as the register gives it; the core rounds it
+    floor: int | None  # the floor of the apartment's entrance
+
+
+@dataclass(frozen=True)
+class LeftOutPart:
+    """A part of the building the draft leaves out, and why (never data of a person)."""
+
+    number: str | None
+    reason: str  # NON_RESIDENTIAL, COMMON, OTHER or NO_NUMBER
+
+
+@dataclass(frozen=True)
+class ApartmentDraft:
+    apartments: list[DraftApartment]  # in the natural order of their numbers
+    left_out: list[LeftOutPart]
+
+
 class RegistryUnavailable(Exception):
     """The register did not answer usably (timeout, network, unexpected answer); no provider
     text is kept."""
@@ -185,6 +208,12 @@ class BuildingRegistryProvider(Protocol):
     def certificate_valid_until(self, block: RegistryFacts) -> date | None:
         """Until when the building's energy certificate in `block` is valid; None without one.
         Pure: reads the block, never the register (the reminder of epic E12 X2b)."""
+        ...
+
+    def apartment_draft(self, block: RegistryFacts) -> ApartmentDraft:
+        """The apartments of the block for the building template (epic E12 X3, E13 R3): only
+        parts of kind apartment with a number; every other part is left out with its reason.
+        Pure: reads the block, never the register."""
         ...
 
 

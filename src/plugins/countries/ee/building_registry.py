@@ -30,6 +30,9 @@ from src.plugins.countries.ee.facts import (
 )
 from src.plugins.outbound import OutboundError, get_json
 from src.plugins.registry import (
+    ApartmentDraft,
+    DraftApartment,
+    LeftOutPart,
     PluginRegistry,
     RegistryBuildingNotFound,
     RegistryCandidate,
@@ -91,6 +94,25 @@ class EEBuildingRegistry:
             raise RegistryUnavailable()
         mapper = _Mapper()
         return mapper.facts(code, building)
+
+    def apartment_draft(self, block: EEBuildingFacts) -> ApartmentDraft:
+        """The parts of kind apartment (`liik` K), in the block's order (natural by number);
+        non-residential (M), common (Y) and unknown parts, and apartments without a number, are
+        left out (owner, 2026-11-21: the association accounts for shops separately)."""
+        apartments: list[DraftApartment] = []
+        left_out: list[LeftOutPart] = []
+        for unit in block.units:
+            if unit.kind != UnitKind.APARTMENT:
+                left_out.append(LeftOutPart(number=unit.number, reason=unit.kind.value))
+            elif not unit.number:
+                left_out.append(LeftOutPart(number=None, reason="NO_NUMBER"))
+            else:
+                apartments.append(
+                    DraftApartment(
+                        number=unit.number, area_m2=unit.area_m2, floor=unit.entrance_floor
+                    )
+                )
+        return ApartmentDraft(apartments=apartments, left_out=left_out)
 
     def certificate_valid_until(self, block: EEBuildingFacts) -> date | None:
         """The latest validity among the certificates the register marks valid; None without one
