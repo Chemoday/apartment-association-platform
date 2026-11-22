@@ -96,8 +96,10 @@ async def test_demo_mode_with_mail_sends_only_to_the_allowed_domain_and_retries_
     }
     assert rows[allowed].send_due_at is None
     held = rows[other]
-    assert held.send_attempts == 1  # like a failed send: the retry schedule applies
-    assert abs(held.send_due_at - (before + timedelta(minutes=1))) < timedelta(seconds=30)
+    # Demo mode without mail for it is no working e-mail: it waits an hour and never counts
+    # toward giving up (INVITATION_MAX_FAILED_SENDS).
+    assert (held.send_attempts, held.send_failures) == (1, 0)
+    assert abs(held.send_due_at - (before + timedelta(hours=1))) < timedelta(seconds=30)
     listed = (await api_client.get(f"{API}/invitations", headers=bearer)).json()
     assert {i["email"]: i["delivery"] for i in listed} == {allowed: "SENT", other: "QUEUED"}
 

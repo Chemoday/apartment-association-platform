@@ -72,6 +72,11 @@ INVITATION_RETRY_DELAYS = (
     timedelta(minutes=60),
 )
 INVITATION_RETRY_LAST = timedelta(hours=3)
+# After this many refusals of the mail server in a row the queue gives up: delivery FAILED until a
+# resend (owner, 2026-11-22). Without any working e-mail (no plugin; demo mode without
+# AUTH_MAIL_IN_DEMO) nothing counts: the invitation waits, tried again every hour.
+INVITATION_MAX_FAILED_SENDS = 8
+INVITATION_UNAVAILABLE_RETRY = timedelta(hours=1)
 
 
 def invitation_retry_delay(attempt: int) -> timedelta:

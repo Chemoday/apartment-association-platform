@@ -157,6 +157,10 @@ class AuthInvitation(Base):
     send_attempts: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=0, server_default=text("0")
     )
+    # Refusals of the mail server in a row; at INVITATION_MAX_FAILED_SENDS the queue gives up.
+    send_failures: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default=text("0")
+    )
 
 
 class AuthToken(Base):

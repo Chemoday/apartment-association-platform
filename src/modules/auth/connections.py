@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.auth.errors import apartment_not_found, forbidden
+from src.modules.auth.invitations import delivery_of
 from src.modules.auth.models import AuthInvitation, AuthJoinCode, AuthJoinRequest
 from src.modules.auth.policies import connection_status
 from src.modules.auth.schemas import (
@@ -36,7 +37,7 @@ def _now() -> datetime:
 class _Activity:
     """What the OWNER invitations, join codes and join requests of one apartment say about it."""
 
-    pending_queued: bool | None = None  # of the pending invitation: queued or sent; None: none
+    pending_delivery: InvitationDelivery | None = None  # of the pending invitation; None: none
     code_issued: bool = False  # an unused, unexpired join code (R4c)
     join_request: bool = False  # a join request waits (R4c)
     last_activity_at: datetime | None = None  # the latest invitation e-mail or code issue
@@ -108,7 +109,7 @@ class ConnectionService:
 
     @staticmethod
     def _item(row: ConnectionRowDTO, invitations: _Activity) -> ConnectionItem:
-        queued = invitations.pending_queued
+        delivery = invitations.pending_delivery
         return ConnectionItem(
             apartment_id=row.apartment_id,
             apartment_number=row.number,
@@ -117,7 +118,7 @@ class ConnectionService:
                 owners=row.owners,
                 tenants=row.tenants,
                 on_paper=row.on_paper,
-                invited=queued is not None,
+                invited=delivery is not None,
                 newest_expired_unused=invitations.newest_expired_unused,
                 join_request=invitations.join_request,
                 code_issued=invitations.code_issued,
@@ -126,11 +127,7 @@ class ConnectionService:
             tenants=row.tenants,
             on_paper=row.on_paper,
             last_invited_at=invitations.last_activity_at,
-            invitation_delivery=None
-            if queued is None
-            else InvitationDelivery.QUEUED
-            if queued
-            else InvitationDelivery.SENT,
+            invitation_delivery=delivery,
         )
 
     async def _activity(
@@ -151,6 +148,7 @@ class ConnectionService:
             AuthInvitation.expires_at,
             AuthInvitation.accepted_at,
             AuthInvitation.send_due_at,
+            AuthInvitation.send_failures,
         ).where(
             AuthInvitation.building_id == building_id,
             AuthInvitation.kind == InvitationKind.OWNER,
@@ -171,13 +169,19 @@ class ConnectionService:
             requests = requests.where(AuthJoinRequest.apartment_id == apartment_id)
         # Newest first, so the first pending invitation met is the newest pending one.
         invitations = invitations.order_by(AuthInvitation.created_at.desc(), AuthInvitation.id)
-        for apartment, created, sent, expires, accepted, due in await self.session.execute(
-            invitations
-        ):
+        for (
+            apartment,
+            created,
+            sent,
+            expires,
+            accepted,
+            due,
+            failures,
+        ) in await self.session.execute(invitations):
             item = of(apartment)
             unused = accepted is None
-            if item.pending_queued is None and unused and expires > now:
-                item.pending_queued = due is not None
+            if item.pending_delivery is None and unused and expires > now:
+                item.pending_delivery = delivery_of(due, failures)
             item.saw(sent)
             item.created(created, unused and expires <= now)
         for apartment, created, expires, used, cancelled in await self.session.execute(codes):

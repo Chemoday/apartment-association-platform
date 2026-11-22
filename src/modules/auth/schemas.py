@@ -1,5 +1,6 @@
 """Public enums and DTOs of the auth module (docs/API.md section 7)."""
 
+import re
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -15,16 +16,32 @@ from src.modules.property.schemas import BuildingRole, DisplayMode, Locale, Rela
 MAX_EMAIL_LENGTH = 254
 
 
+# A basic shape only (owner, 2026-11-22): whether the mailbox exists is never known. Letters of
+# any script are allowed; quotes, brackets, commas and the like are not.
+_LOCAL_CHARACTER = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]")
+_DOMAIN_LABEL = re.compile(r"[^\W_](?:(?:[^\W_]|-)*[^\W_])?")
+
+
+def _is_email_shape(local: str, domain: str) -> bool:
+    if not local or len(local) > 64 or local.startswith(".") or local.endswith("."):
+        return False
+    if ".." in local or not all(_LOCAL_CHARACTER.fullmatch(c) for c in local):
+        return False
+    labels = domain.split(".")
+    if len(labels) < 2 or len(labels[-1]) < 2 or labels[-1].isdigit():
+        return False
+    return all(len(label) <= 63 and _DOMAIN_LABEL.fullmatch(label) for label in labels)
+
+
 def _email_address(value: str) -> str:
-    """The canonical form of an e-mail address, or a validation error (422)."""
+    """The canonical form of an e-mail address, or a validation error (422): one @, a local part
+    without dots at its ends or in a row, a domain of dot-separated labels (letters, digits,
+    hyphens inside) ending in a label of two or more characters."""
     canonical = canonical_email(clean_text(value))  # control characters (NUL) are refused
-    local, _, domain = canonical.rpartition("@")
-    if (
-        not local
-        or "." not in domain
-        or any(c.isspace() for c in canonical)
-        or len(canonical) > MAX_EMAIL_LENGTH
-    ):
+    if canonical.count("@") != 1 or len(canonical) > MAX_EMAIL_LENGTH:
+        raise ValueError("not an e-mail address")
+    local, _, domain = canonical.partition("@")
+    if not _is_email_shape(local, domain):
         raise ValueError("not an e-mail address")
     return canonical
 
@@ -98,6 +115,7 @@ class InvitationDelivery(StrEnum):
 
     QUEUED = "QUEUED"
     SENT = "SENT"
+    FAILED = "FAILED"  # the mail server refused it INVITATION_MAX_FAILED_SENDS times in a row
 
 
 class BulkRowOutcome(StrEnum):

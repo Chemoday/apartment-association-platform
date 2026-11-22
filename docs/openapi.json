@@ -15755,7 +15755,8 @@
         "type": "string",
         "enum": [
           "QUEUED",
-          "SENT"
+          "SENT",
+          "FAILED"
         ],
         "title": "InvitationDelivery",
         "description": "Whether the e-mail of an invitation went out (the invitation queue, E13 R4a)."

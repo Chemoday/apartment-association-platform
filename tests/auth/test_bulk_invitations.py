@@ -24,7 +24,11 @@ from src.modules.auth.bulk import BulkListTooLong, parse_bulk_list
 from src.modules.auth.invitations import InvitationService, QueuedMail
 from src.modules.auth.mail import auth_catalog
 from src.modules.auth.models import AuthInvitation, AuthToken
-from src.modules.auth.policies import INVITATION_SEND_LEASE, invitation_retry_delay
+from src.modules.auth.policies import (
+    INVITATION_MAX_FAILED_SENDS,
+    INVITATION_SEND_LEASE,
+    invitation_retry_delay,
+)
 from src.modules.auth.queue import InvitationQueue, drain_queue
 from src.modules.auth.schemas import BulkRowOutcome
 from src.modules.property.models import User
@@ -482,7 +486,7 @@ async def test_a_stale_result_never_overwrites_a_newer_queue_state(
         .where(AuthInvitation.id == claimed[0].invitation_id)
         .values(send_attempts=0, send_due_at=now)
     )
-    assert await service.record_send(claimed[0], ok=True, now=now) is False
+    assert await service.record_send(claimed[0], outcome="sent", now=now) is False
     row = await row_of(db_session, created.json()["invitation_id"])
     assert row.send_due_at == now  # still queued for the resend
 
@@ -510,7 +514,7 @@ async def test_accepting_takes_the_invitation_out_of_the_queue(
     assert row.accepted_at is not None and row.send_due_at is None
     assert await db_session.scalar(select(User.id).where(User.email == email)) is not None
     service = InvitationService(db_session, mail_settings)
-    assert await service.record_send(claimed, ok=True, now=datetime.now(UTC)) is False
+    assert await service.record_send(claimed, outcome="sent", now=datetime.now(UTC)) is False
 
 
 async def test_drain_queue_sends_nothing_without_an_e_mail_channel(
@@ -553,8 +557,8 @@ async def test_a_claim_whose_lease_ran_out_is_claimed_again_and_its_result_ignor
     second = await claim_one(db_session, mail_settings, invitation_id, later)
     assert (first.attempt, second.attempt) == (1, 2)
     assert first.mail.link != second.mail.link
-    assert await service.record_send(first, ok=True, now=later) is False  # the stale one
-    assert await service.record_send(second, ok=True, now=later) is True
+    assert await service.record_send(first, outcome="sent", now=later) is False  # the stale one
+    assert await service.record_send(second, outcome="sent", now=later) is True
 
 
 async def test_an_invitation_that_no_longer_applies_is_not_sent(
@@ -705,3 +709,99 @@ async def test_concurrent_wake_ups_run_one_drain(
     await asyncio.gather(*(queue.drain() for _ in range(5)))
     assert most == 1
     assert calls == 2  # the first drain, and once more for the wake-ups during it
+
+
+async def test_the_queue_gives_up_after_eight_refusals_and_a_resend_starts_again(
+    client: AsyncClient,
+    world: World,
+    smtp_server: SmtpServer,
+    db_session: AsyncSession,
+    queue_clock,
+) -> None:
+    chairman = as_(world, world.chairman)
+    email = unique("refused")
+    created = await client.post(
+        f"{API}/invitations",
+        json={"kind": "OWNER", "email": email, "apartment_number": "21"},
+        headers=chairman,
+    )
+    invitation_id = created.json()["invitation_id"]
+    smtp_server.handler.data_reply = "554 refused"
+    for failures in range(1, INVITATION_MAX_FAILED_SENDS + 1):
+        await drain(client)
+        row = await row_of(db_session, invitation_id)
+        assert row.send_failures == failures
+        queue_clock.shift(hours=4)  # past every retry delay
+    assert row.send_due_at is None  # given up
+    listed = (await client.get(f"{API}/invitations", headers=chairman)).json()
+    mine = next(i for i in listed if i["invitation_id"] == invitation_id)
+    assert (mine["status"], mine["delivery"]) == ("PENDING", "FAILED")
+    overview = (await client.get(f"{API}/connections", headers=chairman)).json()
+    item = next(i for i in overview["items"] if i["apartment_number"] == "21")
+    assert (item["status"], item["invitation_delivery"]) == ("INVITED", "FAILED")
+    await drain(client)
+    assert (await row_of(db_session, invitation_id)).send_failures == INVITATION_MAX_FAILED_SENDS
+
+    smtp_server.handler.data_reply = None
+    resent = await client.post(f"{API}/invitations/{invitation_id}/resend", headers=chairman)
+    assert resent.json()["delivery"] == "QUEUED"
+    await drain(client)
+    row = await row_of(db_session, invitation_id)
+    assert (row.send_due_at, row.send_failures) == (None, 0)
+    assert len(links_sent(smtp_server, email)) == 1
+
+
+async def test_without_an_e_mail_plugin_nothing_counts_toward_giving_up(
+    client: AsyncClient, world: World, db_session: AsyncSession, mail_settings: Settings
+) -> None:
+    created = await client.post(
+        f"{API}/invitations",
+        json={"kind": "OWNER", "email": unique("noplugin"), "apartment_number": "2"},
+        headers=as_(world, world.chairman),
+    )
+    app = client._transport.app  # type: ignore[attr-defined]
+    original = app.state.plugin_registry.channel
+    app.state.plugin_registry.channel = lambda name: None if name == "email" else original(name)
+    try:
+        before = datetime.now(UTC)
+        await drain_queue(app.state.auth_session_factory, app.state.plugin_registry, mail_settings)
+    finally:
+        app.state.plugin_registry.channel = original
+    row = await row_of(db_session, created.json()["invitation_id"])
+    assert row.send_failures == 0 and row.send_due_at is not None
+    assert row.send_due_at >= before + timedelta(minutes=59)
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        "two@@example.com",
+        "a@.com",
+        "a@example.",
+        'a@b.ee"',
+        "a@b",
+        "a..b@example.com",
+        ".a@example.com",
+        "a@-x.ee",
+        "a@x_y.ee",
+        "a@x.e",
+        "a,b@example.com",
+    ],
+)
+async def test_an_e_mail_needs_a_basic_shape(client: AsyncClient, world: World, email: str) -> None:
+    single = await client.post(
+        f"{API}/invitations",
+        json={"kind": "OWNER", "email": email, "apartment_number": "2"},
+        headers=as_(world, world.chairman),
+    )
+    assert single.status_code == 422
+    report = (await preview(client, as_(world, world.chairman), f"2;{email}\n")).json()
+    assert report["rows"][0]["outcome"] == "INVALID_EMAIL"
+
+
+@pytest.mark.parametrize(
+    "email", ["mari.tamm+kyu@example.ee", "jüri@näide.ee", "o'brien@example.co.uk"]
+)
+async def test_ordinary_e_mails_keep_working(client: AsyncClient, world: World, email: str) -> None:
+    report = (await preview(client, as_(world, world.chairman), f"2;{email}\n")).json()
+    assert report["rows"][0]["outcome"] == "READY"

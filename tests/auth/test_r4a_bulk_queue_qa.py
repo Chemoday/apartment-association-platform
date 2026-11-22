@@ -584,7 +584,7 @@ async def test_an_invitation_deleted_while_its_e_mail_is_out(
     deleted = await client.delete(f"{API}/invitations/{invitation_id}", headers=chairman)
     assert deleted.status_code == 204
     service = InvitationService(db_session, mail_settings)
-    assert await service.record_send(claimed, ok=True, now=datetime.now(UTC)) is False
+    assert await service.record_send(claimed, outcome="sent", now=datetime.now(UTC)) is False
     token = claimed.mail.link.rpartition("#")[2]
     refused = await redeem(client, token)
     assert (refused.status_code, refused.json()["error_code"]) == (400, "INVALID_LINK")
@@ -610,7 +610,7 @@ async def test_a_resend_while_the_e_mail_is_out_voids_its_link_and_sends_a_new_o
     old_token = claimed.mail.link.rpartition("#")[2]
     assert (await redeem(client, old_token)).json()["error_code"] == "INVALID_LINK"
     service = InvitationService(db_session, mail_settings)
-    assert await service.record_send(claimed, ok=True, now=datetime.now(UTC)) is False
+    assert await service.record_send(claimed, outcome="sent", now=datetime.now(UTC)) is False
     row = await row_of(db_session, invitation_id)
     assert row.send_due_at is not None  # still queued for the resend
     await drain(client)
