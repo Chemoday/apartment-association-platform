@@ -21,6 +21,7 @@ from src.modules.auth import links as links_module
 from src.modules.auth import service as auth_service
 from src.modules.auth.models import AuthInvitation, AuthToken
 from src.modules.auth.policies import REFRESH_COOKIE
+from src.modules.auth.queue import drain_queue
 from src.modules.auth.schemas import AuthMethod
 from src.modules.auth.service import AuthService
 from src.modules.property.models import ApartmentMembership, Building, User
@@ -131,7 +132,11 @@ def as_(world: World, user: User) -> dict[str, str]:
 
 
 async def drain(client: AsyncClient) -> None:
-    await client._transport.app.state.auth_background.drain(within_seconds=10)  # type: ignore[attr-defined]
+    """Let detached work finish, then send what the invitation queue holds (the request would
+    have woken it; tests run it here, see tests/conftest.py)."""
+    app = client._transport.app  # type: ignore[attr-defined]
+    await app.state.auth_background.drain(within_seconds=10)
+    await drain_queue(app.state.auth_session_factory, app.state.plugin_registry, app.state.settings)
 
 
 def links_sent(smtp_server: SmtpServer, to: str) -> list[str]:
@@ -645,6 +650,10 @@ async def test_asking_for_a_sign_in_link_resends_a_pending_invitation(
         client, smtp_server, as_(world, world.chairman),
         kind="OWNER", email=email, apartment_number="2",
     )  # fmt: skip
+    sent = await db_session.get(AuthInvitation, uuid.UUID(invitation["invitation_id"]))
+    assert sent is not None and sent.send_due_at is None
+    expiry = sent.expires_at  # set when the queue sent the first e-mail
+    db_session.expunge(sent)
     response = await client.post(f"{API}/magic-link", json={"email": email})
     assert response.status_code == 202
     await drain(client)
@@ -654,7 +663,7 @@ async def test_asking_for_a_sign_in_link_resends_a_pending_invitation(
     assert (await redeem(client, new)).json()["status"] == "REGISTRATION_REQUIRED"
     row = await db_session.get(AuthInvitation, uuid.UUID(invitation["invitation_id"]))
     assert row is not None
-    assert row.expires_at == datetime.fromisoformat(invitation["expires_at"])  # same expiry
+    assert row.expires_at == expiry  # same expiry
 
 
 # --- My residents, replacing and removing tenants -------------------------------------------------

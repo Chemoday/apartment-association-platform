@@ -12,6 +12,10 @@ os.environ.setdefault("AUTH_HASH_SECRET", "test-only-auth-hash-secret-at-least-3
 os.environ.setdefault("NOTIFICATIONS_HASH_SECRET", "test-only-notifications-secret-32-bytes")
 os.environ.setdefault("AUTH_ALLOW_SESSIONLESS_TOKENS", "true")
 os.environ.setdefault("AUTH_CLEANUP_ENABLED", "false")
+# The invitation queue is drained by the tests themselves (tests/auth: drain), never by detached
+# work that would share the test's database session; the pacing gets its own test.
+os.environ.setdefault("AUTH_INVITATION_QUEUE_ENABLED", "false")
+os.environ.setdefault("AUTH_INVITATION_MAILS_PER_HOUR", "100000")
 # Uploaded files go to a throwaway directory; the janitor runs only when a test calls its tick.
 os.environ.setdefault("FILES_DIR", tempfile.mkdtemp(prefix="aap-test-files-"))
 os.environ.setdefault("FILES_JANITOR_ENABLED", "false")

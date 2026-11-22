@@ -787,6 +787,247 @@
         ]
       }
     },
+    "/api/v1/auth/invitations/bulk/preview": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Preview Bulk Invitations",
+        "description": "The chairman: what a bulk list of owners would do, row by row; changes nothing.",
+        "operationId": "preview_bulk_invitations_api_v1_auth_invitations_bulk_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkInvitationReport"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`, `BULK_LIST_TOO_LONG`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/invitations/bulk": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Send Bulk Invitations",
+        "description": "The chairman: invite the owners of a bulk list; every READY row, or none (429).",
+        "operationId": "send_bulk_invitations_api_v1_auth_invitations_bulk_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkInvitationReport"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`, `BULK_LIST_TOO_LONG`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see retry_after_seconds and the Retry-After header). error_code: `RATE_LIMITED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/invitations/resend-expired": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Resend Expired Invitations",
+        "description": "The chairman: queue the expired OWNER and STAFF invitations again, oldest first, as many\nas the building limit allows.",
+        "operationId": "resend_expired_invitations_api_v1_auth_invitations_resend_expired_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResendExpiredResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see retry_after_seconds and the Retry-After header). error_code: `RATE_LIMITED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/invitations/accept": {
       "post": {
         "tags": [
@@ -862,6 +1103,214 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/auth/connections": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Connection Overview",
+        "description": "The chairman: every apartment with its status and counts, never names or e-mails.",
+        "operationId": "connection_overview_api_v1_auth_connections_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ConnectionStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionOverview"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/connections/{apartment_id}/paper": {
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Set Paper Mark",
+        "description": "The chairman marks an apartment as worked on paper, or takes the mark away.",
+        "operationId": "set_paper_mark_api_v1_auth_connections__apartment_id__paper_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "apartment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Apartment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionItem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `APARTMENT_NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/invitations/{invitation_id}/resend": {
@@ -12254,6 +12703,122 @@
         ],
         "title": "BuildingRole"
       },
+      "BulkInvitationReport": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BulkInvitationRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/BulkRowOutcome"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "limit_remaining": {
+            "type": "integer",
+            "title": "Limit Remaining"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "counts",
+          "limit_remaining"
+        ],
+        "title": "BulkInvitationReport"
+      },
+      "BulkInvitationRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 4194304,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "BulkInvitationRequest",
+        "description": "The list of POST /auth/invitations/bulk[/preview]: parsed in memory, never stored."
+      },
+      "BulkInvitationRow": {
+        "properties": {
+          "line": {
+            "type": "integer",
+            "title": "Line"
+          },
+          "apartment_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apartment Number"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locale"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/BulkRowOutcome"
+          }
+        },
+        "type": "object",
+        "required": [
+          "line",
+          "apartment_number",
+          "email",
+          "locale",
+          "outcome"
+        ],
+        "title": "BulkInvitationRow"
+      },
+      "BulkRowOutcome": {
+        "type": "string",
+        "enum": [
+          "INVALID_ROW",
+          "INVALID_EMAIL",
+          "INVALID_LOCALE",
+          "APARTMENT_NOT_FOUND",
+          "DUPLICATE_IN_LIST",
+          "ALREADY_PENDING",
+          "READY",
+          "INVITED"
+        ],
+        "title": "BulkRowOutcome",
+        "description": "docs/API.md 7, \"Bulk invitations of owners\": the first that applies."
+      },
       "CardResident": {
         "properties": {
           "relation_type": {
@@ -12687,6 +13252,142 @@
           "created_at"
         ],
         "title": "CommentView"
+      },
+      "ConnectionItem": {
+        "properties": {
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Apartment Id"
+          },
+          "apartment_number": {
+            "type": "string",
+            "title": "Apartment Number"
+          },
+          "entrance": {
+            "type": "integer",
+            "title": "Entrance"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectionStatus"
+          },
+          "owners": {
+            "type": "integer",
+            "title": "Owners"
+          },
+          "tenants": {
+            "type": "integer",
+            "title": "Tenants"
+          },
+          "on_paper": {
+            "type": "boolean",
+            "title": "On Paper"
+          },
+          "last_invited_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Invited At"
+          },
+          "invitation_delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvitationDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "apartment_id",
+          "apartment_number",
+          "entrance",
+          "status",
+          "owners",
+          "tenants",
+          "on_paper",
+          "last_invited_at",
+          "invitation_delivery"
+        ],
+        "title": "ConnectionItem"
+      },
+      "ConnectionOverview": {
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/ConnectionSummary"
+          },
+          "matching": {
+            "type": "integer",
+            "title": "Matching"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "summary",
+          "matching",
+          "items"
+        ],
+        "title": "ConnectionOverview"
+      },
+      "ConnectionStatus": {
+        "type": "string",
+        "enum": [
+          "CONNECTED",
+          "JOIN_REQUEST",
+          "INVITED",
+          "CODE_ISSUED",
+          "TENANT_ONLY",
+          "PAPER",
+          "EXPIRED",
+          "NOT_INVITED"
+        ],
+        "title": "ConnectionStatus",
+        "description": "docs/API.md 7, \"The connection overview\": the first that applies. JOIN_REQUEST and\nCODE_ISSUED come with task R4c and are never returned before it."
+      },
+      "ConnectionSummary": {
+        "properties": {
+          "apartments": {
+            "type": "integer",
+            "title": "Apartments"
+          },
+          "connected": {
+            "type": "integer",
+            "title": "Connected"
+          },
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/ConnectionStatus"
+            },
+            "type": "object",
+            "title": "By Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "apartments",
+          "connected",
+          "by_status"
+        ],
+        "title": "ConnectionSummary"
       },
       "CurrentOccurrence": {
         "properties": {
@@ -14201,6 +14902,15 @@
         ],
         "title": "HistoryEntry"
       },
+      "InvitationDelivery": {
+        "type": "string",
+        "enum": [
+          "QUEUED",
+          "SENT"
+        ],
+        "title": "InvitationDelivery",
+        "description": "Whether the e-mail of an invitation went out (the invitation queue, E13 R4a)."
+      },
       "InvitationKind": {
         "type": "string",
         "enum": [
@@ -14310,6 +15020,19 @@
             "type": "boolean",
             "title": "Mine"
           },
+          "locale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Locale"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/InvitationDelivery"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -14331,6 +15054,8 @@
           "building_role",
           "status",
           "mine",
+          "locale",
+          "delivery",
           "created_at",
           "expires_at"
         ],
@@ -15777,6 +16502,16 @@
             "type": "string",
             "maxLength": 32,
             "title": "Apartment Number"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Locale"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -15787,6 +16522,20 @@
           "apartment_number"
         ],
         "title": "OwnerInvitationCreate"
+      },
+      "PaperUpdate": {
+        "properties": {
+          "on_paper": {
+            "type": "boolean",
+            "title": "On Paper"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on_paper"
+        ],
+        "title": "PaperUpdate"
       },
       "Participation": {
         "properties": {
@@ -17876,6 +18625,24 @@
         "title": "ReporterView",
         "description": "For the chairman and the board only: the privacy badge, never a raw name."
       },
+      "ResendExpiredResponse": {
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "title": "Queued"
+          },
+          "left": {
+            "type": "integer",
+            "title": "Left"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queued",
+          "left"
+        ],
+        "title": "ResendExpiredResponse"
+      },
       "ResidentView": {
         "properties": {
           "user_id": {
@@ -18391,6 +19158,16 @@
           },
           "building_role": {
             "$ref": "#/components/schemas/StaffRole"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Locale"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -18855,6 +19632,16 @@
             "type": "string",
             "format": "uuid",
             "title": "Apartment Id"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Locale"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

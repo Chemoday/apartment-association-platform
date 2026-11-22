@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    SmallInteger,
     String,
     UniqueConstraint,
     func,
@@ -29,6 +30,7 @@ from src.modules.auth.schemas import (
     StaffRole,
     TokenPurpose,
 )
+from src.modules.property.schemas import Locale
 
 
 class AuthSession(Base):
@@ -108,6 +110,12 @@ class AuthInvitation(Base):
             "apartment_id",
             postgresql_where=text("kind = 'TENANT' AND accepted_at IS NULL"),
         ),
+        # The invitation queue (E13 R4a).
+        Index(
+            "ix_auth_invitations_send_due",
+            "send_due_at",
+            postgresql_where=text("send_due_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -138,6 +146,16 @@ class AuthInvitation(Base):
         UUID(as_uuid=True), ForeignKey("property_memberships.id"), nullable=True
     )
     applied: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # The language picked for the invitation (E13 R4a); None: the account's or the default.
+    locale: Mapped[Locale | None] = mapped_column(
+        varchar_enum(Locale, "ck_auth_invitations_locale", length=8), nullable=True
+    )
+    # Set while its e-mail is queued: when the next attempt is due (a claim moves it on by the
+    # lease). None once sent.
+    send_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    send_attempts: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default=text("0")
+    )
 
 
 class AuthToken(Base):

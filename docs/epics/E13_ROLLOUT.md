@@ -370,6 +370,13 @@ imports `auth`.
   the pilot limits how much it sends per hour), and also wait there while the installation has no
   working e-mail (section 3). Unsent invitations are visible in the overview. **Resend all expired**
   is one action.
+- **Settled in the contract** (docs/API.md section 7, 2026-11-21): every invitation e-mail goes
+  through the queue, single ones too (the first-chairman command and the sign-in link e-mails
+  stay direct); the link is made when the e-mail goes out and the 7 days start then; the pacing
+  is `AUTH_INVITATION_MAILS_PER_HOUR` (30); a bulk send over the building limit creates nothing
+  (`429`), never a part; the list takes `;`, a tab or `,` and an optional header line; "resend
+  expired" covers `OWNER` and `STAFF` invitations, oldest first and as many as the limit allows
+  (`TENANT` ones stay their owners').
 
 ### R4b: the connection overview
 - Chairman only. Per apartment: number, entrance, a status, the number of active owners and
@@ -384,6 +391,12 @@ imports `auth`.
   behind `CONNECTED`.
 - The screen is a frontend task: the list "apartment - status", the link to the apartment card,
   the join requests with their actions, the paper mark.
+- **Settled in the contract** (docs/API.md section 7, 2026-11-22): `GET /auth/connections` and
+  `PUT /auth/connections/{apartment_id}/paper` in module `auth`, the mark stored on the apartment
+  (`property_apartments.on_paper`, changed through `PropertyService`); `JOIN_REQUEST` and
+  `CODE_ISSUED` are in the contract but returned only with R4c; the item shows whether the pending
+  invitation's e-mail is still queued (`invitation_delivery`), so unsent invitations of R4a are
+  visible; `limit` up to 500, so one page holds a whole building.
 
 ### R4c: join codes on paper
 - **Issue:** the chairman picks apartments (by default those without an active owner and with

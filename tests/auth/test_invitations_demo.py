@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import Settings, get_settings
 from src.main import create_app
 from src.modules.auth.models import AuthInvitation
+from src.modules.auth.queue import drain_queue
 from src.modules.auth.schemas import AuthMethod
 from src.modules.auth.service import AuthService
 from src.modules.property.schemas import BuildingRole
@@ -63,9 +64,16 @@ async def test_demo_mode_stores_the_invitation_and_sends_nothing(
     assert by_demo_header.status_code == 401  # account endpoints need a real sign-in
     created = await api_client.post("/api/v1/auth/invitations", json=body, headers=bearer)
     assert created.status_code == 201
+    assert created.json()["delivery"] == "QUEUED"
     await db_app.state.auth_background.drain(within_seconds=10)
+    # The queue tries it like a failed send: nothing goes out, it waits for a retry (E13 R4a).
+    await drain_queue(
+        db_app.state.auth_session_factory, db_app.state.plugin_registry, demo_settings
+    )
     assert smtp_server.messages == []
+    db_session.expunge_all()
     stored = await db_session.scalar(
         select(AuthInvitation).where(AuthInvitation.email == "demo.owner@example.com")
     )
     assert stored is not None
+    assert stored.send_due_at is not None and stored.send_attempts == 1

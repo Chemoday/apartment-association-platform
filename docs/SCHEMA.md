@@ -54,6 +54,7 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `floor` | `INTEGER` | `NOT NULL, DEFAULT 1` | Floor number |
 | `riser_group` | `VARCHAR(50)` | `NULLABLE` | Plumbing riser identifier |
 | `area_m2` | `NUMERIC(8, 2)` | `NOT NULL` | Heated area in m² (prepared for Phase 2 Billing) |
+| `on_paper` | `BOOLEAN` | `NOT NULL, DEFAULT false` | Marked by the chairman as worked on paper (epic E13 R4b, migration 033); shown in the connection overview (docs/API.md 7) and set through `PropertyService.set_on_paper` |
 | `UNIQUE` | `(building_id, number)` | | Unique apartment number per building |
 
 ### Table: `property_memberships`
@@ -397,7 +398,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 
 ## 7. Module: `auth` (epic E7)
 
-*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011).*
+*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011). The language and the send queue of invitations, and the attempt kinds `BULK_INVITATION` and `INVITATION_MAIL`, came with epic E13 task R4a (migration 032).*
 
 *All hashes are keyed HMAC-SHA-256 (hex, 64 characters) with `AUTH_HASH_SECRET`; a prefix such as `ip:` or `user:` is part of the hashed input, never stored. Rotating the secret ends every session and voids every open link and invitation.*
 
@@ -450,15 +451,19 @@ Columns as in section 1, plus:
 | `building_role` | `VARCHAR(32)` | `NULLABLE, CHECK IN ('BOARD', 'ACCOUNTANT', 'CHAIRMAN')` | Set exactly for `STAFF` |
 | `invited_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | `NULL` for the operator command (first chairman) |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
-| `last_sent_at` | `TIMESTAMPTZ` | `NOT NULL` | |
-| `expires_at` | `TIMESTAMPTZ` | `NOT NULL` | `last_sent_at + 7 days`; a resend by the inviter or the chairman moves it, a resend through `POST …/magic-link` does not |
+| `last_sent_at` | `TIMESTAMPTZ` | `NOT NULL` | When its newest e-mail went out (the queue sets it on success); for a new invitation whose first e-mail is still queued, the time it was created |
+| `expires_at` | `TIMESTAMPTZ` | `NOT NULL` | `last_sent_at + 7 days`; a resend by the inviter or the chairman moves it, a resend through `POST …/magic-link` does not. Queuing an e-mail (R4a) sets it to that time + 7 days, so a queued invitation is pending; it is set again when the e-mail goes out |
 | `accepted_at` | `TIMESTAMPTZ` | `NULLABLE` | |
 | `accepted_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | Set with `accepted_at` |
 | `membership_id` | `UUID` | `FK(property_memberships.id), NULLABLE` | The membership this invitation created or reopened (API `invited_email`; for `STAFF`, `accepted_user_id` plays this part); `NULL` for `STAFF` and when acceptance changed nothing |
 | `applied` | `BOOLEAN` | `NULLABLE` | Set with `accepted_at`: whether acceptance changed anything |
+| `locale` | `VARCHAR(8)` | `NULLABLE, CHECK IN ('et', 'ru', 'en')` | The language picked for the invitation (R4a); `NULL`: none picked. The API offers only `DEFAULT_LOCALE` and `en` |
+| `send_due_at` | `TIMESTAMPTZ` | `NULLABLE` | Set while its e-mail is queued (R4a): when the next attempt is due; a worker that claims it moves it forward by the lease (6 minutes, longer than a batch of timed-out sends), so a crashed attempt is due again. `NULL` once sent (API `delivery: SENT`) and for rows older than migration 032 |
+| `send_attempts` | `SMALLINT` | `NOT NULL, DEFAULT 0` | Attempts since it was last queued, for the retry delays; the record of a result is fenced on it |
 
 - `ck_auth_invitations_target`: `apartment_id IS NOT NULL` exactly when `kind IN ('OWNER', 'TENANT')`, and `building_role IS NOT NULL` exactly when `kind = 'STAFF'`.
 - Partial unique index `uq_auth_invitations_open`: `UNIQUE NULLS NOT DISTINCT (kind, email, apartment_id, building_role) WHERE accepted_at IS NULL`. One open invitation per target, from anyone. A new invitation for a target whose open one has expired replaces it in the same transaction.
+- Partial index `ix_auth_invitations_send_due`: `(send_due_at) WHERE send_due_at IS NOT NULL`, for the queue worker. It claims due rows of unexpired, unaccepted invitations with `FOR UPDATE SKIP LOCKED`, oldest first, and at most as many as the pacing still allows: `AUTH_INVITATION_MAILS_PER_HOUR` minus the `INVITATION_MAIL` rows of `auth_attempts` within the last hour (one per e-mail the queue sent). Accepting clears `send_due_at`.
 - Partial index `ix_auth_invitations_open_tenants`: `(apartment_id) WHERE kind = 'TENANT' AND accepted_at IS NULL`, for the tenant limit. The limit counts unexpired rows together with the active tenant memberships, under a lock on the apartment's row (`SELECT … FOR UPDATE` through `PropertyService`).
 
 ### Table: `auth_tokens`
@@ -486,8 +491,8 @@ Columns as in section 1, plus:
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `UUID` | `PK` | |
-| `kind` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('MAGIC_LINK', 'REDEEM', 'PASSWORD', 'INVITATION')` | |
-| `subject_hash` | `VARCHAR(64)` | `NOT NULL` | Keyed hash of what is counted: `email:<canonical e-mail>`, `ip:<address>`, `pair:<e-mail>\|<address>` or `user:<inviter id>`; an IPv6 address counts by its /64 |
+| `kind` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('MAGIC_LINK', 'REDEEM', 'PASSWORD', 'INVITATION', 'BULK_INVITATION', 'INVITATION_MAIL')` | `BULK_INVITATION` (R4a): one row per invitation of a bulk send or of "resend expired", for the building limit of twice the number of apartments per 24 hours. `INVITATION_MAIL` (R4a): one row per invitation e-mail the queue sent, for its pacing |
+| `subject_hash` | `VARCHAR(64)` | `NOT NULL` | Keyed hash of what is counted: `email:<canonical e-mail>`, `ip:<address>`, `pair:<e-mail>\|<address>`, `user:<inviter id>`, `building:<building id>` (`BULK_INVITATION`) or `queue:invitation-mails` (`INVITATION_MAIL`); an IPv6 address counts by its /64 |
 | `succeeded` | `BOOLEAN` | `NOT NULL` | |
 | `attempted_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 | `INDEX` | `(kind, subject_hash, attempted_at)` | | |

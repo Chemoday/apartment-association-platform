@@ -83,3 +83,29 @@ def unknown_user() -> DomainError:
         message="The user does not exist or is deactivated.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def locale_not_offered() -> DomainError:
+    """A language other than the instance default or en (docs/API.md 7, E13 R4a)."""
+    return DomainError(
+        status_code=422,
+        error_code="VALIDATION_ERROR",
+        message="The request is invalid.",
+        extra={
+            "errors": [
+                {
+                    "loc": ["body", "locale"],
+                    "message": "this language is not offered",
+                    "type": "value_error",
+                }
+            ]
+        },
+    )
+
+
+def bulk_list_too_long() -> DomainError:
+    return DomainError(
+        status_code=422,
+        error_code="BULK_LIST_TOO_LONG",
+        message="The list is longer than 1 MB or than twice the number of apartments.",
+    )

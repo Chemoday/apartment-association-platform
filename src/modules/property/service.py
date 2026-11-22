@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, func, select, text, update
+from sqlalchemy import and_, func, select, text, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ from src.modules.property.schemas import (
     BuildingResponse,
     BuildingRole,
     CardResident,
+    ConnectionRowDTO,
     CurrentUserDTO,
     DeliveryContactDTO,
     DisplayMode,
@@ -958,6 +959,64 @@ class PropertyService:
 
     async def active_tenant_count(self, apartment_id: uuid.UUID) -> int:
         return await self._count_members(apartment_id, RelationType.TENANT)
+
+    async def connection_rows(
+        self, building_id: uuid.UUID, apartment_id: uuid.UUID | None = None
+    ) -> list[ConnectionRowDTO]:
+        """Every apartment of the building (or only `apartment_id`) in list order, with its active
+        owners and tenants (active accounts only; family members are not counted) counted in one
+        query (the connection overview, E13 R4b)."""
+
+        def counted(relation: RelationType) -> Any:  # a SQL expression
+            # A membership of a closed account joins no user, so it is not counted.
+            return func.count(ApartmentMembership.id).filter(
+                ApartmentMembership.relation_type == relation, User.id.is_not(None)
+            )
+
+        rows = await self.session.execute(
+            select(
+                Apartment.id,
+                Apartment.number,
+                Apartment.entrance,
+                Apartment.on_paper,
+                counted(RelationType.OWNER),
+                counted(RelationType.TENANT),
+            )
+            .outerjoin(
+                ApartmentMembership,
+                and_(ApartmentMembership.apartment_id == Apartment.id, ACTIVE_MEMBERSHIP),
+            )
+            .outerjoin(User, and_(User.id == ApartmentMembership.user_id, User.is_active.is_(True)))
+            .where(
+                Apartment.building_id == building_id,
+                Apartment.id == apartment_id if apartment_id is not None else true(),
+            )
+            .group_by(Apartment.id)
+            .order_by(*_APARTMENT_ORDER)
+        )
+        return [
+            ConnectionRowDTO(
+                apartment_id=apartment_id,
+                number=number,
+                entrance=entrance,
+                on_paper=on_paper,
+                owners=owners,
+                tenants=tenants,
+            )
+            for apartment_id, number, entrance, on_paper, owners, tenants in rows.all()
+        ]
+
+    async def set_on_paper(
+        self, building_id: uuid.UUID, apartment_id: uuid.UUID, on_paper: bool
+    ) -> bool:
+        """The chairman's paper mark; False when the apartment is not in that building."""
+        result = await self.session.execute(
+            update(Apartment)
+            .where(Apartment.id == apartment_id, Apartment.building_id == building_id)
+            .values(on_paper=on_paper)
+            .execution_options(synchronize_session=False)
+        )
+        return bool(result.rowcount)
 
     async def active_chairman_count(self, building_id: uuid.UUID) -> int:
         count = await self.session.scalar(

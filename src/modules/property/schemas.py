@@ -338,6 +338,19 @@ class ApartmentRefDTO(BaseModel):
     number: str
 
 
+class ConnectionRowDTO(BaseModel):
+    """One apartment of the connection overview (epic E13 R4b): counts only, never people."""
+
+    model_config = ConfigDict(frozen=True)
+
+    apartment_id: uuid.UUID
+    number: str
+    entrance: int
+    on_paper: bool
+    owners: int
+    tenants: int
+
+
 class MembershipRefDTO(BaseModel):
     """An active membership as module auth needs it: ids and the relation, no people."""
 

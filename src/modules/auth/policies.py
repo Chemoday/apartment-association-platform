@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.core.config import NON_PRODUCTION_ENVIRONMENTS, Settings
-from src.modules.auth.schemas import DeviceKind, InvitationStatus, PasswordWeakness, StaffRole
+from src.modules.auth.schemas import (
+    ConnectionStatus,
+    DeviceKind,
+    InvitationStatus,
+    PasswordWeakness,
+    StaffRole,
+)
 from src.modules.property.schemas import BuildingRole
 
 if TYPE_CHECKING:
@@ -51,6 +57,29 @@ REGISTRATION_TTL = timedelta(minutes=30)
 INVITATIONS_PER_INVITER_PER_HOUR = 10
 # Expired, accepted or ended invitations are kept this long, then deleted (docs/SCHEMA.md 7).
 INVITATION_RETENTION = timedelta(days=30)
+
+# The invitation queue (E13 R4a, docs/ARCHITECTURE.md 4.9): a batch of claimed e-mails, each send
+# cut off after the timeout; the lease outlasts a whole batch of timed-out sends, so no second run
+# re-claims (and re-links) an e-mail still being sent. A claimed e-mail is due again after the
+# lease (a crashed attempt); a failed one after these delays, then every INVITATION_RETRY_LAST.
+INVITATION_SEND_BATCH = 10
+INVITATION_SEND_TIMEOUT = timedelta(seconds=30)
+INVITATION_SEND_LEASE = INVITATION_SEND_BATCH * INVITATION_SEND_TIMEOUT + timedelta(minutes=1)
+INVITATION_RETRY_DELAYS = (
+    timedelta(minutes=1),
+    timedelta(minutes=5),
+    timedelta(minutes=15),
+    timedelta(minutes=60),
+)
+INVITATION_RETRY_LAST = timedelta(hours=3)
+
+
+def invitation_retry_delay(attempt: int) -> timedelta:
+    """The wait after failed attempt number `attempt` (from 1)."""
+    if 1 <= attempt <= len(INVITATION_RETRY_DELAYS):
+        return INVITATION_RETRY_DELAYS[attempt - 1]
+    return INVITATION_RETRY_LAST
+
 
 # Passwords (A5, docs/API.md 7). Lengths count Unicode code points after NFKC.
 PASSWORD_PROVIDER = "password"
@@ -119,6 +148,25 @@ def invitation_status(
     if expires_at <= now:
         return InvitationStatus.EXPIRED
     return InvitationStatus.PENDING
+
+
+def connection_status(
+    *, owners: int, tenants: int, on_paper: bool, invited: bool, newest_expired_unused: bool
+) -> ConnectionStatus:
+    """The status of an apartment in the connection overview (E13 R4b, docs/API.md 7): the
+    first that applies. `invited`: an OWNER invitation is pending; `newest_expired_unused`: the
+    newest OWNER invitation ran out unaccepted. JOIN_REQUEST and CODE_ISSUED come with R4c."""
+    if owners > 0:
+        return ConnectionStatus.CONNECTED
+    if invited:
+        return ConnectionStatus.INVITED
+    if tenants > 0:
+        return ConnectionStatus.TENANT_ONLY
+    if on_paper:
+        return ConnectionStatus.PAPER
+    if newest_expired_unused:
+        return ConnectionStatus.EXPIRED
+    return ConnectionStatus.NOT_INVITED
 
 
 def staff_invitation_applies(current: BuildingRole, invited: StaffRole) -> bool:

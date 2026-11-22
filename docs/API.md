@@ -1759,8 +1759,13 @@ Board members do not invite. Family members (`RESIDENT`) are not invited (owner 
 
 **Invitation object (`InvitationView`):**
 ```json
-{ "invitation_id": "uuid", "kind": "TENANT", "email": "new@example.com", "apartment_id": "uuid", "apartment_number": "14", "building_role": null, "status": "PENDING", "mine": true, "created_at": "...", "expires_at": "..." }
+{ "invitation_id": "uuid", "kind": "TENANT", "email": "new@example.com", "apartment_id": "uuid", "apartment_number": "14", "building_role": null, "status": "PENDING", "mine": true, "locale": "en", "delivery": "SENT", "created_at": "...", "expires_at": "..." }
 ```
+- **`locale`:** the language picked for this invitation (`DEFAULT_LOCALE` or `en`), or `null`
+  when none was picked (the instance default is used). See "The language of an invitation".
+- **`delivery`:** `QUEUED` while its e-mail waits in the queue (also when every attempt so far
+  failed, and when it expired before it could be sent), `SENT` once the mail server accepted it.
+  See "The invitation queue".
 - **`status`:**
   - `PENDING`;
   - `ACCEPTED`;
@@ -1775,12 +1780,47 @@ Board members do not invite. Family members (`RESIDENT`) are not invited (owner 
 - **`email`** is shown in full only to the person who typed it in, and masked to everyone else who
   may see the invitation (co-owners, the chairman, another chairman): `n***@example.com`.
 
+#### The language of an invitation (epic E13, task R4a)
+- Every way of inviting takes an optional language: `locale` in the body of `POST`, a third
+  column in the bulk list. Offered are the instance default (`DEFAULT_LOCALE`, in Estonia the
+  state language) and `en`; any other value is `422 VALIDATION_ERROR` (one in the bulk list is
+  the row outcome `INVALID_LOCALE`). Without one, the invitation stores `null`.
+- The language is stored on the invitation and used for every send of it until it is accepted.
+- **The e-mail's language,** the first that applies: the language of the account with that
+  e-mail, if one exists (unchanged: only the mailbox owner sees which); the invitation's
+  `locale`; `DEFAULT_LOCALE`. It is decided when the e-mail goes out.
+
+#### The invitation queue (epic E13, task R4a)
+Invitation e-mails go out through a queue in the database, so that a regular mailbox (which
+limits how much it sends per hour) is paced and a failed send is tried again, also across
+restarts and while the installation has no working e-mail.
+- **What is queued:** every invitation e-mail of this section: `POST`, resend, the bulk send and
+  "resend expired". The answer never waits for the mail server; it comes back with
+  `delivery: "QUEUED"`, and the e-mail usually goes out within seconds. Outside the queue (sent
+  at once, as before): the first-chairman command, which reports to the operator whether the
+  mail went out, and the e-mails of `POST /auth/magic-link`. That one leaves an invitation whose
+  e-mail is still queued to the queue, so a person never receives two different links.
+- **The link is made when the e-mail goes out,** never earlier, and only the newest one works (as
+  before; a resend voids the old link at once). The 7 days of an invitation start when its e-mail goes out: `expires_at` is set again
+  then. An invitation that waits 7 days unsent expires like any other (`EXPIRED` with
+  `delivery: "QUEUED"`) and leaves the queue; a resend puts it back.
+- **Pacing:** at most `AUTH_INVITATION_MAILS_PER_HOUR` (default 30) invitation e-mails per
+  installation in any hour (e-mails that went out, resends included); the rest wait their turn,
+  oldest first.
+- **Retries:** a send that the mail server refuses, that cannot reach it or that takes longer than
+  30 seconds is tried again after
+  1, 5, 15 and 60 minutes, then every 3 hours, until the invitation expires. No working e-mail
+  (no e-mail plugin; demo mode without `AUTH_MAIL_IN_DEMO`) counts as a failed send. A crash
+  between the send and its record sends that e-mail again (at least once).
+- **Nothing personal is logged:** the queue logs the invitation id, the attempt and the error
+  code, never the address or the link (docs/OBSERVABILITY.md).
+
 #### `POST /api/v1/auth/invitations` (signed in)
-Response `201 InvitationView`.
+Request: the body of the table above, plus the optional `"locale": "en"`. Response
+`201 InvitationView`.
 - The answer is the same whether the e-mail has an account or not.
-- The invitation e-mail holds a link valid 7 days. It is written in the language of the account
-  with that e-mail, if one exists (only the mailbox owner sees which), otherwise in the instance
-  default (`DEFAULT_LOCALE`).
+- The invitation e-mail holds a link valid 7 days, in the language of "The language of an
+  invitation", sent through the queue.
 - A new person registers through it. A person with an account signs in and accepts, so nobody is
   added to an apartment or given a role without their consent.
 
@@ -1791,10 +1831,80 @@ Errors:
   active tenants and pending tenant invitations together.
 - `409 INVITATION_ALREADY_PENDING`: an invitation of this kind for this e-mail and target is
   already pending (from anyone); resend it instead. An expired one is replaced by the new one.
-- `422 VALIDATION_ERROR`.
+- `422 VALIDATION_ERROR`, also a `locale` that is not offered.
 - `429 RATE_LIMITED`: 10 invitations and resends per inviter per hour.
 
-**Demo mode:** the invitation is stored, but its e-mail goes out only with `AUTH_MAIL_IN_DEMO=true`.
+**Demo mode:** the invitation is stored, but its e-mail goes out only with `AUTH_MAIL_IN_DEMO=true`
+(without it, it stays `QUEUED`).
+
+#### Bulk invitations of owners (epic E13, task R4a)
+`POST /api/v1/auth/invitations/bulk/preview` and `POST /api/v1/auth/invitations/bulk`, the
+chairman only (signed in with a Bearer token; anyone else `403 FORBIDDEN`). Both take the same
+request and answer with the same report; the preview changes nothing.
+
+Request `{"text": "..."}`: the list the chairman pasted, or the text of a file the client read.
+It is parsed in memory and never stored, neither in the database nor in the file storage.
+- **One row per line:** `apartment number; e-mail; language`. The separator is `;` when the line
+  has one, else a tab, else `,`. The language may be left out or empty, and its case is
+  ignored (`EN` is `en`); empty cells at the end of a line (a spreadsheet export) are ignored.
+- Leading and trailing spaces of each cell are ignored, and so are empty lines, lines starting
+  with `#`, a byte order mark and a first line that names the columns (its second cell is not an
+  e-mail and contains `mail`). The apartment number must match the number of an apartment
+  exactly, as in `POST` (`14` is not `014`).
+- **Size:** at most 1 MB of UTF-8 and at most twice as many rows as the building has apartments;
+  otherwise `422 BULK_LIST_TOO_LONG` and nothing is read. A `text` of more than 4 194 304
+  characters is refused earlier, as `422 VALIDATION_ERROR`, and so is a control character.
+
+Response `200 BulkInvitationReport`:
+```json
+{
+  "rows": [
+    { "line": 2, "apartment_number": "14", "email": "owner@example.com", "locale": "et", "outcome": "READY" },
+    { "line": 3, "apartment_number": "99", "email": "other@example.com", "locale": null, "outcome": "APARTMENT_NOT_FOUND" }
+  ],
+  "counts": { "READY": 1, "APARTMENT_NOT_FOUND": 1 },
+  "limit_remaining": 118
+}
+```
+- `rows` has every row that was read, in the order of the list, with its line number (from 1).
+  `apartment_number`, `email` and `locale` are the cells as typed (the e-mail in canonical form
+  when it is valid, the language in lower case); the chairman typed them, so they are shown in
+  full.
+- **`outcome`,** the first that applies:
+  - `INVALID_ROW`: not two or three cells;
+  - `INVALID_EMAIL`;
+  - `INVALID_LOCALE`: a language that is not offered (see "The language of an invitation");
+  - `APARTMENT_NOT_FOUND`;
+  - `DUPLICATE_IN_LIST`: the same e-mail and apartment on an earlier line (that one counts);
+  - `ALREADY_PENDING`: an `OWNER` invitation of this e-mail and apartment is already pending,
+    from anyone (as `409 INVITATION_ALREADY_PENDING`; an expired one is replaced);
+  - `READY` in the preview, `INVITED` in the send.
+  There is no outcome "already a member": the report never tells whether an e-mail has an
+  account (an invitation to a member is accepted as usual and changes nothing, see `accept`).
+- `counts` holds each outcome that occurs; `limit_remaining` is what the building limit (below)
+  still allows: in the preview before the send, in the send after it.
+- **The send** reads the list again and checks every row again (things may have changed since
+  the preview), then creates an `OWNER` invitation for every `READY` row, all in one transaction,
+  and queues their e-mails. Rows with another outcome are skipped and reported. When there are
+  more `READY` rows than the building limit still allows, nothing is created:
+  `429 RATE_LIMITED` with `Retry-After`.
+- **The building limit:** the rows of bulk sends and the invitations of "resend expired" (and,
+  with task R4c, confirmed join requests) count against one limit per building in any 24 hours,
+  twice the number of apartments. Single invitations and resends keep their own limit of 10 per
+  inviter per hour and do not count here.
+- Errors: `403 FORBIDDEN`, `422 BULK_LIST_TOO_LONG`, `422 VALIDATION_ERROR`, `429 RATE_LIMITED`
+  (the send only).
+
+#### `POST /api/v1/auth/invitations/resend-expired` (epic E13, task R4a)
+The chairman only (else `403 FORBIDDEN`). The `EXPIRED` `OWNER` and `STAFF` invitations of the
+building are resent, oldest first: the old link stops working, the e-mail goes into the queue
+with a new link, and the 7 days start again when it goes out. `TENANT` invitations are their
+owners' (resend them one by one). They count against the building limit, and only as many are
+resent as it still allows. Response `200 {"queued": 12, "left": 3}`: `left` expired ones wait for
+the next call (`{"queued": 0, "left": 0}` when there was none). When the limit allows none of
+them: `429 RATE_LIMITED` with `Retry-After` (when the oldest counted invitation ages out; a
+building without apartments has a limit of 0 and gets `Retry-After: 86400`, so its expired
+`STAFF` invitations are resent one by one).
 
 #### `GET /api/v1/auth/invitations` (signed in)
 `InvitationView` items, newest first.
@@ -1803,8 +1913,11 @@ Errors:
 
 #### `POST /api/v1/auth/invitations/{invitation_id}/resend` and `DELETE /api/v1/auth/invitations/{invitation_id}`
 - **Who:** the chairman; for a `TENANT` invitation, also any owner of the apartment.
-- **Resend:** a `PENDING` or `EXPIRED` invitation gets a new link, the old one stops working, and
-  the 7 days start again. Response `200 InvitationView`; the limit of `POST` applies. An expired
+- **Resend:** a `PENDING` or `EXPIRED` invitation is queued again: its old link stops working at
+  once (and a registration form opened through it), the e-mail goes out with a new link, and the
+  7 days start again. An invitation whose e-mail is still queued stays queued and is tried again
+  at once. Response
+  `200 InvitationView`; the limit of `POST` applies. An expired
   `TENANT` invitation counts toward the tenant limit again (`409 TENANT_LIMIT_REACHED`).
 - **Delete:** a `PENDING`, `EXPIRED` or `NO_LONGER_VALID` invitation, with its links: `204`.
 - **Errors:**
@@ -1944,6 +2057,54 @@ What stays:
 There is no endpoint to change an e-mail address; changing one's own e-mail comes later (E7 page,
 scope).
 
+### The connection overview (epic E13, task R4b)
+Which apartments have someone in the app, for the chairman who brings the building in. The
+chairman only (signed in with a Bearer token; anyone else `403 FORBIDDEN`). It shows no names and
+no e-mails: only counts, statuses and dates.
+
+#### `GET /api/v1/auth/connections?status=NOT_INVITED&limit=50&offset=0`
+Response `200 ConnectionOverview`:
+```json
+{
+  "summary": { "apartments": 60, "connected": 34, "by_status": { "CONNECTED": 34, "INVITED": 12, "NOT_INVITED": 14 } },
+  "matching": 14,
+  "items": [
+    { "apartment_id": "uuid", "apartment_number": "14", "entrance": 2, "status": "NOT_INVITED", "owners": 0, "tenants": 0, "on_paper": false, "last_invited_at": null, "invitation_delivery": null }
+  ]
+}
+```
+- **One item per apartment,** in the order of the apartment list (entrance, then the natural order
+  of the numbers). `owners` and `tenants` count the active `OWNER` and `TENANT` memberships
+  of active accounts (family members are not counted).
+- **`status`,** the first that applies:
+  - `CONNECTED`: an active owner;
+  - `JOIN_REQUEST`: a join request waits for the chairman (task R4c; never returned before it);
+  - `INVITED`: an `OWNER` invitation is pending;
+  - `CODE_ISSUED`: an unused join code (task R4c; never returned before it);
+  - `TENANT_ONLY`: only tenants are active, so nobody there can invite or vote;
+  - `PAPER`: marked by the chairman as worked on paper (below);
+  - `EXPIRED`: the newest `OWNER` invitation ran out unused (until the clean-up deletes it, 30
+    days after it expired, docs/SCHEMA.md 7; then `NOT_INVITED`);
+  - `NOT_INVITED`: none of these (also after an invitation was deleted, or a membership ended).
+- **`last_invited_at`:** the latest time an e-mail of any `OWNER` invitation of the apartment went
+  out (an invitation whose first e-mail is still queued counts with the time it was created;
+  `null`: none). **`invitation_delivery`:** of the pending `OWNER` invitation, if
+  there is one: `QUEUED` while its e-mail waits in the queue, else `SENT`; `null` without one. So
+  invitations that could not be sent yet are visible.
+- **`on_paper`:** the chairman's mark; it stays when the apartment connects later, but
+  `CONNECTED`, `INVITED` and `TENANT_ONLY` come first.
+- **`summary`** counts every apartment of the building, whatever the filter: `apartments`, the
+  number `connected`, and `by_status` with each status that occurs. **`matching`** is the number of
+  items the filter selects, for paging.
+- **Filters:** `status` (optional; one status). `limit` 1..500 (default 50), `offset` 0..100000.
+- Errors: `403 FORBIDDEN`, `422 VALIDATION_ERROR`.
+
+#### `PUT /api/v1/auth/connections/{apartment_id}/paper`
+The chairman marks an apartment as worked on paper (the chairman or the accountant enters its
+readings), or takes the mark away. Request `{"on_paper": true}`. Response `200` with the item of
+that apartment, as in the list. Errors: `403 FORBIDDEN`, `404 APARTMENT_NOT_FOUND` (not in the
+caller's building), `422 VALIDATION_ERROR`.
+
 ### First chairman of a new installation
 An operator command, not an endpoint: `uv run python -m src.modules.auth create-chairman --email
 chair@example.com`.
@@ -1968,7 +2129,7 @@ chair@example.com`.
 | 403 | `CSRF_CHECK_FAILED`, `REAUTHENTICATION_REQUIRED`, `FORBIDDEN` |
 | 404 | `SESSION_NOT_FOUND`, `INVITATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `USER_NOT_FOUND` |
 | 409 | `EMAIL_ALREADY_REGISTERED` (registration only), `TENANT_LIMIT_REACHED`, `INVITATION_ALREADY_PENDING`, `INVITATION_ACCEPTED`, `INVITATION_NO_LONGER_VALID`, `LAST_CHAIRMAN` |
-| 422 | `VALIDATION_ERROR`, `PASSWORD_TOO_WEAK` |
+| 422 | `VALIDATION_ERROR`, `PASSWORD_TOO_WEAK`, `BULK_LIST_TOO_LONG` |
 | 429 | `RATE_LIMITED` |
 
 ## 8. Polls (`governance`), epic E3 part A

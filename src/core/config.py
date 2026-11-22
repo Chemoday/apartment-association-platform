@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     AUTH_ALLOW_SESSIONLESS_TOKENS: bool = False
     # The hourly clean-up of ended sessions, used or expired links and old attempts.
     AUTH_CLEANUP_ENABLED: bool = True
+    # The invitation queue (epic E13 R4a): at most this many invitation e-mails per installation
+    # in any hour (a regular mailbox limits how much it sends), and its worker loop.
+    AUTH_INVITATION_MAILS_PER_HOUR: int = Field(default=30, ge=1)
+    AUTH_INVITATION_QUEUE_ENABLED: bool = True
     # Send login e-mails while demo mode is on (only ENVIRONMENT local, dev or test, and dev only
     # behind a password gate: in demo mode anyone can act as the chairman).
     AUTH_MAIL_IN_DEMO: bool = False
