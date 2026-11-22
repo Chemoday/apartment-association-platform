@@ -1181,6 +1181,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `NOTICE_PUBLISHED` | an official notice was published, by hand or by the maintenance calendar (section 4): the active users of its target and the chairman and the board members (also without an apartment), once each, never its author | no |
 | `STORAGE_ALMOST_FULL` | the association's files filled 70% or 90% of the room for files (section 12, epic E11 task F4): the chairman and the board members, once per threshold until the usage falls well below it again | no |
 | `ENERGY_CERTIFICATE_EXPIRING` | the valid energy certificate in the accepted building passport (section 1, epic E12) expires in 180 days, in 30 days, or today (or has expired); an annulled certificate is never reported: the chairman and the board members, once per threshold and certificate; a block accepted late sends only the nearest threshold | no |
+| `JOIN_REQUEST_SUBMITTED` | someone used a join code on paper (section 7, epic E13 R4c): the chairmen of the building, once per request | no |
 
 - **Messages between the board and an apartment** follow the thread's visibility rule (section 4)
   twice: when the event is processed, and right before an external message is sent (someone who
@@ -1257,6 +1258,7 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | `NOTICE_PUBLISHED` | on | on | on | on |
 | `STORAGE_ALMOST_FULL` | on | on | off | off |
 | `ENERGY_CERTIFICATE_EXPIRING` | on | on | off | off |
+| `JOIN_REQUEST_SUBMITTED` | on | on | off | off |
 
 The board is notified quietly (owner decision, epic E8): only in the app by default; each board
 member can switch on e-mail, Telegram or WebPush in the preferences. The same holds for new issue
@@ -1282,7 +1284,8 @@ reports, but not for urgent ones (epic E9).
   `GET /api/v1/issues/{subject_id}` (for a merge notice, the original); `maintenance_task` links
   to `GET /api/v1/maintenance/tasks/{subject_id}`; `storage` (the subject is the building) links
   to `GET /api/v1/files/usage`; `building` (the subject is the building) links to the building
-  passport (`registry_facts` of `GET /api/v1/property/building`).
+  passport (`registry_facts` of `GET /api/v1/property/building`); `join_request` links to the
+  waiting join requests (`GET /api/v1/auth/join-requests`; the request may be decided already).
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
@@ -1297,7 +1300,8 @@ reports, but not for urgent ones (epic E9).
   `threshold` (70 or 90, percent of the room for files), `used_percent` (an integer, percent of
   the whole quota, as `GET /api/v1/files/usage` shows it); `ENERGY_CERTIFICATE_EXPIRING`
   `valid_until` (a date), `days_left` (an integer, 0 or less when it has expired) and `threshold`
-  (180, 30 or 0).
+  (180, 30 or 0); `JOIN_REQUEST_SUBMITTED` `apartment_number` (never the name, phone or e-mail
+  of the person).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -1354,7 +1358,7 @@ Only the listed combinations change. Response: the same body as the `GET`.
 Every e-mail of a **non-mandatory** event (`EMERGENCY_RESOLVED`, `READING_DEADLINE`,
 `PERIOD_REVIEW`, `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD`, `POLL_OPENED`, `ISSUE_REPORTED`,
 `ISSUE_STATUS_CHANGED`, `MAINTENANCE_DUE`, `NOTICE_PUBLISHED`, `STORAGE_ALMOST_FULL`,
-`ENERGY_CERTIFICATE_EXPIRING`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
+`ENERGY_CERTIFICATE_EXPIRING`, `JOIN_REQUEST_SUBMITTED`) lets the person stop that kind of e-mail without signing in. One unsubscribe turns
 off exactly one preference: that `event_type` on `email` (owner decision 2026-11-04). The other
 channels and the other e-mails stay as they are; the person turns it back on in the preferences.
 - **In the e-mail:**
@@ -2078,17 +2082,19 @@ Response `200 ConnectionOverview`:
   of active accounts (family members are not counted).
 - **`status`,** the first that applies:
   - `CONNECTED`: an active owner;
-  - `JOIN_REQUEST`: a join request waits for the chairman (task R4c; never returned before it);
+  - `JOIN_REQUEST`: a join request waits for the chairman (R4c);
   - `INVITED`: an `OWNER` invitation is pending;
-  - `CODE_ISSUED`: an unused join code (task R4c; never returned before it);
+  - `CODE_ISSUED`: an unused, unexpired join code (R4c);
   - `TENANT_ONLY`: only tenants are active, so nobody there can invite or vote;
   - `PAPER`: marked by the chairman as worked on paper (below);
-  - `EXPIRED`: the newest `OWNER` invitation ran out unused (until the clean-up deletes it, 30
-    days after it expired, docs/SCHEMA.md 7; then `NOT_INVITED`);
-  - `NOT_INVITED`: none of these (also after an invitation was deleted, or a membership ended).
+  - `EXPIRED`: the newest of the `OWNER` invitations and join codes of the apartment ran out
+    unused (until the clean-up deletes it, 30 days after it expired, docs/SCHEMA.md 7; then
+    `NOT_INVITED`); a cancelled code does not count;
+  - `NOT_INVITED`: none of these (also after an invitation was deleted, a membership ended, or a
+    join request was rejected or expired).
 - **`last_invited_at`:** the latest time an e-mail of any `OWNER` invitation of the apartment went
-  out (an invitation whose first e-mail is still queued counts with the time it was created;
-  `null`: none). **`invitation_delivery`:** of the pending `OWNER` invitation, if
+  out (an invitation whose first e-mail is still queued counts with the time it was created) or a
+  join code of it was issued (`null`: none). **`invitation_delivery`:** of the pending `OWNER` invitation, if
   there is one: `QUEUED` while its e-mail waits in the queue, else `SENT`; `null` without one. So
   invitations that could not be sent yet are visible.
 - **`on_paper`:** the chairman's mark; it stays when the apartment connects later, but
@@ -2104,6 +2110,122 @@ The chairman marks an apartment as worked on paper (the chairman or the accounta
 readings), or takes the mark away. Request `{"on_paper": true}`. Response `200` with the item of
 that apartment, as in the list. Errors: `403 FORBIDDEN`, `404 APARTMENT_NOT_FOUND` (not in the
 caller's building), `422 VALIDATION_ERROR`.
+
+### Join codes on paper (epic E13, task R4c)
+For apartments whose owners' e-mails the chairman does not have: a code on a printed sheet lets a
+person ask to join; the chairman confirms each request before an ordinary `OWNER` invitation goes
+out by e-mail, so the rule "only the mailbox owner holds an invitation link" stays (docs/epics/
+E13_ROLLOUT.md section 6). **In demo mode every endpoint of this section answers
+`404 NOT_FOUND`,** like an unknown route (before the sign-in is checked).
+
+**The code:** 10 characters of Crockford's Base32 (`0-9` and `A-Z` without `I`, `L`, `O`, `U`),
+about 50 bits, shown in groups as `K7QF-M3TX-9R`. Input is normalised: case, hyphens and spaces
+are ignored, and `I`/`L` are read as `1`, `O` as `0`. A code is valid `AUTH_JOIN_CODE_DAYS`
+(default 30) days and can be used once. The server keeps only a keyed hash (like every link of
+this section), so a code is shown only in the answer that issued it; rotating `AUTH_HASH_SECRET`
+voids every code. The code and the request's data never reach logs or spans; the field is always
+named `join_code`, which the scrubber redacts like `email` and `phone`.
+
+#### `POST /api/v1/auth/join-codes` (the chairman)
+Request `{"apartment_ids": ["uuid", ...]}`, or `{"apartment_ids": null}` for the default: every
+apartment without an active owner and with nothing pending (no pending `OWNER` invitation, no
+unused code, no join request waiting). At most as many ids as the building has apartments.
+Response `201` with `Cache-Control: no-store`:
+```json
+{
+  "association_name": "KÜ Sõpruse 12",
+  "join_url": "https://kyu.example.ee/join",
+  "codes": [
+    { "code_id": "uuid", "apartment_id": "uuid", "apartment_number": "14", "join_code": "K7QF-M3TX-9R", "expires_at": "..." }
+  ]
+}
+```
+- One new code per apartment; an apartment may hold several unused codes (co-owners). Issuing
+  never touches other codes or pending requests. A lost sheet is "replaced" by cancelling its code
+  and issuing a new one.
+- **The printed sheet** is made by the client from this answer, never by the server or a
+  third-party service (the QR code too): the association's name, the site's address, the
+  apartment number, the code, a QR code of `<join_url>#code=<join_code>` (after `#`, so the code
+  never reaches a server log) and short instructions in the default language, English optional.
+- Errors: `403 FORBIDDEN`, `404 APARTMENT_NOT_FOUND` (an id not in the building; nothing is
+  issued), `422 VALIDATION_ERROR` (an empty list, more ids than apartments, a repeated id).
+
+#### `GET /api/v1/auth/join-codes` and `DELETE /api/v1/auth/join-codes/{code_id}` (the chairman)
+- **List:** the unused, unexpired codes of the building, newest first, without the code itself:
+  `[{"code_id", "apartment_id", "apartment_number", "created_at", "expires_at"}]`.
+- **Cancel:** an unused code stops working at once: `204`. A used, expired, cancelled or unknown
+  code: `404 JOIN_CODE_NOT_FOUND`.
+
+#### `GET /api/v1/auth/join/privacy-notice?locale=et` (no sign-in)
+What the join page links to before it asks for personal data. Response
+`200 {"custom_url": null, "locale": "et", "text": "..."}`:
+- `custom_url`: the association's own notice, when the chairman set the building setting
+  `auth.privacy_notice_url` (section 9); the page then links there and `text` is `null`.
+- Otherwise `text` is the platform's **template** notice (Markdown) in `locale` (`et` or `en`;
+  any other value gets `en`), with the association's name filled in. It is a template that the
+  association reviews before it uses it, not legal advice.
+
+#### `POST /api/v1/auth/join/lookup` (no sign-in)
+Step 1 of the join page. Request `{"join_code": "K7QF-M3TX-9R"}`. Response
+`200 {"association_name": "KÜ Sõpruse 12", "apartment_number": "14"}`, for the person to
+confirm. A wrong, used, expired or cancelled code: `400 INVALID_JOIN_CODE`, one answer for all of
+them. Nothing is changed.
+
+#### `POST /api/v1/auth/join` (no sign-in)
+Step 2. Request:
+```json
+{ "join_code": "K7QF-M3TX-9R", "full_name": "Mari Tamm", "phone": "+372 5555 1234", "email": "mari@example.com", "locale": "et" }
+```
+- The page says plainly that these personal data are needed so that the chairman can confirm
+  the person, links the privacy notice above, and says they are deleted after the decision.
+- The code is checked again and used up in the same transaction as the request is stored, so it
+  works once. Response `202 {"accepted": true}`, the same whether the e-mail has an account or not.
+  **Nothing is sent to the e-mail before the chairman confirms,** so the form cannot be used to
+  send mail to anyone.
+- `full_name` 1..200 characters on one line, `phone` 5..32 characters (digits, spaces, `+`, `-`,
+  `(`, `)`, at least 5 digits), `email` an e-mail address, `locale` optional (`et`, `ru` or `en`;
+  the language of the page).
+- The chairmen of the building get the notification `JOIN_REQUEST_SUBMITTED` (in the app and by
+  e-mail by default, section 6) with the apartment number only, no personal data.
+- Errors: `400 INVALID_JOIN_CODE`, `422 VALIDATION_ERROR`, `429 RATE_LIMITED`.
+
+**Limits of the two public steps:** together at most 20 per IP address per hour (an IPv6 address
+counts by its /64), like the redeem limit of e-mail links: `429 RATE_LIMITED` with `Retry-After`.
+There is no limit per building that would block, because any visitor could use it up for every
+owner; many waiting requests only raise a warning in the logs (docs/OBSERVABILITY.md). Every
+failure of a code answers the same and after the same work (one lookup by a hash; a text that
+cannot be a code is looked up as a code that never exists).
+
+#### Join requests: `GET /api/v1/auth/join-requests`, `POST …/{request_id}/confirm`, `POST …/{request_id}/reject` (the chairman)
+- **List** (`Cache-Control: no-store`): the waiting requests of the building, oldest first:
+  `[{"request_id", "apartment_id", "apartment_number", "full_name", "phone", "email", "locale", "created_at"}]`.
+  **The chairman sees what the person typed in full** (owner decision, an exception to the masking
+  of personal data listed in AGENTS.md), and only until the decision. The client shows the hint:
+  "a name alone is not enough: confirm when the phone matches your list of members, or call the
+  owner at the number from your own list".
+- **Confirm:** an ordinary `OWNER` invitation of that e-mail and apartment, by the confirming
+  chairman (who becomes its inviter and so sees that e-mail like any e-mail they typed), queued
+  like every invitation. Its language is the request's `locale` when that is the instance default
+  or `en`, else the default. When an `OWNER` invitation of that e-mail and apartment is already
+  pending, that one is resent instead: it keeps its inviter, and its language becomes the
+  request's by the same rule. It counts against the building limit of bulk invitations (twice the
+  number of apartments per 24 hours): `429 RATE_LIMITED`, and the request keeps waiting. Response
+  `200 InvitationView`.
+- **Reject:** `204`. Nothing is sent.
+- **Later** is no action: the request keeps waiting, at most 30 days.
+- After a decision the request is deleted with its full name, phone and e-mail (a confirmed one
+  keeps only the e-mail in its invitation). **A record of each decision without personal data
+  stays:** see below. An undecided request is deleted after 30 days with the outcome `EXPIRED`
+  (the hourly clean-up of this module).
+- A wrong confirmation is undone by ending that membership (`DELETE …/memberships/…`).
+- Errors: `403 FORBIDDEN`, `404 JOIN_REQUEST_NOT_FOUND` (decided, expired or unknown),
+  `429 RATE_LIMITED` (confirm only).
+
+#### `GET /api/v1/auth/join-decisions?limit=50&offset=0` (the chairman and the board)
+What was decided, newest first, so the board can see what one person did alone:
+`[{"apartment_id", "apartment_number", "outcome", "decided_by_user_id", "decided_at"}]`.
+`outcome` is `CONFIRMED`, `REJECTED` or `EXPIRED` (then `decided_by_user_id` is `null`). No name,
+phone or e-mail. `limit` 1..100, `offset` 0..100000. Anyone else: `403 FORBIDDEN`.
 
 ### First chairman of a new installation
 An operator command, not an endpoint: `uv run python -m src.modules.auth create-chairman --email
@@ -2124,10 +2246,10 @@ chair@example.com`.
 ### Error codes of this section
 | Status | `error_code` |
 | :--- | :--- |
-| 400 | `INVALID_LINK` (new status) |
+| 400 | `INVALID_LINK` (new status), `INVALID_JOIN_CODE` |
 | 401 | `INVALID_CREDENTIALS`, `SESSION_EXPIRED`, `INVALID_TOKEN` |
 | 403 | `CSRF_CHECK_FAILED`, `REAUTHENTICATION_REQUIRED`, `FORBIDDEN` |
-| 404 | `SESSION_NOT_FOUND`, `INVITATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `USER_NOT_FOUND` |
+| 404 | `SESSION_NOT_FOUND`, `INVITATION_NOT_FOUND`, `APARTMENT_NOT_FOUND`, `MEMBERSHIP_NOT_FOUND`, `USER_NOT_FOUND`, `JOIN_CODE_NOT_FOUND`, `JOIN_REQUEST_NOT_FOUND`, `NOT_FOUND` (join codes in demo mode) |
 | 409 | `EMAIL_ALREADY_REGISTERED` (registration only), `TENANT_LIMIT_REACHED`, `INVITATION_ALREADY_PENDING`, `INVITATION_ACCEPTED`, `INVITATION_NO_LONGER_VALID`, `LAST_CHAIRMAN` |
 | 422 | `VALIDATION_ERROR`, `PASSWORD_TOO_WEAK`, `BULK_LIST_TOO_LONG` |
 | 429 | `RATE_LIMITED` |
@@ -2403,11 +2525,17 @@ Changes some settings at once and returns the same body as `GET`.
 {"values": {"issues.urgent_enabled": true, "issues.reports_per_apartment_per_day": null}}
 ```
 - `values`: 1..50 keys. A value of the setting's type sets it; `null` resets it to the default.
+- **Types:** `INTEGER` (with `minimum` and `maximum`), `BOOLEAN`, and `URL` (since epic E13 R4c:
+  an `https://` address of at most 500 characters without spaces, or `""` for none; its
+  `minimum` and `maximum` are `null`). The only `URL` setting is `auth.privacy_notice_url`: the
+  association's own privacy notice, linked by the join page instead of the platform's template
+  (section 7, "Join codes on paper").
 - All or nothing: one invalid entry changes nothing. `422 VALIDATION_ERROR` with entries in
   `errors` whose `loc` starts with `["body", "values", "<key>"]`: a value that is neither an
-  integer, a boolean nor `null` (`"3"`, `3.0`) is refused by the request check first (one or more
-  entries for that key); then an unknown key, a value of the other type (`1` for a `BOOLEAN`,
-  `true` for an `INTEGER`) or a number out of bounds, one entry each.
+  integer, a boolean, a string nor `null` (`3.0`, a list) is refused by the request check first
+  (one or more entries for that key); then an unknown key, a value of another type (`1` for a
+  `BOOLEAN`, `true` or `"3"` for an `INTEGER`, a number for a `URL`), a number out of bounds or an
+  address that is not a valid `https://` one, one entry each.
 - Setting the current value again changes nothing (no log entry); while a setting is not set,
   its default is its current value.
 - Every change is logged (old value, new value, who, when; docs/SCHEMA.md section 9). The board

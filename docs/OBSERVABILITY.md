@@ -125,6 +125,15 @@ answered 500; the alert fired, the agent named `src/modules/meters/service.py:34
 `demo/oncall-incident` with a regression test and the fix, after `pytest` was green. The repository
 setting "Allow GitHub Actions to create and approve pull requests" is required for that last step.
 
+## Join requests on paper (epic E13 R4c)
+
+The public join page has no per-building limit (it would let any visitor block every owner), so
+abuse shows only in the logs: `auth_join_request_submitted` (ids only) per request, and a warning
+`auth_join_requests_many` with the building id and the count when the waiting requests of a
+building exceed its number of apartments. That warning is worth a look by the operator: someone
+may be trying codes, or a sheet was copied. The per-IP limit (20 lookups and submits per hour)
+answers `429` as usual.
+
 ## Known limits
 
 - `LoggingHandler` of `opentelemetry-sdk` is deprecated in favour of
