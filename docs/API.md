@@ -2116,7 +2116,8 @@ For apartments whose owners' e-mails the chairman does not have: a code on a pri
 person ask to join; the chairman confirms each request before an ordinary `OWNER` invitation goes
 out by e-mail, so the rule "only the mailbox owner holds an invitation link" stays (docs/epics/
 E13_ROLLOUT.md section 6). **In demo mode every endpoint of this section answers
-`404 NOT_FOUND`,** like an unknown route (before the sign-in is checked).
+`404 NOT_FOUND`,** like an unknown route (before the sign-in is checked); only a body that is not
+JSON at all is refused earlier, by the framework, with `422 VALIDATION_ERROR`.
 
 **The code:** 10 characters of Crockford's Base32 (`0-9` and `A-Z` without `I`, `L`, `O`, `U`),
 about 50 bits, shown in groups as `K7QF-M3TX-9R`. Input is normalised: case, hyphens and spaces
@@ -2514,6 +2515,7 @@ Every endpoint needs a signed-in user of the building.
 | `issues.urgent_per_apartment_per_day` | `INTEGER` | 1 | 1..5 | Urgent reports one apartment may file in 24 hours |
 | `maintenance.overdue_reminder_days` | `INTEGER` | 7 | 1..30 | Days between the reminders of an overdue maintenance task (epic E10) |
 | `chat.enabled` | `BOOLEAN` | `false` | | The building chat of section 14 is on; turning it off hides its messages at once (deleted within a minute) |
+| `auth.privacy_notice_url` | `URL` | `""` | | The association's own privacy notice, linked by the join page instead of the platform's template (section 7, epic E13 R4c) |
 
 ### `GET /api/v1/settings` (chairman and board)
 `{"settings": [SettingView, ...]}`, every declared setting, ordered by `key`. Anyone else:
