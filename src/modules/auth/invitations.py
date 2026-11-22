@@ -481,6 +481,55 @@ class InvitationService:
         await self.session.flush()
         return len(chosen), len(expired) - len(chosen)
 
+    async def invite_from_join(
+        self,
+        caller: CurrentUserDTO,
+        email: str,
+        apartment_id: uuid.UUID,
+        locale: Locale | None,
+    ) -> InvitationView:
+        """A confirmed join request (E13 R4c): an OWNER invitation by the confirming chairman,
+        queued, counted against the building limit (429 leaves the request waiting). A pending
+        OWNER invitation of that e-mail and apartment is resent instead: it keeps its inviter and
+        takes the request's language."""
+        now = _now()
+        await self.properties.lock_people(caller.building_id)  # the caller's lock is re-entrant
+        apartments = len(await self.properties.list_apartments(caller.building_id))
+        limit = BULK_INVITATIONS_PER_APARTMENT_PER_DAY * apartments
+        self._check_bulk_limit(await self._bulk_used(caller.building_id, now), 1, limit, now)
+        existing = await self.session.scalar(
+            select(AuthInvitation)
+            .where(
+                AuthInvitation.building_id == caller.building_id,
+                AuthInvitation.kind == InvitationKind.OWNER,
+                AuthInvitation.email == email,
+                AuthInvitation.apartment_id == apartment_id,
+                AuthInvitation.accepted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if (
+            existing is not None
+            and await self._status(existing, now, {}) == InvitationStatus.PENDING
+        ):
+            invitation = existing
+            await self._drop_links(invitation.id)
+            self._queue(invitation, now)
+            invitation.locale = locale
+        else:
+            invitation = await self._open(
+                caller,
+                kind=InvitationKind.OWNER,
+                email=email,
+                apartment_id=apartment_id,
+                building_role=None,
+                locale=locale,
+                now=now,
+            )
+        self._record_bulk(caller.building_id, 1, now)
+        await self.session.flush()
+        return (await self._views([invitation], caller.id, now))[0]
+
     def _bulk_subject(self, building_id: uuid.UUID) -> str:
         return self._hash(f"building:{building_id}")
 

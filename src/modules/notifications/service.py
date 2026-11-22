@@ -24,7 +24,7 @@ from src.core.domain_events import SessionFactory
 from src.core.event_bus import EventBus
 from src.core.exceptions import DomainError
 from src.core.file_events import StorageUsageHigh
-from src.modules.auth.events import UserAccountClosed
+from src.modules.auth.events import JoinRequestSubmitted, UserAccountClosed
 from src.modules.communication.events import (
     ApartmentMessagePosted,
     EmergencyAlertPublished,
@@ -54,6 +54,7 @@ from src.modules.notifications.policies import (
     is_mandatory,
     issue_reported_key,
     issue_status_key,
+    join_request_key,
     maintenance_due_key,
     notice_published_key,
     period_review_key,
@@ -435,6 +436,7 @@ class NotificationsSubscriber:
         bus.subscribe(StorageUsageHigh, self.on_storage_usage_high)
         bus.subscribe(EnergyCertificateExpiring, self.on_energy_certificate_expiring)
         bus.subscribe(UserAccountClosed, self.on_account_closed)
+        bus.subscribe(JoinRequestSubmitted, self.on_join_request_submitted)
 
     async def on_account_closed(self, event: UserAccountClosed) -> None:
         """Drop everything kept for a closed account (idempotent: a retry deletes nothing)."""
@@ -734,6 +736,20 @@ class NotificationsSubscriber:
                 dedup_key=storage_alert_key(event.event_id),
                 subject=(SubjectType.STORAGE, event.building_id),
                 params={"threshold": event.threshold, "used_percent": event.used_percent},
+            )
+            await session.commit()
+
+    async def on_join_request_submitted(self, event: JoinRequestSubmitted) -> None:
+        """Someone used a join code on paper: the chairmen of the building (E13 R4c)."""
+        async with self._session() as session:
+            properties = PropertyService(session)
+            await self.notify(
+                session,
+                await properties.users_with_roles(event.building_id, {BuildingRole.CHAIRMAN}),
+                event_type=NotificationEventType.JOIN_REQUEST_SUBMITTED,
+                dedup_key=join_request_key(event.request_id),
+                subject=(SubjectType.JOIN_REQUEST, event.request_id),
+                params={"apartment_number": event.apartment_number},
             )
             await session.commit()
 

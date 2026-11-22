@@ -706,6 +706,10 @@ class PropertyService:
         command of the first chairman needs it)."""
         return list(await self.session.scalars(select(Building.id).order_by(Building.id)))
 
+    async def building_name(self, building_id: uuid.UUID) -> str | None:
+        """The association's name (the join page and sheets of E13 R4c); None for no building."""
+        return await self.session.scalar(select(Building.name).where(Building.id == building_id))
+
     async def reading_deadlines(self) -> dict[uuid.UUID, int]:
         """Every building's `reading_deadline_day`, for the meters period opener (system-level)."""
         rows = await self.session.execute(

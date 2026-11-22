@@ -430,8 +430,13 @@ async def test_the_preferences_matrix_with_defaults(
         {"channel": "telegram", "available": False, "reason": "DEMO_MODE"},
         {"channel": "webpush", "available": False, "reason": "DEMO_MODE"},
     ]
-    assert len(body["preferences"]) == 56
+    assert len(body["preferences"]) == 60
     by_key = {(p["event_type"], p["channel"]): p for p in body["preferences"]}
+    # A join request on paper (E13 R4c): the chairman in the app and by e-mail.
+    assert [
+        by_key[("JOIN_REQUEST_SUBMITTED", channel)]["enabled"]
+        for channel in ("in_app", "email", "telegram", "webpush")
+    ] == [True, True, False, False]
     # Messages with the board (E8): residents on every channel, the board quietly in the app.
     for channel in ("in_app", "email", "telegram", "webpush"):
         assert by_key[("APARTMENT_MESSAGE", channel)]["enabled"] is True

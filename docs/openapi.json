@@ -2569,6 +2569,856 @@
         ]
       }
     },
+    "/api/v1/auth/join-codes": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List Join Codes",
+        "description": "The chairman: the unused, unexpired codes, without the codes themselves.",
+        "operationId": "list_join_codes_api_v1_auth_join_codes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JoinCodeView"
+                  },
+                  "type": "array",
+                  "title": "Response List Join Codes Api V1 Auth Join Codes Get"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Issue Join Codes",
+        "description": "The chairman: one new code per apartment, shown only in this answer.",
+        "operationId": "issue_join_codes_api_v1_auth_join_codes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinCodesIssue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinCodesIssued"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `APARTMENT_NOT_FOUND`, `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/join-codes/{code_id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Cancel Join Code",
+        "operationId": "cancel_join_code_api_v1_auth_join_codes__code_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Code Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `JOIN_CODE_NOT_FOUND`, `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/join/privacy-notice": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Join Privacy Notice",
+        "description": "No sign-in: the association's own notice, or the platform's template.",
+        "operationId": "join_privacy_notice_api_v1_auth_join_privacy_notice_get",
+        "parameters": [
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 8
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Locale"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivacyNotice"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/join/lookup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Join Lookup",
+        "description": "No sign-in, step 1: the building and the apartment of a code, for the person to confirm.",
+        "operationId": "join_lookup_api_v1_auth_join_lookup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinLookup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinTarget"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. error_code: `INVALID_JOIN_CODE`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see retry_after_seconds and the Retry-After header). error_code: `RATE_LIMITED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/join": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Join Submit",
+        "description": "No sign-in, step 2: use the code up and leave a request for the chairman.",
+        "operationId": "join_submit_api_v1_auth_join_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinSubmit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinAccepted"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. error_code: `INVALID_JOIN_CODE`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see retry_after_seconds and the Retry-After header). error_code: `RATE_LIMITED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/join-requests": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List Join Requests",
+        "description": "The chairman: the waiting requests with what each person typed, until the decision.",
+        "operationId": "list_join_requests_api_v1_auth_join_requests_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JoinRequestView"
+                  },
+                  "type": "array",
+                  "title": "Response List Join Requests Api V1 Auth Join Requests Get"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/join-requests/{request_id}/confirm": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Confirm Join Request",
+        "description": "The chairman: an ordinary OWNER invitation to the request's e-mail, queued.",
+        "operationId": "confirm_join_request_api_v1_auth_join_requests__request_id__confirm_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationView"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `JOIN_REQUEST_NOT_FOUND`, `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see retry_after_seconds and the Retry-After header). error_code: `RATE_LIMITED`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/join-requests/{request_id}/reject": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Reject Join Request",
+        "operationId": "reject_join_request_api_v1_auth_join_requests__request_id__reject_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `JOIN_REQUEST_NOT_FOUND`, `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/join-decisions": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List Join Decisions",
+        "description": "The chairman and the board: what was decided, without personal data.",
+        "operationId": "list_join_decisions_api_v1_auth_join_decisions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JoinDecisionView"
+                  },
+                  "title": "Response List Join Decisions Api V1 Auth Join Decisions Get"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. error_code: `INTERNAL_SERVER_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated. error_code: `NOT_AUTHENTICATED`, `INVALID_TOKEN`, `UNKNOWN_USER`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. error_code: `FORBIDDEN`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or not visible to the caller). error_code: `NOT_FOUND`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input. error_code: `VALIDATION_ERROR`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/property/me": {
       "get": {
         "tags": [
@@ -15605,6 +16455,341 @@
         ],
         "title": "IssueView"
       },
+      "IssuedJoinCode": {
+        "properties": {
+          "code_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Code Id"
+          },
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Apartment Id"
+          },
+          "apartment_number": {
+            "type": "string",
+            "title": "Apartment Number"
+          },
+          "join_code": {
+            "type": "string",
+            "title": "Join Code"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code_id",
+          "apartment_id",
+          "apartment_number",
+          "join_code",
+          "expires_at"
+        ],
+        "title": "IssuedJoinCode"
+      },
+      "JoinAccepted": {
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "JoinAccepted"
+      },
+      "JoinCodeView": {
+        "properties": {
+          "code_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Code Id"
+          },
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Apartment Id"
+          },
+          "apartment_number": {
+            "type": "string",
+            "title": "Apartment Number"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code_id",
+          "apartment_id",
+          "apartment_number",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "JoinCodeView"
+      },
+      "JoinCodesIssue": {
+        "properties": {
+          "apartment_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 2000,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apartment Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "JoinCodesIssue"
+      },
+      "JoinCodesIssued": {
+        "properties": {
+          "association_name": {
+            "type": "string",
+            "title": "Association Name"
+          },
+          "join_url": {
+            "type": "string",
+            "title": "Join Url"
+          },
+          "codes": {
+            "items": {
+              "$ref": "#/components/schemas/IssuedJoinCode"
+            },
+            "type": "array",
+            "title": "Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "association_name",
+          "join_url",
+          "codes"
+        ],
+        "title": "JoinCodesIssued"
+      },
+      "JoinDecisionView": {
+        "properties": {
+          "apartment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apartment Id"
+          },
+          "apartment_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apartment Number"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/JoinOutcome"
+          },
+          "decided_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By User Id"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Decided At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "apartment_id",
+          "apartment_number",
+          "outcome",
+          "decided_by_user_id",
+          "decided_at"
+        ],
+        "title": "JoinDecisionView"
+      },
+      "JoinLookup": {
+        "properties": {
+          "join_code": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Join Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "join_code"
+        ],
+        "title": "JoinLookup"
+      },
+      "JoinOutcome": {
+        "type": "string",
+        "enum": [
+          "CONFIRMED",
+          "REJECTED",
+          "EXPIRED"
+        ],
+        "title": "JoinOutcome"
+      },
+      "JoinRequestView": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Request Id"
+          },
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Apartment Id"
+          },
+          "apartment_number": {
+            "type": "string",
+            "title": "Apartment Number"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "phone": {
+            "type": "string",
+            "title": "Phone"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Locale"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "apartment_id",
+          "apartment_number",
+          "full_name",
+          "phone",
+          "email",
+          "locale",
+          "created_at"
+        ],
+        "title": "JoinRequestView",
+        "description": "What the person typed, in full, for the chairman only and only until the decision (an\nexception to the masking of personal data listed in AGENTS.md)."
+      },
+      "JoinSubmit": {
+        "properties": {
+          "join_code": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Join Code"
+          },
+          "full_name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Full Name"
+          },
+          "phone": {
+            "type": "string",
+            "title": "Phone"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Locale"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "join_code",
+          "full_name",
+          "phone",
+          "email"
+        ],
+        "title": "JoinSubmit"
+      },
+      "JoinTarget": {
+        "properties": {
+          "association_name": {
+            "type": "string",
+            "title": "Association Name"
+          },
+          "apartment_number": {
+            "type": "string",
+            "title": "Apartment Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "association_name",
+          "apartment_number"
+        ],
+        "title": "JoinTarget"
+      },
       "LinkCodeResponse": {
         "properties": {
           "code": {
@@ -16351,7 +17536,8 @@
           "MAINTENANCE_DUE",
           "NOTICE_PUBLISHED",
           "STORAGE_ALMOST_FULL",
-          "ENERGY_CERTIFICATE_EXPIRING"
+          "ENERGY_CERTIFICATE_EXPIRING",
+          "JOIN_REQUEST_SUBMITTED"
         ],
         "title": "NotificationEventType"
       },
@@ -17818,7 +19004,7 @@
               "$ref": "#/components/schemas/PreferenceChange"
             },
             "type": "array",
-            "maxItems": 56,
+            "maxItems": 60,
             "title": "Preferences"
           }
         },
@@ -17839,6 +19025,42 @@
         ],
         "title": "PreviousOrigin",
         "description": "Where a reading's previous_value came from (epic E13 R3b, docs/API.md section 2)."
+      },
+      "PrivacyNotice": {
+        "properties": {
+          "custom_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Url"
+          },
+          "locale": {
+            "$ref": "#/components/schemas/Locale"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "custom_url",
+          "locale",
+          "text"
+        ],
+        "title": "PrivacyNotice"
       },
       "PrivacyUpdateRequest": {
         "properties": {
@@ -18931,7 +20153,8 @@
             "type": "string",
             "enum": [
               "INTEGER",
-              "BOOLEAN"
+              "BOOLEAN",
+              "URL"
             ],
             "title": "Type"
           },
@@ -18942,6 +20165,9 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "type": "string"
               }
             ],
             "title": "Value"
@@ -18953,6 +20179,9 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "type": "string"
               }
             ],
             "title": "Default"
@@ -19019,6 +20248,10 @@
                 },
                 {
                   "type": "integer"
+                },
+                {
+                  "type": "string",
+                  "maxLength": 501
                 },
                 {
                   "type": "null"
@@ -19240,7 +20473,8 @@
           "issue",
           "maintenance_task",
           "storage",
-          "building"
+          "building",
+          "join_request"
         ],
         "title": "SubjectType"
       },

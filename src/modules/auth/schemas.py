@@ -56,6 +56,7 @@ class AttemptKind(StrEnum):
     INVITATION = "INVITATION"
     BULK_INVITATION = "BULK_INVITATION"
     INVITATION_MAIL = "INVITATION_MAIL"
+    JOIN = "JOIN"
 
 
 class PasswordWeakness(StrEnum):
@@ -430,3 +431,115 @@ class PaperUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     on_paper: bool
+
+
+# --- Join codes on paper (E13 R4c) ---------------------------------------------------------------
+
+JoinCodeText = Annotated[str, Field(min_length=1, max_length=64), AfterValidator(clean_text)]
+PHONE_PATTERN = r"^[0-9+\-() ]{5,32}$"
+MAX_APARTMENTS_PER_ISSUE = 2000
+
+
+def _phone(value: str) -> str:
+    if sum(c.isdigit() for c in value) < 5:
+        raise ValueError("a phone number has at least 5 digits")
+    return value
+
+
+def _one_line(value: str) -> str:
+    """A name shown to the chairman: one line, so it cannot be laid out to mislead."""
+    if any(c in value for c in "\n\r\t\u2028\u2029"):
+        raise ValueError("must be one line")
+    return value
+
+
+class JoinOutcome(StrEnum):
+    CONFIRMED = "CONFIRMED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class JoinCodesIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # None: every apartment without an active owner and with nothing pending.
+    apartment_ids: list[uuid.UUID] | None = Field(
+        default=None, min_length=1, max_length=MAX_APARTMENTS_PER_ISSUE
+    )
+
+
+class IssuedJoinCode(BaseModel):
+    code_id: uuid.UUID
+    apartment_id: uuid.UUID
+    apartment_number: str
+    join_code: str
+    expires_at: datetime
+
+
+class JoinCodesIssued(BaseModel):
+    association_name: str
+    join_url: str
+    codes: list[IssuedJoinCode]
+
+
+class JoinCodeView(BaseModel):
+    code_id: uuid.UUID
+    apartment_id: uuid.UUID
+    apartment_number: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class PrivacyNotice(BaseModel):
+    custom_url: str | None
+    locale: Locale
+    text: str | None
+
+
+class JoinLookup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    join_code: JoinCodeText
+
+
+class JoinTarget(BaseModel):
+    association_name: str
+    apartment_number: str
+
+
+class JoinSubmit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    join_code: JoinCodeText
+    full_name: Annotated[safe_text(200), AfterValidator(_one_line)]  # type: ignore[valid-type]
+    phone: Annotated[
+        str, AfterValidator(clean_text), Field(pattern=PHONE_PATTERN), AfterValidator(_phone)
+    ]
+    email: EmailAddress
+    locale: Locale | None = None
+
+
+class JoinAccepted(BaseModel):
+    accepted: bool = True
+
+
+class JoinRequestView(BaseModel):
+    """What the person typed, in full, for the chairman only and only until the decision (an
+    exception to the masking of personal data listed in AGENTS.md)."""
+
+    request_id: uuid.UUID
+    apartment_id: uuid.UUID
+    apartment_number: str
+    full_name: str
+    phone: str
+    email: str
+    locale: Locale | None
+    created_at: datetime
+
+
+class JoinDecisionView(BaseModel):
+    apartment_id: uuid.UUID | None
+    apartment_number: str | None
+    outcome: JoinOutcome
+    decided_by_user_id: uuid.UUID | None
+    decided_at: datetime

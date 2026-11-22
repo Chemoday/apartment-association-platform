@@ -154,6 +154,10 @@ def compose(
             text = catalog.render(
                 "text.ENERGY_CERTIFICATE_EXPIRING", locale, days_left=params["days_left"], **values
             )
+    elif event_type == E.JOIN_REQUEST_SUBMITTED:  # the apartment only, never who asked
+        values = {"apartment": str(params["apartment_number"])}
+        subject = catalog.render(subject_key, locale, **values)
+        text = catalog.render("text.JOIN_REQUEST_SUBMITTED", locale, **values)
     elif event_type == E.NOTICE_PUBLISHED:  # only that there is a notice, never its text
         subject = catalog.render(subject_key, locale)
         text = catalog.render("text.NOTICE_PUBLISHED", locale)

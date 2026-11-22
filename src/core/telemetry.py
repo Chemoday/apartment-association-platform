@@ -56,6 +56,7 @@ SENSITIVE_KEY_MARKERS: tuple[str, ...] = (
     "chat_id",
     "refresh",  # the refresh cookie and its token (module auth)
     "magic",  # sign-in links
+    "join_code",  # a join code on paper (E13 R4c)
     "client_ip",
     "ip_address",
     "peer.ip",  # net.peer.ip of the ASGI instrumentation: the caller's address
