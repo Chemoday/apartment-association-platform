@@ -36,10 +36,12 @@ from src.modules.auth.errors import (
 from src.modules.auth.mail import AuthMail, invitation_target
 from src.modules.auth.models import AuthAttempt, AuthInvitation, AuthToken
 from src.modules.auth.policies import (
+    INVITATION_MAX_FAILED_SENDS,
     INVITATION_RETENTION,
     INVITATION_RETRY_LAST,
     INVITATION_SEND_LEASE,
     INVITATION_TTL,
+    INVITATION_UNAVAILABLE_RETRY,
     INVITATIONS_PER_INVITER_PER_HOUR,
     REGISTRATION_TTL,
     invitation_retry_delay,
@@ -96,12 +98,22 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def delivery_of(send_due_at: datetime | None, send_failures: int) -> InvitationDelivery:
+    """QUEUED while due, FAILED when the queue gave up, else SENT."""
+    if send_due_at is not None:
+        return InvitationDelivery.QUEUED
+    if send_failures >= INVITATION_MAX_FAILED_SENDS:
+        return InvitationDelivery.FAILED
+    return InvitationDelivery.SENT
+
+
 @dataclass(frozen=True)
 class QueuedMail:
     """A claimed e-mail of the invitation queue; `mail` holds the plain link, memory only."""
 
     invitation_id: uuid.UUID
     attempt: int
+    failures: int  # refusals in a row before this attempt
     lease: datetime
     expires_at: datetime
     mail: AuthMail
@@ -327,6 +339,7 @@ class InvitationService:
         invitation.expires_at = now + INVITATION_TTL
         invitation.send_due_at = now
         invitation.send_attempts = 0
+        invitation.send_failures = 0
 
     async def delete(self, caller: CurrentUserDTO, invitation_id: uuid.UUID) -> None:
         await self.properties.lock_people(caller.building_id)
@@ -481,6 +494,55 @@ class InvitationService:
         await self.session.flush()
         return len(chosen), len(expired) - len(chosen)
 
+    async def invite_from_join(
+        self,
+        caller: CurrentUserDTO,
+        email: str,
+        apartment_id: uuid.UUID,
+        locale: Locale | None,
+    ) -> InvitationView:
+        """A confirmed join request (E13 R4c): an OWNER invitation by the confirming chairman,
+        queued, counted against the building limit (429 leaves the request waiting). A pending
+        OWNER invitation of that e-mail and apartment is resent instead: it keeps its inviter and
+        takes the request's language."""
+        now = _now()
+        await self.properties.lock_people(caller.building_id)  # the caller's lock is re-entrant
+        apartments = len(await self.properties.list_apartments(caller.building_id))
+        limit = BULK_INVITATIONS_PER_APARTMENT_PER_DAY * apartments
+        self._check_bulk_limit(await self._bulk_used(caller.building_id, now), 1, limit, now)
+        existing = await self.session.scalar(
+            select(AuthInvitation)
+            .where(
+                AuthInvitation.building_id == caller.building_id,
+                AuthInvitation.kind == InvitationKind.OWNER,
+                AuthInvitation.email == email,
+                AuthInvitation.apartment_id == apartment_id,
+                AuthInvitation.accepted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if (
+            existing is not None
+            and await self._status(existing, now, {}) == InvitationStatus.PENDING
+        ):
+            invitation = existing
+            await self._drop_links(invitation.id)
+            self._queue(invitation, now)
+            invitation.locale = locale
+        else:
+            invitation = await self._open(
+                caller,
+                kind=InvitationKind.OWNER,
+                email=email,
+                apartment_id=apartment_id,
+                building_role=None,
+                locale=locale,
+                now=now,
+            )
+        self._record_bulk(caller.building_id, 1, now)
+        await self.session.flush()
+        return (await self._views([invitation], caller.id, now))[0]
+
     def _bulk_subject(self, building_id: uuid.UUID) -> str:
         return self._hash(f"building:{building_id}")
 
@@ -555,6 +617,7 @@ class InvitationService:
                 QueuedMail(
                     invitation_id=invitation.id,
                     attempt=invitation.send_attempts,
+                    failures=invitation.send_failures,
                     lease=invitation.send_due_at,
                     expires_at=expires_at,
                     mail=await self._mail(invitation, number, token),
@@ -563,18 +626,30 @@ class InvitationService:
         await self.session.flush()
         return claimed, len(rows)
 
-    async def record_send(self, queued: QueuedMail, *, ok: bool, now: datetime) -> bool:
-        """Step 3: record one result, fenced on the attempt and the lease, so a stale worker or a
-        resend in between never gets overwritten. False when the row moved on."""
-        values = (
-            {
+    async def record_send(self, queued: QueuedMail, *, outcome: str, now: datetime) -> bool:
+        """Step 3: record one result ('sent', 'failed': the mail server refused or could not be
+        reached, or 'unavailable': no working e-mail at all), fenced on the attempt and the lease,
+        so a stale worker or a resend in between never gets overwritten. False when the row moved
+        on. After INVITATION_MAX_FAILED_SENDS refusals in a row the queue gives up (FAILED)."""
+        ok = outcome == "sent"
+        values: dict[str, object]
+        if ok:
+            values = {
                 "send_due_at": None,
+                "send_failures": 0,
                 "last_sent_at": now,
                 "expires_at": queued.expires_at,
             }
-            if ok
-            else {"send_due_at": now + invitation_retry_delay(queued.attempt)}
-        )
+        elif outcome == "unavailable":
+            values = {"send_due_at": now + INVITATION_UNAVAILABLE_RETRY}
+        else:
+            failures = queued.failures + 1
+            values = {
+                "send_failures": failures,
+                "send_due_at": None
+                if failures >= INVITATION_MAX_FAILED_SENDS
+                else now + invitation_retry_delay(failures),
+            }
         if ok:  # the pacing counts e-mails that went out, whatever happens to the row
             self.session.add(
                 AuthAttempt(
@@ -1129,9 +1204,7 @@ class InvitationService:
                     status=await self._status(invitation, now, cache),
                     mine=mine,
                     locale=invitation.locale,
-                    delivery=InvitationDelivery.SENT
-                    if invitation.send_due_at is None
-                    else InvitationDelivery.QUEUED,
+                    delivery=delivery_of(invitation.send_due_at, invitation.send_failures),
                     created_at=invitation.created_at,
                     expires_at=invitation.expires_at,
                 )

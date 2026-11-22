@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     # in any hour (a regular mailbox limits how much it sends), and its worker loop.
     AUTH_INVITATION_MAILS_PER_HOUR: int = Field(default=30, ge=1)
     AUTH_INVITATION_QUEUE_ENABLED: bool = True
+    # How long a join code on paper is valid (epic E13 R4c).
+    AUTH_JOIN_CODE_DAYS: int = Field(default=30, ge=1, le=365)
     # Send login e-mails while demo mode is on (only ENVIRONMENT local, dev or test, and dev only
     # behind a password gate: in demo mode anyone can act as the chairman).
     AUTH_MAIL_IN_DEMO: bool = False

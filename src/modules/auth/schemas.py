@@ -1,5 +1,7 @@
 """Public enums and DTOs of the auth module (docs/API.md section 7)."""
 
+import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,16 +16,32 @@ from src.modules.property.schemas import BuildingRole, DisplayMode, Locale, Rela
 MAX_EMAIL_LENGTH = 254
 
 
+# A basic shape only (owner, 2026-11-22): whether the mailbox exists is never known. Letters of
+# any script are allowed; quotes, brackets, commas and the like are not.
+_LOCAL_CHARACTER = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]")
+_DOMAIN_LABEL = re.compile(r"[^\W_](?:(?:[^\W_]|-)*[^\W_])?")
+
+
+def _is_email_shape(local: str, domain: str) -> bool:
+    if not local or len(local) > 64 or local.startswith(".") or local.endswith("."):
+        return False
+    if ".." in local or not all(_LOCAL_CHARACTER.fullmatch(c) for c in local):
+        return False
+    labels = domain.split(".")
+    if len(labels) < 2 or len(labels[-1]) < 2 or labels[-1].isdigit():
+        return False
+    return all(len(label) <= 63 and _DOMAIN_LABEL.fullmatch(label) for label in labels)
+
+
 def _email_address(value: str) -> str:
-    """The canonical form of an e-mail address, or a validation error (422)."""
+    """The canonical form of an e-mail address, or a validation error (422): one @, a local part
+    without dots at its ends or in a row, a domain of dot-separated labels (letters, digits,
+    hyphens inside) ending in a label of two or more characters."""
     canonical = canonical_email(clean_text(value))  # control characters (NUL) are refused
-    local, _, domain = canonical.rpartition("@")
-    if (
-        not local
-        or "." not in domain
-        or any(c.isspace() for c in canonical)
-        or len(canonical) > MAX_EMAIL_LENGTH
-    ):
+    if canonical.count("@") != 1 or len(canonical) > MAX_EMAIL_LENGTH:
+        raise ValueError("not an e-mail address")
+    local, _, domain = canonical.partition("@")
+    if not _is_email_shape(local, domain):
         raise ValueError("not an e-mail address")
     return canonical
 
@@ -56,6 +74,7 @@ class AttemptKind(StrEnum):
     INVITATION = "INVITATION"
     BULK_INVITATION = "BULK_INVITATION"
     INVITATION_MAIL = "INVITATION_MAIL"
+    JOIN = "JOIN"
 
 
 class PasswordWeakness(StrEnum):
@@ -96,6 +115,7 @@ class InvitationDelivery(StrEnum):
 
     QUEUED = "QUEUED"
     SENT = "SENT"
+    FAILED = "FAILED"  # the mail server refused it INVITATION_MAX_FAILED_SENDS times in a row
 
 
 class BulkRowOutcome(StrEnum):
@@ -230,6 +250,12 @@ class InvitationView(BaseModel):
     expires_at: datetime
 
 
+def _no_control(value: str) -> str:
+    """Refuse control characters (NUL ...) like clean_text, but keep the text as it is."""
+    clean_text(value)
+    return value
+
+
 # A bulk list is at most 1 MB of UTF-8 (422 BULK_LIST_TOO_LONG, checked by the service); this
 # bound only keeps an absurd body out of memory.
 BULK_TEXT_MAX_CHARS = 4 * 1024 * 1024
@@ -240,7 +266,8 @@ class BulkInvitationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    text: Annotated[str, Field(max_length=BULK_TEXT_MAX_CHARS), AfterValidator(clean_text)]
+    # Not clean_text: that also trims, and the report counts lines from the very first one.
+    text: Annotated[str, Field(max_length=BULK_TEXT_MAX_CHARS), AfterValidator(_no_control)]
 
 
 class BulkInvitationRow(BaseModel):
@@ -430,3 +457,117 @@ class PaperUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     on_paper: bool
+
+
+# --- Join codes on paper (E13 R4c) ---------------------------------------------------------------
+
+JoinCodeText = Annotated[str, Field(min_length=1, max_length=64), AfterValidator(clean_text)]
+PHONE_PATTERN = r"^[0-9+\-() ]{5,32}$"
+MAX_APARTMENTS_PER_ISSUE = 2000
+
+
+def _phone(value: str) -> str:
+    if sum(c.isdigit() for c in value) < 5:
+        raise ValueError("a phone number has at least 5 digits")
+    return value
+
+
+def _one_line(value: str) -> str:
+    """A name shown to the chairman: one line, so it cannot be laid out to mislead."""
+    # Every control character (tab, line feed, NEL U+0085 ...) and the line and paragraph
+    # separators.
+    if any(unicodedata.category(c) in {"Cc", "Zl", "Zp"} for c in value):
+        raise ValueError("must be one line")
+    return value
+
+
+class JoinOutcome(StrEnum):
+    CONFIRMED = "CONFIRMED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class JoinCodesIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # None: every apartment without an active owner and with nothing pending.
+    apartment_ids: list[uuid.UUID] | None = Field(
+        default=None, min_length=1, max_length=MAX_APARTMENTS_PER_ISSUE
+    )
+
+
+class IssuedJoinCode(BaseModel):
+    code_id: uuid.UUID
+    apartment_id: uuid.UUID
+    apartment_number: str
+    join_code: str
+    expires_at: datetime
+
+
+class JoinCodesIssued(BaseModel):
+    association_name: str
+    join_url: str
+    codes: list[IssuedJoinCode]
+
+
+class JoinCodeView(BaseModel):
+    code_id: uuid.UUID
+    apartment_id: uuid.UUID
+    apartment_number: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class PrivacyNotice(BaseModel):
+    custom_url: str | None
+    locale: Locale
+    text: str | None
+
+
+class JoinLookup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    join_code: JoinCodeText
+
+
+class JoinTarget(BaseModel):
+    association_name: str
+    apartment_number: str
+
+
+class JoinSubmit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    join_code: JoinCodeText
+    full_name: Annotated[safe_text(200), AfterValidator(_one_line)]  # type: ignore[valid-type]
+    phone: Annotated[
+        str, AfterValidator(clean_text), Field(pattern=PHONE_PATTERN), AfterValidator(_phone)
+    ]
+    email: EmailAddress
+    locale: Locale | None = None
+
+
+class JoinAccepted(BaseModel):
+    accepted: bool = True
+
+
+class JoinRequestView(BaseModel):
+    """What the person typed, in full, for the chairman only and only until the decision (an
+    exception to the masking of personal data listed in AGENTS.md)."""
+
+    request_id: uuid.UUID
+    apartment_id: uuid.UUID
+    apartment_number: str
+    full_name: str
+    phone: str
+    email: str
+    locale: Locale | None
+    created_at: datetime
+
+
+class JoinDecisionView(BaseModel):
+    apartment_id: uuid.UUID | None
+    apartment_number: str | None
+    outcome: JoinOutcome
+    decided_by_user_id: uuid.UUID | None
+    decided_at: datetime

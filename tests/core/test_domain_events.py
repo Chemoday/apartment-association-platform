@@ -28,7 +28,7 @@ from src.core.domain_events import (
 from src.core.event_bus import DomainEvent, EventOutbox, InMemoryEventBus
 from src.core.events_registry import EventRegistry, UnknownEventTypeError, get_event_registry
 from src.core.file_events import StorageUsageHigh
-from src.modules.auth.events import UserAccountClosed
+from src.modules.auth.events import JoinRequestSubmitted, UserAccountClosed
 from src.modules.communication.events import (
     ApartmentMessagePosted,
     CommentHidden,
@@ -174,6 +174,12 @@ def _samples() -> dict[str, DomainEvent]:
             due_date=datetime(2026, 12, 4, 21, 59, 59, tzinfo=UTC),
         ),
         "UserAccountClosed": UserAccountClosed(user_id=user, building_id=building),
+        "JoinRequestSubmitted": JoinRequestSubmitted(
+            building_id=building,
+            request_id=uuid.uuid4(),
+            apartment_id=uuid.uuid4(),
+            apartment_number="14",
+        ),
     }
 
 

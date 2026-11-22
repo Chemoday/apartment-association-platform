@@ -17,6 +17,7 @@ from src.core.security import TokenClaims, get_bearer_user
 from src.modules.auth.accounts import AccountService
 from src.modules.auth.connections import ConnectionService
 from src.modules.auth.invitations import InvitationService
+from src.modules.auth.join import JoinService
 from src.modules.auth.links import LinkService, deliver_magic_link
 from src.modules.auth.mail import AuthMail, send_auth_mails
 from src.modules.auth.passwords import PasswordService
@@ -32,6 +33,15 @@ from src.modules.auth.schemas import (
     InvitationCreate,
     InvitationView,
     IssuedSession,
+    JoinAccepted,
+    JoinCodesIssue,
+    JoinCodesIssued,
+    JoinCodeView,
+    JoinDecisionView,
+    JoinLookup,
+    JoinRequestView,
+    JoinSubmit,
+    JoinTarget,
     MagicLinkAccepted,
     MagicLinkRequest,
     PaperUpdate,
@@ -40,6 +50,7 @@ from src.modules.auth.schemas import (
     PasswordStatus,
     PasswordUpdate,
     PeopleResponse,
+    PrivacyNotice,
     RedeemRequest,
     RegistrationRequest,
     ReplaceTenantRequest,
@@ -672,3 +683,187 @@ async def remove_password(
     )
     await _send_after_commit(request, session, [mail] if mail else [])
     return Response(status_code=204)
+
+
+# --- Join codes on paper (E13 R4c) -------------------------------------------------------------
+
+DEMO_NOT_FOUND = {404: ["NOT_FOUND"]}
+
+
+def get_join_service(
+    request: Request, session: DbSession, outbox: EventOutbox = Depends(get_event_outbox)
+) -> JoinService:
+    """404 NOT_FOUND in demo mode (raised by the service), like an unknown route."""
+    return JoinService(session, request.app.state.settings, outbox)
+
+
+@router.post(
+    "/join-codes",
+    status_code=201,
+    response_model=JoinCodesIssued,
+    responses=error_responses(
+        {**SIGNED_IN, 403: ["FORBIDDEN"], 404: ["APARTMENT_NOT_FOUND", "NOT_FOUND"]}
+    ),
+)
+async def issue_join_codes(
+    body: JoinCodesIssue,
+    response: Response,
+    join: JoinService = Depends(get_join_service),  # first: 404 in demo mode before 401
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> JoinCodesIssued:
+    """The chairman: one new code per apartment, shown only in this answer."""
+    response.headers["Cache-Control"] = "no-store"
+    return await join.issue(user, body.apartment_ids)
+
+
+@router.get(
+    "/join-codes",
+    response_model=list[JoinCodeView],
+    responses=error_responses({**SIGNED_IN, 403: ["FORBIDDEN"], **DEMO_NOT_FOUND}),
+)
+async def list_join_codes(
+    join: JoinService = Depends(get_join_service),  # first: 404 in demo mode before 401
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> list[JoinCodeView]:
+    """The chairman: the unused, unexpired codes, without the codes themselves."""
+    return await join.codes(user)
+
+
+@router.delete(
+    "/join-codes/{code_id}",
+    status_code=204,
+    responses=error_responses(
+        {**SIGNED_IN, 403: ["FORBIDDEN"], 404: ["JOIN_CODE_NOT_FOUND", "NOT_FOUND"]}
+    ),
+)
+async def cancel_join_code(
+    code_id: uuid.UUID,
+    join: JoinService = Depends(get_join_service),  # first: 404 in demo mode before 401
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> Response:
+    await join.cancel(user, code_id)
+    return Response(status_code=204)
+
+
+@router.get(
+    "/join/privacy-notice",
+    response_model=PrivacyNotice,
+    responses=error_responses({**DEMO_NOT_FOUND, 422: ["VALIDATION_ERROR"]}),
+)
+async def join_privacy_notice(
+    locale: str | None = None,  # any value other than et or en gets en
+    join: JoinService = Depends(get_join_service),
+) -> PrivacyNotice:
+    """No sign-in: the association's own notice, or the platform's template."""
+    return await join.privacy_notice(locale)
+
+
+@router.post(
+    "/join/lookup",
+    response_model=JoinTarget,
+    responses=error_responses(
+        {
+            400: ["INVALID_JOIN_CODE"],
+            **DEMO_NOT_FOUND,
+            422: ["VALIDATION_ERROR"],
+            429: ["RATE_LIMITED"],
+        }
+    ),
+)
+async def join_lookup(
+    body: JoinLookup, request: Request, join: JoinService = Depends(get_join_service)
+) -> JoinTarget:
+    """No sign-in, step 1: the building and the apartment of a code, for the person to confirm."""
+    return await join.lookup(body.join_code, client_address(request))
+
+
+@router.post(
+    "/join",
+    status_code=202,
+    response_model=JoinAccepted,
+    responses=error_responses(
+        {
+            400: ["INVALID_JOIN_CODE"],
+            **DEMO_NOT_FOUND,
+            422: ["VALIDATION_ERROR"],
+            429: ["RATE_LIMITED"],
+        }
+    ),
+)
+async def join_submit(
+    body: JoinSubmit, request: Request, join: JoinService = Depends(get_join_service)
+) -> JoinAccepted:
+    """No sign-in, step 2: use the code up and leave a request for the chairman."""
+    await join.submit(body, client_address(request))
+    return JoinAccepted()
+
+
+@router.get(
+    "/join-requests",
+    response_model=list[JoinRequestView],
+    responses=error_responses({**SIGNED_IN, 403: ["FORBIDDEN"], **DEMO_NOT_FOUND}),
+)
+async def list_join_requests(
+    response: Response,
+    join: JoinService = Depends(get_join_service),  # first: 404 in demo mode before 401
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> list[JoinRequestView]:
+    """The chairman: the waiting requests with what each person typed, until the decision."""
+    response.headers["Cache-Control"] = "no-store"  # personal data
+    return await join.requests(user)
+
+
+@router.post(
+    "/join-requests/{request_id}/confirm",
+    response_model=InvitationView,
+    responses=error_responses(
+        {
+            **SIGNED_IN,
+            403: ["FORBIDDEN"],
+            404: ["JOIN_REQUEST_NOT_FOUND", "NOT_FOUND"],
+            429: ["RATE_LIMITED"],
+        }
+    ),
+)
+async def confirm_join_request(
+    request_id: uuid.UUID,
+    request: Request,
+    session: DbSession,
+    join: JoinService = Depends(get_join_service),  # first: 404 in demo mode before 401
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> InvitationView:
+    """The chairman: an ordinary OWNER invitation to the request's e-mail, queued."""
+    view = await join.confirm(user, request_id)
+    await _queue_after_commit(request, session)
+    return view
+
+
+@router.post(
+    "/join-requests/{request_id}/reject",
+    status_code=204,
+    responses=error_responses(
+        {**SIGNED_IN, 403: ["FORBIDDEN"], 404: ["JOIN_REQUEST_NOT_FOUND", "NOT_FOUND"]}
+    ),
+)
+async def reject_join_request(
+    request_id: uuid.UUID,
+    join: JoinService = Depends(get_join_service),  # first: 404 in demo mode before 401
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> Response:
+    await join.reject(user, request_id)
+    return Response(status_code=204)
+
+
+@router.get(
+    "/join-decisions",
+    response_model=list[JoinDecisionView],
+    responses=error_responses({**SIGNED_IN, 403: ["FORBIDDEN"], **DEMO_NOT_FOUND}),
+)
+async def list_join_decisions(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    join: JoinService = Depends(get_join_service),  # first: 404 in demo mode before 401
+    user: CurrentUserDTO = Depends(get_bearer_user),
+) -> list[JoinDecisionView]:
+    """The chairman and the board: what was decided, without personal data."""
+    return await join.decisions(user, limit, offset)

@@ -27,6 +27,7 @@ from src.modules.auth.schemas import (
     AuthMethod,
     DeviceKind,
     InvitationKind,
+    JoinOutcome,
     StaffRole,
     TokenPurpose,
 )
@@ -156,6 +157,10 @@ class AuthInvitation(Base):
     send_attempts: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=0, server_default=text("0")
     )
+    # Refusals of the mail server in a row; at INVITATION_MAX_FAILED_SENDS the queue gives up.
+    send_failures: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default=text("0")
+    )
 
 
 class AuthToken(Base):
@@ -251,3 +256,78 @@ class UserIdentity(Base):
     requires_link_sign_in: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+
+
+class AuthJoinCode(Base):
+    """A join code on paper (E13 R4c, docs/SCHEMA.md 7): only its keyed hash."""
+
+    __tablename__ = "auth_join_codes"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    building_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("property_buildings.id"), nullable=False
+    )
+    apartment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("property_apartments.id"), nullable=False, index=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("core_users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuthJoinRequest(Base):
+    """A join request waiting for the chairman; deleted with its personal data at the decision."""
+
+    __tablename__ = "auth_join_requests"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    building_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("property_buildings.id"), nullable=False
+    )
+    apartment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("property_apartments.id"), nullable=False, index=True
+    )
+    code_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("auth_join_codes.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    phone: Mapped[str] = mapped_column(String(32), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    locale: Mapped[Locale | None] = mapped_column(
+        varchar_enum(Locale, "ck_auth_join_requests_locale", length=8), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    def __repr__(self) -> str:  # never the personal data
+        return f"AuthJoinRequest(id={self.id!s})"
+
+
+class AuthJoinDecision(Base):
+    """What was decided about a join request, without personal data."""
+
+    __tablename__ = "auth_join_decisions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    building_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("property_buildings.id"), nullable=False, index=True
+    )
+    apartment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("property_apartments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    outcome: Mapped[JoinOutcome] = mapped_column(
+        varchar_enum(JoinOutcome, "ck_auth_join_decisions_outcome", length=16), nullable=False
+    )
+    decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("core_users.id"), nullable=True
+    )
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

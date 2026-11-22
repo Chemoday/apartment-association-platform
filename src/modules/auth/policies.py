@@ -72,6 +72,11 @@ INVITATION_RETRY_DELAYS = (
     timedelta(minutes=60),
 )
 INVITATION_RETRY_LAST = timedelta(hours=3)
+# After this many refusals of the mail server in a row the queue gives up: delivery FAILED until a
+# resend (owner, 2026-11-22). Without any working e-mail (no plugin; demo mode without
+# AUTH_MAIL_IN_DEMO) nothing counts: the invitation waits, tried again every hour.
+INVITATION_MAX_FAILED_SENDS = 8
+INVITATION_UNAVAILABLE_RETRY = timedelta(hours=1)
 
 
 def invitation_retry_delay(attempt: int) -> timedelta:
@@ -150,16 +155,61 @@ def invitation_status(
     return InvitationStatus.PENDING
 
 
+# Join codes on paper (E13 R4c, docs/API.md 7): Crockford's Base32, 10 characters (~50 bits).
+JOIN_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+JOIN_CODE_LENGTH = 10
+JOINS_PER_IP_PER_HOUR = 20  # lookups and submits of the public join page together
+JOIN_REQUEST_RETENTION = timedelta(days=30)  # an undecided request, then EXPIRED
+JOIN_CODE_RETENTION = timedelta(days=30)  # a used, cancelled or expired code
+_JOIN_CODE_LOOKALIKES = str.maketrans({"I": "1", "L": "1", "O": "0"})
+
+
+def new_join_code() -> str:
+    """A random code in its canonical form (no hyphens)."""
+    return "".join(secrets.choice(JOIN_CODE_ALPHABET) for _ in range(JOIN_CODE_LENGTH))
+
+
+def format_join_code(code: str) -> str:
+    """`K7QFM3TX9R` -> `K7QF-M3TX-9R`, as printed."""
+    return f"{code[:4]}-{code[4:8]}-{code[8:]}"
+
+
+def normalise_join_code(typed: str) -> str | None:
+    """The canonical form of what a person typed (case, hyphens and spaces ignored, look-alikes
+    mapped), or None when it cannot be a code."""
+    code = "".join(typed.split()).replace("-", "").upper().translate(_JOIN_CODE_LOOKALIKES)
+    if len(code) != JOIN_CODE_LENGTH or any(c not in JOIN_CODE_ALPHABET for c in code):
+        return None
+    return code
+
+
+def join_code_subject(code: str) -> str:
+    """What the keyed hash of a join code is taken over."""
+    return f"join:{code}"
+
+
 def connection_status(
-    *, owners: int, tenants: int, on_paper: bool, invited: bool, newest_expired_unused: bool
+    *,
+    owners: int,
+    tenants: int,
+    on_paper: bool,
+    invited: bool,
+    newest_expired_unused: bool,
+    join_request: bool = False,
+    code_issued: bool = False,
 ) -> ConnectionStatus:
     """The status of an apartment in the connection overview (E13 R4b, docs/API.md 7): the
-    first that applies. `invited`: an OWNER invitation is pending; `newest_expired_unused`: the
-    newest OWNER invitation ran out unaccepted. JOIN_REQUEST and CODE_ISSUED come with R4c."""
+    first that applies. `invited`: an OWNER invitation is pending; `join_request`: a join request
+    waits (R4c); `code_issued`: an unused join code (R4c); `newest_expired_unused`: the newest of
+    the OWNER invitations and join codes ran out unused."""
     if owners > 0:
         return ConnectionStatus.CONNECTED
+    if join_request:
+        return ConnectionStatus.JOIN_REQUEST
     if invited:
         return ConnectionStatus.INVITED
+    if code_issued:
+        return ConnectionStatus.CODE_ISSUED
     if tenants > 0:
         return ConnectionStatus.TENANT_ONLY
     if on_paper:

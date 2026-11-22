@@ -1,8 +1,9 @@
 """The hourly clean-up of the auth module (docs/SCHEMA.md 7, retention).
 
 It deletes ended sessions (their refresh tokens cascade), used or expired links and attempts older
-than a day, and old invitations (A4). Each tick is one short transaction under
-pg_try_advisory_xact_lock, so several processes never delete at the same time.
+than a day, old invitations (A4), and old join codes and undecided join requests (E13 R4c). Each
+tick is one short transaction under pg_try_advisory_xact_lock, so several processes never delete
+at the same time.
 """
 
 import asyncio
@@ -14,6 +15,7 @@ from sqlalchemy import delete, or_, text
 
 from src.core.domain_events import SessionFactory
 from src.modules.auth.invitations import delete_old_invitations
+from src.modules.auth.join import delete_old_join_rows
 from src.modules.auth.links import delete_old_rows
 from src.modules.auth.models import AuthSession
 from src.modules.auth.policies import SESSION_RETENTION
@@ -45,6 +47,7 @@ async def cleanup_tick(session_factory: SessionFactory, now: datetime | None = N
         invitations = await delete_old_invitations(session, now)
         others = await delete_old_rows(session, now)
         others["invitations"] = invitations
+        others.update(await delete_old_join_rows(session, now))  # E13 R4c
         await session.commit()
     deleted = result.rowcount or 0
     if deleted or any(others.values()):

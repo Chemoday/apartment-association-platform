@@ -84,6 +84,11 @@ DEFAULT_PREFERENCES: Mapping[tuple[NotificationEventType, Channel], bool] = {
     (_E.ENERGY_CERTIFICATE_EXPIRING, _C.EMAIL): True,
     (_E.ENERGY_CERTIFICATE_EXPIRING, _C.TELEGRAM): False,
     (_E.ENERGY_CERTIFICATE_EXPIRING, _C.WEBPUSH): False,
+    # A person waits for the chairman: in the app and by e-mail (E13 R4c).
+    (_E.JOIN_REQUEST_SUBMITTED, _C.IN_APP): True,
+    (_E.JOIN_REQUEST_SUBMITTED, _C.EMAIL): True,
+    (_E.JOIN_REQUEST_SUBMITTED, _C.TELEGRAM): False,
+    (_E.JOIN_REQUEST_SUBMITTED, _C.WEBPUSH): False,
 }
 
 ISSUE_REPORT_EVENTS = frozenset(
@@ -239,6 +244,11 @@ def notice_published_key(post_id: uuid.UUID) -> str:
 def certificate_reminder_key(building_id: uuid.UUID, valid_until: date, threshold: int) -> str:
     """One per building, certificate and threshold (a redelivered event adds nothing)."""
     return f"energy_certificate:{building_id}:{valid_until.isoformat()}:{threshold}"
+
+
+def join_request_key(request_id: uuid.UUID) -> str:
+    """One per join request (a redelivered event adds nothing)."""
+    return f"join_request:{request_id}"
 
 
 def storage_alert_key(event_id: uuid.UUID) -> str:

@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.auth.errors import apartment_not_found, forbidden
-from src.modules.auth.models import AuthInvitation
+from src.modules.auth.invitations import delivery_of
+from src.modules.auth.models import AuthInvitation, AuthJoinCode, AuthJoinRequest
 from src.modules.auth.policies import connection_status
 from src.modules.auth.schemas import (
     ConnectionItem,
@@ -32,13 +33,25 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-@dataclass(frozen=True)
-class _OwnerInvitations:
-    """What the OWNER invitations of one apartment say about it."""
+@dataclass
+class _Activity:
+    """What the OWNER invitations, join codes and join requests of one apartment say about it."""
 
-    pending_queued: bool | None = None  # of the pending one: queued or sent; None without one
-    newest_expired_unused: bool = False  # the newest (by creation) ran out unaccepted
-    last_sent_at: datetime | None = None  # the latest e-mail of any of them
+    pending_delivery: InvitationDelivery | None = None  # of the pending invitation; None: none
+    code_issued: bool = False  # an unused, unexpired join code (R4c)
+    join_request: bool = False  # a join request waits (R4c)
+    last_activity_at: datetime | None = None  # the latest invitation e-mail or code issue
+    # The newest invitation or (not cancelled) code by creation, and whether it ran out unused.
+    newest_at: datetime | None = None
+    newest_expired_unused: bool = False
+
+    def saw(self, at: datetime) -> None:
+        if self.last_activity_at is None or at > self.last_activity_at:
+            self.last_activity_at = at
+
+    def created(self, at: datetime, expired_unused: bool) -> None:
+        if self.newest_at is None or at > self.newest_at:
+            self.newest_at, self.newest_expired_unused = at, expired_unused
 
 
 class ConnectionService:
@@ -82,19 +95,21 @@ class ConnectionService:
             raise apartment_not_found()
         return (await self._items(caller.building_id, apartment_id))[0]
 
+    async def items(self, building_id: uuid.UUID) -> list[ConnectionItem]:
+        """Every apartment's item, with no caller check (the default pick of join codes)."""
+        return await self._items(building_id, None)
+
     async def _items(
         self, building_id: uuid.UUID, apartment_id: uuid.UUID | None
     ) -> list[ConnectionItem]:
         now = _now()
         rows = await self.properties.connection_rows(building_id, apartment_id)
-        invitations = await self._owner_invitations(building_id, apartment_id, now)
-        return [
-            self._item(row, invitations.get(row.apartment_id, _OwnerInvitations())) for row in rows
-        ]
+        activity = await self._activity(building_id, apartment_id, now)
+        return [self._item(row, activity.get(row.apartment_id, _Activity())) for row in rows]
 
     @staticmethod
-    def _item(row: ConnectionRowDTO, invitations: _OwnerInvitations) -> ConnectionItem:
-        queued = invitations.pending_queued
+    def _item(row: ConnectionRowDTO, invitations: _Activity) -> ConnectionItem:
+        delivery = invitations.pending_delivery
         return ConnectionItem(
             apartment_id=row.apartment_id,
             apartment_number=row.number,
@@ -103,60 +118,80 @@ class ConnectionService:
                 owners=row.owners,
                 tenants=row.tenants,
                 on_paper=row.on_paper,
-                invited=queued is not None,
+                invited=delivery is not None,
                 newest_expired_unused=invitations.newest_expired_unused,
+                join_request=invitations.join_request,
+                code_issued=invitations.code_issued,
             ),
             owners=row.owners,
             tenants=row.tenants,
             on_paper=row.on_paper,
-            last_invited_at=invitations.last_sent_at,
-            invitation_delivery=None
-            if queued is None
-            else InvitationDelivery.QUEUED
-            if queued
-            else InvitationDelivery.SENT,
+            last_invited_at=invitations.last_activity_at,
+            invitation_delivery=delivery,
         )
 
-    async def _owner_invitations(
+    async def _activity(
         self, building_id: uuid.UUID, apartment_id: uuid.UUID | None, now: datetime
-    ) -> dict[uuid.UUID, _OwnerInvitations]:
-        """The OWNER invitations of the building (or of one apartment) by apartment. An OWNER
-        invitation applies while the building has an active chairman, which the caller is."""
-        query = (
-            select(
-                AuthInvitation.apartment_id,
-                AuthInvitation.last_sent_at,
-                AuthInvitation.expires_at,
-                AuthInvitation.accepted_at,
-                AuthInvitation.send_due_at,
-            )
-            .where(
-                AuthInvitation.building_id == building_id,
-                AuthInvitation.kind == InvitationKind.OWNER,
-            )
-            .order_by(AuthInvitation.created_at.desc(), AuthInvitation.id)  # the newest first
+    ) -> dict[uuid.UUID, _Activity]:
+        """The OWNER invitations, join codes and join requests of the building (or of one
+        apartment) by apartment. An OWNER invitation applies while the building has an active
+        chairman, which the caller is."""
+        found: dict[uuid.UUID, _Activity] = {}
+
+        def of(apartment: uuid.UUID) -> _Activity:
+            return found.setdefault(apartment, _Activity())
+
+        invitations = select(
+            AuthInvitation.apartment_id,
+            AuthInvitation.created_at,
+            AuthInvitation.last_sent_at,
+            AuthInvitation.expires_at,
+            AuthInvitation.accepted_at,
+            AuthInvitation.send_due_at,
+            AuthInvitation.send_failures,
+        ).where(
+            AuthInvitation.building_id == building_id,
+            AuthInvitation.kind == InvitationKind.OWNER,
+        )
+        codes = select(
+            AuthJoinCode.apartment_id,
+            AuthJoinCode.created_at,
+            AuthJoinCode.expires_at,
+            AuthJoinCode.used_at,
+            AuthJoinCode.cancelled_at,
+        ).where(AuthJoinCode.building_id == building_id)
+        requests = select(AuthJoinRequest.apartment_id).where(
+            AuthJoinRequest.building_id == building_id
         )
         if apartment_id is not None:
-            query = query.where(AuthInvitation.apartment_id == apartment_id)
-        found: dict[uuid.UUID, _OwnerInvitations] = {}
+            invitations = invitations.where(AuthInvitation.apartment_id == apartment_id)
+            codes = codes.where(AuthJoinCode.apartment_id == apartment_id)
+            requests = requests.where(AuthJoinRequest.apartment_id == apartment_id)
+        # Newest first, so the first pending invitation met is the newest pending one.
+        invitations = invitations.order_by(AuthInvitation.created_at.desc(), AuthInvitation.id)
         for (
             apartment,
-            last_sent_at,
-            expires_at,
-            accepted_at,
-            send_due_at,
-        ) in await self.session.execute(query):
-            unused = accepted_at is None
-            current = found.get(apartment)
-            if current is None:  # the newest of this apartment
-                current = _OwnerInvitations(newest_expired_unused=unused and expires_at <= now)
-            pending_queued = current.pending_queued
-            if pending_queued is None and unused and expires_at > now:
-                pending_queued = send_due_at is not None
-            latest = current.last_sent_at
-            found[apartment] = _OwnerInvitations(
-                pending_queued=pending_queued,
-                newest_expired_unused=current.newest_expired_unused,
-                last_sent_at=last_sent_at if latest is None else max(latest, last_sent_at),
-            )
+            created,
+            sent,
+            expires,
+            accepted,
+            due,
+            failures,
+        ) in await self.session.execute(invitations):
+            item = of(apartment)
+            unused = accepted is None
+            if item.pending_delivery is None and unused and expires > now:
+                item.pending_delivery = delivery_of(due, failures)
+            item.saw(sent)
+            item.created(created, unused and expires <= now)
+        for apartment, created, expires, used, cancelled in await self.session.execute(codes):
+            item = of(apartment)
+            item.saw(created)
+            if cancelled is not None:
+                continue  # a cancelled code is neither issued nor expired
+            if used is None and expires > now:
+                item.code_issued = True
+            item.created(created, used is None and expires <= now)
+        for (apartment,) in await self.session.execute(requests):
+            of(apartment).join_request = True
         return found

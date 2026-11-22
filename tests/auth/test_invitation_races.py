@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from alembic import command
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.config import get_settings
@@ -429,3 +429,40 @@ async def test_two_queue_runs_never_claim_the_same_e_mail(engine: AsyncEngine) -
     )
     assert len(claims) == 2 and not (claims[0] & claims[1])
     assert claims[0] | claims[1] == ids
+
+
+async def test_two_submits_of_one_join_code_store_one_request(engine: AsyncEngine) -> None:
+    """A join code works once (E13 R4c): two people submitting the same sheet at the same time."""
+    from src.modules.auth.join import JoinService
+    from src.modules.auth.models import AuthJoinRequest
+    from src.modules.auth.schemas import JoinSubmit
+
+    settings = get_settings().model_copy(update={"DEMO_MODE_ENABLED": False})
+    async with unit(engine) as session:
+        building = await create_building(session)
+        chairman = await create_user(session, building, "Chair", role=BuildingRole.CHAIRMAN)
+        flat = await create_apartment(session, building, "7")
+    async with unit(engine) as session:
+        issued = await JoinService(session, settings).issue(
+            await caller(session, chairman.id), [flat.id]
+        )
+    code = issued.codes[0].join_code
+
+    async def submit(session: AsyncSession, n: int) -> None:
+        body = JoinSubmit(
+            join_code=code,
+            full_name=f"Person {n}",
+            phone="+372 5555 0000",
+            email=f"p{n}.{uuid.uuid4().hex[:6]}@example.com",
+        )
+        await JoinService(session, settings).submit(body, f"198.51.100.{n}")
+
+    results = await asyncio.gather(
+        outcome(engine, lambda s: submit(s, 1)), outcome(engine, lambda s: submit(s, 2))
+    )
+    assert sorted(results) == ["INVALID_JOIN_CODE", "ok"]
+    async with unit(engine) as session:
+        stored = await session.scalar(
+            select(func.count(AuthJoinRequest.id)).where(AuthJoinRequest.apartment_id == flat.id)
+        )
+    assert stored == 1

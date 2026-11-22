@@ -259,7 +259,8 @@ Shared enums (each has a named `CHECK (… IN (…))`):
   `('telegram', 'webpush', 'mobile_push')`.
 - `event_type`: `EMERGENCY_PUBLISHED`, `EMERGENCY_RESOLVED`, `READING_DEADLINE`, `PERIOD_REVIEW`,
   `APARTMENT_MESSAGE`, `APARTMENT_MESSAGE_TO_BOARD` (epic E8, migration 013), `POLL_OPENED`
-  (epic E3, migration 016)
+  (epic E3, migration 016), the later ones of docs/API.md section 6, and `JOIN_REQUEST_SUBMITTED`
+  (epic E13 R4c, migration 034)
 - delivery `status`: `PENDING`, `SENDING`, `SENT`, `FAILED`, `SKIPPED`
 
 ### Table: `notif_channel_bindings`
@@ -326,7 +327,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 | `binding_id` | `UUID` | `FK(notif_channel_bindings.id), NULLABLE` | Set exactly for `telegram` and `webpush` |
 | `event_type` | `VARCHAR(32)` | `NOT NULL` | Enum `event_type` |
 | `dedup_key` | `VARCHAR(128)` | `NOT NULL` | `emergency:{post_id}`, `emergency_resolved:{post_id}`, `reading_deadline:{period_id}`, `period_review:{period_id}:{event_id}` (the event id of that status change, so a reopened period can be reviewed again), `apartment_message:{post_id}` for a new thread and `apartment_message:{post_id}:{comment_id}` for a reply, `poll_opened:{poll_id}`, `issue_reported:{issue_id}`, `issue_status:{change_id}` (the timeline entry of a status change or a merge), `maintenance_due:{occurrence_id}:{due_date}:{reminder_number}` (a moved occurrence is published again under its new date), `notice_published:{post_id}`, `storage_alert:{event_id}`, `energy_certificate:{building_id}:{valid_until}:{threshold}` |
-| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue', 'maintenance_task', 'storage', 'building')` | What the notification is about (`poll` since migration 016, `issue` since 019, `maintenance_task` since 021, `storage` since 024, `building` since 029) |
+| `subject_type` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('post', 'period', 'poll', 'issue', 'maintenance_task', 'storage', 'building', 'join_request')` | What the notification is about (`poll` since migration 016, `issue` since 019, `maintenance_task` since 021, `storage` since 024, `building` since 029, `join_request` since 034) |
 | `subject_id` | `UUID` | `NOT NULL` | `comm_posts.id`, `meters_periods.id`, `gov_polls.id`, `iss_issues.id`, `maint_tasks.id`, or `property_buildings.id` for `storage` and `building` (no FK: other modules' tables) |
 | `params` | `JSONB` | `NOT NULL, DEFAULT '{}'` | PII-free render parameters: `category`, `target_scope`, `target_entrance`, `period_code`, `due_date`; for thread messages `apartment_id`, `apartment_number`, `from_board`; for a poll `closes_at`; for an issue `category`, `entrance`, and for a status notice `status`, `merged`; for a maintenance reminder `occurrence_id`, `due_date`, `overdue`, `reminder_number`; for a storage alert `threshold`, `used_percent`; for an energy certificate `valid_until`, `days_left`, `threshold` |
 | `locale` | `VARCHAR(5)` | `NOT NULL, CHECK IN ('et', 'ru', 'en')` | Language for the external text, resolved at insert time (`core_users.locale` or `DEFAULT_LOCALE`) |
@@ -398,7 +399,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 
 ## 7. Module: `auth` (epic E7)
 
-*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011). The language and the send queue of invitations, and the attempt kinds `BULK_INVITATION` and `INVITATION_MAIL`, came with epic E13 task R4a (migration 032).*
+*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011). The language and the send queue of invitations, and the attempt kinds `BULK_INVITATION` and `INVITATION_MAIL`, came with epic E13 task R4a (migration 032). The join codes, join requests and their decisions, and the attempt kind `JOIN`, came with task R4c (migration 034); `send_failures`, the limit of refusals, with migration 035.*
 
 *All hashes are keyed HMAC-SHA-256 (hex, 64 characters) with `AUTH_HASH_SECRET`; a prefix such as `ip:` or `user:` is part of the hashed input, never stored. Rotating the secret ends every session and voids every open link and invitation.*
 
@@ -459,7 +460,8 @@ Columns as in section 1, plus:
 | `applied` | `BOOLEAN` | `NULLABLE` | Set with `accepted_at`: whether acceptance changed anything |
 | `locale` | `VARCHAR(8)` | `NULLABLE, CHECK IN ('et', 'ru', 'en')` | The language picked for the invitation (R4a); `NULL`: none picked. The API offers only `DEFAULT_LOCALE` and `en` |
 | `send_due_at` | `TIMESTAMPTZ` | `NULLABLE` | Set while its e-mail is queued (R4a): when the next attempt is due; a worker that claims it moves it forward by the lease (6 minutes, longer than a batch of timed-out sends), so a crashed attempt is due again. `NULL` once sent (API `delivery: SENT`) and for rows older than migration 032 |
-| `send_attempts` | `SMALLINT` | `NOT NULL, DEFAULT 0` | Attempts since it was last queued, for the retry delays; the record of a result is fenced on it |
+| `send_attempts` | `SMALLINT` | `NOT NULL, DEFAULT 0` | Attempts since it was last queued; the record of a result is fenced on it |
+| `send_failures` | `SMALLINT` | `NOT NULL, DEFAULT 0` | Refusals of the mail server in a row (migration 035), for the retry delays; at 8 the queue gives up (`send_due_at` `NULL`, API `delivery: FAILED`); a success or a resend sets it to 0. No working e-mail at all does not count |
 
 - `ck_auth_invitations_target`: `apartment_id IS NOT NULL` exactly when `kind IN ('OWNER', 'TENANT')`, and `building_role IS NOT NULL` exactly when `kind = 'STAFF'`.
 - Partial unique index `uq_auth_invitations_open`: `UNIQUE NULLS NOT DISTINCT (kind, email, apartment_id, building_role) WHERE accepted_at IS NULL`. One open invitation per target, from anyone. A new invitation for a target whose open one has expired replaces it in the same transaction.
@@ -486,12 +488,53 @@ Columns as in section 1, plus:
   - At most one `INVITATION` token per invitation (partial unique index `uq_auth_tokens_invitation_link` on `(invitation_id) WHERE purpose = 'INVITATION'`).
 - `ck_auth_tokens_owner`: `user_id` is set exactly for `MAGIC_LINK`, `invitation_id` exactly for the other purposes.
 
+### Table: `auth_join_codes` (epic E13 R4c)
+*(Join codes on paper: docs/API.md section 7. Only a keyed hash; the code itself exists only in the answer that issued it.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `apartment_id` | `UUID` | `FK(property_apartments.id), NOT NULL, INDEX` | |
+| `code_hash` | `VARCHAR(64)` | `NOT NULL, UNIQUE` | Keyed hash (`AUTH_HASH_SECRET`) of `join:<normalised code>` |
+| `created_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | The chairman who issued it |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+| `expires_at` | `TIMESTAMPTZ` | `NOT NULL` | `created_at + AUTH_JOIN_CODE_DAYS` |
+| `used_at` | `TIMESTAMPTZ` | `NULLABLE` | Set in the transaction that stores the join request |
+| `cancelled_at` | `TIMESTAMPTZ` | `NULLABLE` | |
+
+- A code is usable while `used_at` and `cancelled_at` are `NULL` and `expires_at` is in the future; using it is one `UPDATE … WHERE` those conditions hold, so it works once under concurrency.
+
+### Table: `auth_join_requests` (epic E13 R4c)
+*(A request waiting for the chairman. It holds personal data only until the decision: then the row is deleted.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL` | |
+| `apartment_id` | `UUID` | `FK(property_apartments.id), NOT NULL, INDEX` | |
+| `code_id` | `UUID` | `FK(auth_join_codes.id) ON DELETE SET NULL, NULLABLE, UNIQUE` | The code it used up |
+| `full_name` | `VARCHAR(200)` | `NOT NULL` | As typed; shown to the chairman only |
+| `phone` | `VARCHAR(32)` | `NOT NULL` | As typed |
+| `email` | `VARCHAR(255)` | `NOT NULL` | Canonical form |
+| `locale` | `VARCHAR(8)` | `NULLABLE, CHECK IN ('et', 'ru', 'en')` | The language of the join page |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
+### Table: `auth_join_decisions` (epic E13 R4c)
+*(What was decided about a join request, without personal data, for the chairman and the board.)*
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `UUID` | `PK` | |
+| `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL, INDEX` | |
+| `apartment_id` | `UUID` | `FK(property_apartments.id) ON DELETE SET NULL, NULLABLE` | |
+| `outcome` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('CONFIRMED', 'REJECTED', 'EXPIRED')` | |
+| `decided_by_user_id` | `UUID` | `FK(core_users.id), NULLABLE` | `NULL` for `EXPIRED` |
+| `decided_at` | `TIMESTAMPTZ` | `NOT NULL` | |
+
 ### Table: `auth_attempts`
 *(Limits counted across processes, like `notif_link_attempts`.)*
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `UUID` | `PK` | |
-| `kind` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('MAGIC_LINK', 'REDEEM', 'PASSWORD', 'INVITATION', 'BULK_INVITATION', 'INVITATION_MAIL')` | `BULK_INVITATION` (R4a): one row per invitation of a bulk send or of "resend expired", for the building limit of twice the number of apartments per 24 hours. `INVITATION_MAIL` (R4a): one row per invitation e-mail the queue sent, for its pacing |
+| `kind` | `VARCHAR(16)` | `NOT NULL, CHECK IN ('MAGIC_LINK', 'REDEEM', 'PASSWORD', 'INVITATION', 'BULK_INVITATION', 'INVITATION_MAIL', 'JOIN')` | `BULK_INVITATION` (R4a): one row per invitation of a bulk send or of "resend expired", for the building limit of twice the number of apartments per 24 hours. `INVITATION_MAIL` (R4a): one row per invitation e-mail the queue sent, for its pacing. `JOIN` (R4c): one row per lookup or submit of the public join page, by IP address. A confirmed join request adds a `BULK_INVITATION` row |
 | `subject_hash` | `VARCHAR(64)` | `NOT NULL` | Keyed hash of what is counted: `email:<canonical e-mail>`, `ip:<address>`, `pair:<e-mail>\|<address>`, `user:<inviter id>`, `building:<building id>` (`BULK_INVITATION`) or `queue:invitation-mails` (`INVITATION_MAIL`); an IPv6 address counts by its /64 |
 | `succeeded` | `BOOLEAN` | `NOT NULL` | |
 | `attempted_at` | `TIMESTAMPTZ` | `NOT NULL` | |
@@ -502,6 +545,7 @@ Columns as in section 1, plus:
 - used or expired tokens;
 - sessions expired or revoked more than 7 days ago (their refresh tokens cascade);
 - open invitations whose `expires_at` is more than 30 days ago (one that no longer applies expires like any other);
+- join codes used, cancelled or expired more than 30 days ago (R4c); a join request older than 30 days, with an `EXPIRED` row in `auth_join_decisions` (R4c). Decisions are kept;
 - accepted invitations with a `membership_id`: 30 days after that membership ended (`PropertyService.membership_end_times`); an applied `STAFF` invitation (API `invited_email` of `GET /auth/users`): kept while `accepted_user_id` is active and holds that `building_role` (`PropertyService.building_roles`), then deleted by the next run; all other accepted invitations (`applied = false`): 30 days after acceptance.
 
 ---
@@ -623,7 +667,7 @@ needs no migration and core never knows a module's rules. Migration 017.*
 | :--- | :--- | :--- | :--- |
 | `building_id` | `UUID` | `PK`, `FK(property_buildings.id) ON DELETE CASCADE` | |
 | `key` | `VARCHAR(64)` | `PK` | A declared key, e.g. `issues.urgent_enabled`. Rows of a key that is no longer declared are ignored |
-| `value` | `JSONB` | `NOT NULL` | A JSON integer or boolean, checked against the declaration on every write |
+| `value` | `JSONB` | `NOT NULL` | A JSON integer, boolean or (for a `URL` setting, since E13 R4c) string, checked against the declaration on every write |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL` | |
 | `updated_by_user_id` | `UUID` | `FK(core_users.id) ON DELETE SET NULL, NULLABLE` | Who set the current value (never returned by the API) |
 

@@ -186,6 +186,7 @@ _DAYTIME_EVENTS = frozenset(
         NotificationEventType.NOTICE_PUBLISHED,
         NotificationEventType.STORAGE_ALMOST_FULL,
         NotificationEventType.ENERGY_CERTIFICATE_EXPIRING,
+        NotificationEventType.JOIN_REQUEST_SUBMITTED,
     }
 )
 
@@ -386,6 +387,11 @@ class Dispatcher:
             user = await properties.get_current_user(row.user_id)
             communication = CommunicationService(session, properties)
             if user is None or not await communication.can_read_post(user, row.subject_id):
+                return skip("SUBJECT_NOT_FOUND")
+        elif row.event_type == NotificationEventType.JOIN_REQUEST_SUBMITTED:
+            # Only a chairman decides; someone who stopped being one meanwhile is skipped.
+            user = await properties.get_current_user(row.user_id)
+            if user is None or user.building_role != BuildingRole.CHAIRMAN:
                 return skip("SUBJECT_NOT_FOUND")
         elif row.event_type in (
             NotificationEventType.STORAGE_ALMOST_FULL,

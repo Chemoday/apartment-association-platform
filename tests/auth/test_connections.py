@@ -320,3 +320,25 @@ def test_the_status_rule(
         )
         == expected
     )
+
+
+def test_join_requests_and_codes_in_the_status_rule() -> None:
+    """E13 R4c: a waiting request comes right after an owner, an unused code after an
+    invitation."""
+    base = {"owners": 0, "tenants": 1, "on_paper": True, "newest_expired_unused": True}
+    assert (
+        connection_status(**base, invited=True, join_request=True, code_issued=True)
+        == ConnectionStatus.JOIN_REQUEST
+    )
+    assert (
+        connection_status(**base, invited=True, join_request=False, code_issued=True)
+        == ConnectionStatus.INVITED
+    )
+    assert (
+        connection_status(**base, invited=False, join_request=False, code_issued=True)
+        == ConnectionStatus.CODE_ISSUED
+    )
+    assert (
+        connection_status(**{**base, "owners": 1}, invited=False, join_request=True)
+        == ConnectionStatus.CONNECTED
+    )

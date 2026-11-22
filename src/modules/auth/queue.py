@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 from src.core.config import Settings
 from src.core.domain_events import SessionFactory
 from src.modules.auth.invitations import InvitationService, QueuedMail
-from src.modules.auth.mail import mail_allowed, send_auth_email
+from src.modules.auth.mail import EMAIL_CHANNEL, mail_allowed, send_auth_email
 from src.modules.auth.models import AuthAttempt
 from src.modules.auth.policies import INVITATION_SEND_BATCH, INVITATION_SEND_TIMEOUT
 from src.modules.auth.schemas import AttemptKind
@@ -32,10 +32,12 @@ logger = structlog.get_logger(__name__)
 _meter = metrics.get_meter(__name__)
 invitation_mails = _meter.create_counter(
     "auth.invitation_mails",
-    description="Invitation e-mails of the queue by outcome (sent, failed, not_allowed in demo)",
+    description="Invitation e-mails of the queue by outcome: sent, failed, not_allowed, no_channel",
 )
 
 LOOP_INTERVAL = timedelta(seconds=30)
+# What record_send makes of each outcome of _send.
+_RECORDED = {"not_allowed": "unavailable", "no_channel": "unavailable"}
 HOUR = timedelta(hours=1)
 _sleep = asyncio.sleep  # tests replace it, never the global asyncio.sleep
 
@@ -58,11 +60,14 @@ async def _room(session_factory: SessionFactory, settings: Settings, now: dateti
 
 
 async def _send(plugins: PluginRegistry, settings: Settings, queued: QueuedMail) -> str:
-    """'sent', 'failed' or 'not_allowed' (demo mode without AUTH_MAIL_IN_DEMO: tried again later
-    like a failure, but not counted as a broken mail server)."""
+    """'sent'; 'failed' (refused or unreachable: counts toward giving up); or, without any
+    working e-mail, 'not_allowed' (demo mode without AUTH_MAIL_IN_DEMO) and 'no_channel' (no
+    e-mail plugin), which wait and never count as a broken mail server."""
     mail = queued.mail
     if not mail_allowed(settings, mail.email):
         return "not_allowed"
+    if plugins.channel(EMAIL_CHANNEL) is None:
+        return "no_channel"
     try:
         async with asyncio.timeout(INVITATION_SEND_TIMEOUT.total_seconds()):
             ok = await send_auth_email(
@@ -97,7 +102,7 @@ async def queue_tick(
         outcome = await _send(plugins, settings, queued)
         async with session_factory() as session:
             recorded = await InvitationService(session, settings).record_send(
-                queued, ok=outcome == "sent", now=_now()
+                queued, outcome=_RECORDED.get(outcome, outcome), now=_now()
             )
             await session.commit()
         invitation_mails.add(1, {"outcome": outcome})

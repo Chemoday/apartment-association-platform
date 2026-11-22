@@ -50,6 +50,7 @@ class NotificationEventType(StrEnum):
     STORAGE_ALMOST_FULL = "STORAGE_ALMOST_FULL"
     # The energy certificate of the building passport expires (epic E12 X2b).
     ENERGY_CERTIFICATE_EXPIRING = "ENERGY_CERTIFICATE_EXPIRING"
+    JOIN_REQUEST_SUBMITTED = "JOIN_REQUEST_SUBMITTED"  # epic E13 R4c
 
 
 class DeliveryStatus(StrEnum):
@@ -68,6 +69,7 @@ class SubjectType(StrEnum):
     MAINTENANCE_TASK = "maintenance_task"
     STORAGE = "storage"  # the subject is the building
     BUILDING = "building"  # the building passport (epic E12); the subject is the building
+    JOIN_REQUEST = "join_request"  # epic E13 R4c; the request may be decided already
 
 
 class UnavailableReason(StrEnum):

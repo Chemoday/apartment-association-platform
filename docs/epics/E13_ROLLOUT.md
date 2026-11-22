@@ -453,6 +453,16 @@ imports `auth`.
   3.7). The code and the request's data never reach logs or spans: the field of the join endpoints
   is named `join_code` (never a bare `code`), and `join_code` joins the scrubber's markers, which
   match by substring; `full_name`, `phone` and `email` already are.
+- **Settled in the contract** (docs/API.md section 7, 2026-11-22): the privacy notice is a template
+  of the platform in `et` and `en` (the agent writes it; the owner or a lawyer reviews it before
+  the pilot), replaced by the association's own through the building setting
+  `auth.privacy_notice_url` (a new setting type `URL`); every join endpoint answers `404` in demo
+  mode; codes are issued for picked apartments or by default for those with nothing going on; the
+  board sees the decisions (`GET /auth/join-decisions`); a confirmation counts against the bulk
+  limit of R4a; R4b's `JOIN_REQUEST`, `CODE_ISSUED` and `EXPIRED` (codes too) come alive.
+- **With backups (R6, B-3):** the template notice says the request data are deleted at the
+  decision; once database backups exist, they live on in the backups for the backup retention,
+  and the notice must say so (as B-3 already requires of the privacy notice).
 
 ## 7. Tasks
 

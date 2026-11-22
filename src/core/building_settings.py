@@ -9,15 +9,17 @@ docs/ARCHITECTURE.md section 6, docs/SCHEMA.md section 9, docs/API.md section 9.
 """
 
 import importlib
+import unicodedata
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, overload
+from urllib.parse import urlsplit
 
 import structlog
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 from sqlalchemy import (
     ColumnElement,
     DateTime,
@@ -43,6 +45,7 @@ from src.modules.property.schemas import BuildingRole, CurrentUserDTO
 logger = structlog.get_logger(__name__)
 
 _MODULE_SETTING_MODULES = (
+    "src.modules.auth.settings",
     "src.modules.issues.settings",
     "src.modules.maintenance.settings",
     "src.modules.chat.settings",
@@ -87,7 +90,43 @@ class BoolSetting:
         return None if isinstance(value, bool) else "must be true or false"
 
 
-type SettingSpec = IntSetting | BoolSetting
+URL_MAX_LENGTH = 500
+
+
+@dataclass(frozen=True)
+class UrlSetting:
+    """An https:// address of at most 500 characters without spaces, or "" for none (E13 R4c:
+    the association's own privacy notice)."""
+
+    key: str
+    default: str = ""
+
+    type: Literal["URL"] = "URL"
+    minimum: None = None
+    maximum: None = None
+
+    def problem(self, value: object) -> str | None:
+        if not isinstance(value, str):
+            return "must be a string"
+        if value == "":
+            return None
+        if len(value) > URL_MAX_LENGTH:
+            return f"must be at most {URL_MAX_LENGTH} characters"
+        if any(c.isspace() or unicodedata.category(c) in {"Cc", "Cf"} for c in value):
+            return "must not contain spaces, control or format characters"
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname:
+            return "must be an https:// address"
+        if parsed.username is not None or parsed.password is not None:
+            return "must not contain a user name or password"
+        try:
+            parsed.port  # noqa: B018 (urlsplit checks the port only when it is read)
+        except ValueError:
+            return "must have a valid port"
+        return None
+
+
+type SettingSpec = IntSetting | BoolSetting | UrlSetting
 
 
 class SettingsRegistry:
@@ -187,9 +226,9 @@ class BuildingSettingChange(Base):
 
 class SettingView(BaseModel):
     key: str
-    type: Literal["INTEGER", "BOOLEAN"]
-    value: int | bool
-    default: int | bool
+    type: Literal["INTEGER", "BOOLEAN", "URL"]
+    value: int | bool | str
+    default: int | bool | str
     minimum: int | None
     maximum: int | None
     is_default: bool
@@ -208,7 +247,10 @@ class SettingsUpdate(BaseModel):
     values: Annotated[
         dict[
             Annotated[str, Field(max_length=KEY_MAX_LENGTH)],
-            StrictBool | StrictInt | None,
+            StrictBool
+            | StrictInt
+            | Annotated[StrictStr, Field(max_length=URL_MAX_LENGTH + 1)]
+            | None,
         ],
         Field(min_length=1, max_length=MAX_VALUES_PER_REQUEST),
     ]
@@ -232,7 +274,9 @@ class BuildingSettings:
     async def get(self, building_id: uuid.UUID, spec: IntSetting) -> int: ...
     @overload
     async def get(self, building_id: uuid.UUID, spec: BoolSetting) -> bool: ...
-    async def get(self, building_id: uuid.UUID, spec: SettingSpec) -> int | bool:
+    @overload
+    async def get(self, building_id: uuid.UUID, spec: UrlSetting) -> str: ...
+    async def get(self, building_id: uuid.UUID, spec: SettingSpec) -> int | bool | str:
         """The building's value of a declared setting; the default when it is not set (or a
         stored value no longer fits the declaration, e.g. after its bounds were narrowed)."""
         value = await self.session.scalar(
