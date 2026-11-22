@@ -1,5 +1,6 @@
 """Public enums and DTOs of the auth module (docs/API.md section 7)."""
 
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -231,6 +232,12 @@ class InvitationView(BaseModel):
     expires_at: datetime
 
 
+def _no_control(value: str) -> str:
+    """Refuse control characters (NUL ...) like clean_text, but keep the text as it is."""
+    clean_text(value)
+    return value
+
+
 # A bulk list is at most 1 MB of UTF-8 (422 BULK_LIST_TOO_LONG, checked by the service); this
 # bound only keeps an absurd body out of memory.
 BULK_TEXT_MAX_CHARS = 4 * 1024 * 1024
@@ -241,7 +248,8 @@ class BulkInvitationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    text: Annotated[str, Field(max_length=BULK_TEXT_MAX_CHARS), AfterValidator(clean_text)]
+    # Not clean_text: that also trims, and the report counts lines from the very first one.
+    text: Annotated[str, Field(max_length=BULK_TEXT_MAX_CHARS), AfterValidator(_no_control)]
 
 
 class BulkInvitationRow(BaseModel):
@@ -448,7 +456,9 @@ def _phone(value: str) -> str:
 
 def _one_line(value: str) -> str:
     """A name shown to the chairman: one line, so it cannot be laid out to mislead."""
-    if any(c in value for c in "\n\r\t\u2028\u2029"):
+    # Every control character (tab, line feed, NEL U+0085 ...) and the line and paragraph
+    # separators.
+    if any(unicodedata.category(c) in {"Cc", "Zl", "Zp"} for c in value):
         raise ValueError("must be one line")
     return value
 

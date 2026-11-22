@@ -2832,8 +2832,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "maxLength": 8
+                  "type": "string"
                 },
                 {
                   "type": "null"

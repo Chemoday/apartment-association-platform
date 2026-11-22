@@ -751,7 +751,7 @@ async def cancel_join_code(
     responses=error_responses({**DEMO_NOT_FOUND, 422: ["VALIDATION_ERROR"]}),
 )
 async def join_privacy_notice(
-    locale: str | None = Query(default=None, max_length=8),
+    locale: str | None = None,  # any value other than et or en gets en
     join: JoinService = Depends(get_join_service),
 ) -> PrivacyNotice:
     """No sign-in: the association's own notice, or the platform's template."""
