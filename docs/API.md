@@ -1586,6 +1586,15 @@ reuses `DEVICE_LIMIT_REACHED`); the unsubscribe (N8) reuses `INVALID_LINK` of se
   it and uvicorn trusts it (`--proxy-headers`), and the backend port is never exposed directly.
 - **Status 400** is new in this API (`INVALID_LINK`).
 
+### E-mail addresses
+Every e-mail field of this section (and a bulk list's e-mail column) is checked for a basic shape
+only (owner decision 2026-11-22: whether a mailbox exists is never known): one `@`; before it at
+most 64 characters (letters of any script, digits and ``. ! # $ % & ' * + / = ? ^ _ ` { | } ~ -``)
+without a dot at either end or two in a row; after it labels of letters, digits and inner hyphens,
+separated by single dots, the last at least two characters and not only digits; at most 254
+characters. It is stored and matched in canonical form (trimmed, NFKC, lower case). Anything else
+is `422 VALIDATION_ERROR` (the bulk row outcome `INVALID_EMAIL`).
+
 ### Session object (`SessionResponse`)
 Returned when someone signs in; the refresh cookie is set in the same response.
 ```json
@@ -1767,9 +1776,10 @@ Board members do not invite. Family members (`RESIDENT`) are not invited (owner 
 ```
 - **`locale`:** the language picked for this invitation (`DEFAULT_LOCALE` or `en`), or `null`
   when none was picked (the instance default is used). See "The language of an invitation".
-- **`delivery`:** `QUEUED` while its e-mail waits in the queue (also when every attempt so far
-  failed, and when it expired before it could be sent), `SENT` once the mail server accepted it.
-  See "The invitation queue".
+- **`delivery`:** `QUEUED` while its e-mail waits in the queue (also after failed attempts, and
+  when it expired before it could be sent), `SENT` once the mail server accepted it, `FAILED`
+  when the queue gave up after 8 refusals in a row (a resend queues it again). See "The
+  invitation queue".
 - **`status`:**
   - `PENDING`;
   - `ACCEPTED`;
@@ -1812,10 +1822,14 @@ restarts and while the installation has no working e-mail.
   installation in any hour (e-mails that went out, resends included); the rest wait their turn,
   oldest first.
 - **Retries:** a send that the mail server refuses, that cannot reach it or that takes longer than
-  30 seconds is tried again after
-  1, 5, 15 and 60 minutes, then every 3 hours, until the invitation expires. No working e-mail
-  (no e-mail plugin; demo mode without `AUTH_MAIL_IN_DEMO`) counts as a failed send. A crash
-  between the send and its record sends that e-mail again (at least once).
+  30 seconds is tried again after 1, 5, 15 and 60 minutes, then every 3 hours. **After 8 such
+  failures in a row the queue gives up** (owner decision 2026-11-22, about 14 hours of tries):
+  the invitation stays `PENDING` with `delivery: "FAILED"`, shown to the chairman (and in the
+  connection overview), until a resend, which starts the count again. A sign-in link request of
+  that e-mail (`POST /auth/magic-link`) still sends it. **No working e-mail** at all (no e-mail
+  plugin; demo mode without `AUTH_MAIL_IN_DEMO`) never counts toward giving up: the invitation
+  waits and is tried again every hour, so it goes out once the e-mail works (section 3 of
+  epic E13). A crash between the send and its record sends that e-mail again (at least once).
 - **Nothing personal is logged:** the queue logs the invitation id, the attempt and the error
   code, never the address or the link (docs/OBSERVABILITY.md).
 
@@ -1876,7 +1890,7 @@ Response `200 BulkInvitationReport`:
   full.
 - **`outcome`,** the first that applies:
   - `INVALID_ROW`: not two or three cells;
-  - `INVALID_EMAIL`;
+  - `INVALID_EMAIL`: not the basic shape of an address (below);
   - `INVALID_LOCALE`: a language that is not offered (see "The language of an invitation");
   - `APARTMENT_NOT_FOUND`;
   - `DUPLICATE_IN_LIST`: the same e-mail and apartment on an earlier line (that one counts);

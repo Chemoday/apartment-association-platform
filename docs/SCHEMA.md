@@ -399,7 +399,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 
 ## 7. Module: `auth` (epic E7)
 
-*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011). The language and the send queue of invitations, and the attempt kinds `BULK_INVITATION` and `INVITATION_MAIL`, came with epic E13 task R4a (migration 032). The join codes, join requests and their decisions, and the attempt kind `JOIN`, came with task R4c (migration 034).*
+*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011). The language and the send queue of invitations, and the attempt kinds `BULK_INVITATION` and `INVITATION_MAIL`, came with epic E13 task R4a (migration 032). The join codes, join requests and their decisions, and the attempt kind `JOIN`, came with task R4c (migration 034); `send_failures`, the limit of refusals, with migration 035.*
 
 *All hashes are keyed HMAC-SHA-256 (hex, 64 characters) with `AUTH_HASH_SECRET`; a prefix such as `ip:` or `user:` is part of the hashed input, never stored. Rotating the secret ends every session and voids every open link and invitation.*
 
@@ -460,7 +460,8 @@ Columns as in section 1, plus:
 | `applied` | `BOOLEAN` | `NULLABLE` | Set with `accepted_at`: whether acceptance changed anything |
 | `locale` | `VARCHAR(8)` | `NULLABLE, CHECK IN ('et', 'ru', 'en')` | The language picked for the invitation (R4a); `NULL`: none picked. The API offers only `DEFAULT_LOCALE` and `en` |
 | `send_due_at` | `TIMESTAMPTZ` | `NULLABLE` | Set while its e-mail is queued (R4a): when the next attempt is due; a worker that claims it moves it forward by the lease (6 minutes, longer than a batch of timed-out sends), so a crashed attempt is due again. `NULL` once sent (API `delivery: SENT`) and for rows older than migration 032 |
-| `send_attempts` | `SMALLINT` | `NOT NULL, DEFAULT 0` | Attempts since it was last queued, for the retry delays; the record of a result is fenced on it |
+| `send_attempts` | `SMALLINT` | `NOT NULL, DEFAULT 0` | Attempts since it was last queued; the record of a result is fenced on it |
+| `send_failures` | `SMALLINT` | `NOT NULL, DEFAULT 0` | Refusals of the mail server in a row (migration 035), for the retry delays; at 8 the queue gives up (`send_due_at` `NULL`, API `delivery: FAILED`); a success or a resend sets it to 0. No working e-mail at all does not count |
 
 - `ck_auth_invitations_target`: `apartment_id IS NOT NULL` exactly when `kind IN ('OWNER', 'TENANT')`, and `building_role IS NOT NULL` exactly when `kind = 'STAFF'`.
 - Partial unique index `uq_auth_invitations_open`: `UNIQUE NULLS NOT DISTINCT (kind, email, apartment_id, building_role) WHERE accepted_at IS NULL`. One open invitation per target, from anyone. A new invitation for a target whose open one has expired replaces it in the same transaction.
