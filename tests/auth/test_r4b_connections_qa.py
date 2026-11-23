@@ -433,9 +433,16 @@ async def test_the_overview_shows_no_name_e_mail_or_phone_of_anyone(
     response = await client.get(f"{API}/connections", headers=as_(world, world.chairman))
     assert response.status_code == 200
     text = response.text
+    # Whole numbers in every form (as typed, E.164, the national digits): a 4-digit part could
+    # match the microseconds of a timestamp or a UUID by chance.
+    phones = [
+        form
+        for typed in ("+372 5123 4567", "+372 5765 4321", "+372 5999 8888")
+        for form in (typed, typed.replace(" ", ""), typed[5:], typed[5:].replace(" ", ""))
+    ]
     for private in (
         "Kristjan", "Avalik", "Tiina", "Uurnik", "Ivan", "Petrov", "Salme", "Taotleja",
-        "@", "5123", "5765", "5999", code, code.replace("-", ""),
+        "@", *phones, code, code.replace("-", ""),
     ):  # fmt: skip
         assert private not in text
     marked = await mark_paper(client, world, world.apt_21.id)
