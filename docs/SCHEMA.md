@@ -13,7 +13,7 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `building_id` | `UUID` | `FK(property_buildings.id), NOT NULL, INDEX` | Building the user belongs to. `building_role` applies to this building, and it is the source of `CurrentUserDTO.building_id` (also for staff without an apartment membership) |
 | `email` | `VARCHAR(255)` | `UNIQUE, NULLABLE` | Email (optional for offline/PIN-only elderly residents). Stored in canonical form (trimmed, NFKC, lower case), so the unique index is case-insensitive; a migration lower-cases the existing rows and stops if two collide. `NULL` after an account is closed |
 | `full_name` | `VARCHAR(255)` | `NOT NULL` | Real name (NEVER exposed raw in forum APIs or telemetry logs). Entered by the person at registration; `"Former resident"` after the account is closed |
-| `phone` | `VARCHAR(50)` | `NULLABLE` | Emergency contact phone (visible only to Chairman/Board). `NULL` after the account is closed |
+| `phone` | `VARCHAR(50)` | `NULLABLE` | Emergency contact phone (visible only to Chairman/Board), in E.164 form with the country code (`+37257654321`, see docs/API.md "Phone numbers"); migration 036 converted the existing rows and set the invalid ones to `NULL`. `NULL` after the account is closed |
 | `locale` | `VARCHAR(5)` | `NULLABLE, CHECK IN ('et', 'ru', 'en')` | Language of notifications sent outside the app. `NULL` = the instance default `DEFAULT_LOCALE` |
 | `building_role` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'USER'` | Enum: `CHAIRMAN`, `BOARD`, `ACCOUNTANT`, `USER` |
 | `is_active` | `BOOLEAN` | `NOT NULL, DEFAULT TRUE` | Account status. `false` only for a closed account (there is no reversible deactivation) |
@@ -399,7 +399,7 @@ Rows of `notif_link_codes` and `notif_link_attempts` older than 24 hours are del
 
 ## 7. Module: `auth` (epic E7)
 
-*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011). The language and the send queue of invitations, and the attempt kinds `BULK_INVITATION` and `INVITATION_MAIL`, came with epic E13 task R4a (migration 032). The join codes, join requests and their decisions, and the attempt kind `JOIN`, came with task R4c (migration 034); `send_failures`, the limit of refusals, with migration 035.*
+*Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). API: docs/API.md section 7. `auth_sessions` and `auth_refresh_tokens` exist since A2 (migration 008, which also stores the existing `core_users.email` values in canonical form). `auth_tokens` and `auth_attempts` exist since A3 (migration 009). `auth_invitations` and the invitation column of `auth_tokens` exist since A4 (migration 010, which also adds `property_memberships.started_at` and `ended_at`). `core_user_identities` moved here with A5 (migration 011). The language and the send queue of invitations, and the attempt kinds `BULK_INVITATION` and `INVITATION_MAIL`, came with epic E13 task R4a (migration 032). The join codes, join requests and their decisions, and the attempt kind `JOIN`, came with task R4c (migration 034); `send_failures`, the limit of refusals, with migration 035. Migration 036 stored the phones of `core_users` and `auth_join_requests` in E.164 form.*
 
 *All hashes are keyed HMAC-SHA-256 (hex, 64 characters) with `AUTH_HASH_SECRET`; a prefix such as `ip:` or `user:` is part of the hashed input, never stored. Rotating the secret ends every session and voids every open link and invitation.*
 
@@ -513,7 +513,7 @@ Columns as in section 1, plus:
 | `apartment_id` | `UUID` | `FK(property_apartments.id), NOT NULL, INDEX` | |
 | `code_id` | `UUID` | `FK(auth_join_codes.id) ON DELETE SET NULL, NULLABLE, UNIQUE` | The code it used up |
 | `full_name` | `VARCHAR(200)` | `NOT NULL` | As typed; shown to the chairman only |
-| `phone` | `VARCHAR(32)` | `NOT NULL` | As typed |
+| `phone` | `VARCHAR(32)` | `NOT NULL` | E.164 form (`+37257654321`); migration 036 converted the existing rows and deleted the requests whose phone was not a valid number, each with an `EXPIRED` decision |
 | `email` | `VARCHAR(255)` | `NOT NULL` | Canonical form |
 | `locale` | `VARCHAR(8)` | `NULLABLE, CHECK IN ('et', 'ru', 'en')` | The language of the join page |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL` | |

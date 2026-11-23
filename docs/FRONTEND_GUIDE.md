@@ -452,6 +452,12 @@ header, so they need a real sign-in even in demo mode.
   - The heading comes from `invitation`, e.g. "You are invited as the owner of apartment 14".
   - Fields: full name, an optional phone, the language, and how the name is shown to neighbours
     (the preview of section 1). Hide the last one for `STAFF`.
+  - The phone field is a country picker plus the number: the country defaults to
+    `invitation.country_code`, the person may pick another one, and the client sends the whole
+    number with `+` and the country code (docs/API.md section 0, "Phone numbers"). The same field
+    is used on the join page, with the default `country_code` of `POST /auth/join/lookup`. The
+    server returns phones in E.164 form (`+37257654321`); show them as they come or format them
+    for reading. A number the server rejects is `422 VALIDATION_ERROR` on `phone`.
   - Submit to `POST /auth/registration` within 30 minutes. After that, open the link again.
   - On `409 EMAIL_ALREADY_REGISTERED`: "Sign in, then accept the invitation".
 - **Settings > Security:**

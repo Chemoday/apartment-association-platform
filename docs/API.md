@@ -31,6 +31,18 @@ All errors share one JSON shape, `{"error_code": "...", "message": "...", ...ext
 | 500 | `INTERNAL_SERVER_ERROR` | Unhandled error; the body carries `trace_id` |
 | other | `HTTP_<status>` | Any other framework-level HTTP error |
 
+**Phone numbers.** Every phone the API accepts carries its country code: it starts with `+`
+and may contain digits, spaces, `-` and parentheses, at most 32 characters. Text pasted from a
+contact list is read in plain characters first (NFKC: full-width digits and `+`; any Unicode
+space counts as a space and any dash as `-`; invisible direction marks are dropped), and
+pasted text longer than 128 characters is refused. The server checks
+that the number can exist (the numbering plans of the `phonenumberslite` library) and stores and
+returns it in E.164 form: `+372 5765 4321` becomes `+37257654321`. The server never adds a
+country code; the client lets the person pick the country (by default the country of the
+building: `country_code` of the invitation preview and of the join lookup, section 7) and sends
+the whole number. A number without `+`, or one that cannot exist, is
+`422 VALIDATION_ERROR`.
+
 **Request body limits (deployed environments).** The edge proxy in front of the backend
 (docs/DEPLOYMENT.md, "Resource limits and disk hygiene") accepts at most **1 MB** (1,000,000
 bytes) of request body on every route, and more only on upload routes (4 MB for
@@ -1638,7 +1650,9 @@ refused. Responses `200`:
   link is not used up. The person signs in the usual way and then accepts with
   `POST /auth/invitations/accept`. An invitation link never creates a session for an existing
   account.
-- `InvitationPreview` is `{"kind": "OWNER", "apartment_number": "14", "building_role": null}`.
+- `InvitationPreview` is `{"kind": "OWNER", "apartment_number": "14", "building_role": null, "country_code": "EE"}`;
+  `country_code` (the building's, ISO 3166-1 alpha-2) is the default country of the phone field
+  of the registration.
 
 Errors:
 - `400 INVALID_LINK`: unknown, used or expired link, or an invitation that no longer applies. The
@@ -1652,7 +1666,8 @@ Completes the registration of an invited person and signs them in. Request:
 { "registration_token": "...", "full_name": "Ivan Petrov", "phone": null, "locale": "et", "privacy_display_mode": "APARTMENT_ONLY" }
 ```
 - `full_name`: 1..255 characters, safe text.
-- `phone`: optional, at most 50 characters.
+- `phone`: optional; a phone number with the country code (section 0, "Phone numbers"), stored
+  in E.164 form. `null` or a blank text: no phone.
 - `locale`: `et` / `ru` / `en`.
 - `privacy_display_mode`: as in section 1. It is ignored for `STAFF` invitations, which create no
   membership; the default is `APARTMENT_ONLY`.
@@ -2182,8 +2197,9 @@ What the join page links to before it asks for personal data. Response
 
 #### `POST /api/v1/auth/join/lookup` (no sign-in)
 Step 1 of the join page. Request `{"join_code": "K7QF-M3TX-9R"}`. Response
-`200 {"association_name": "KÜ Sõpruse 12", "apartment_number": "14"}`, for the person to
-confirm. A wrong, used, expired or cancelled code: `400 INVALID_JOIN_CODE`, one answer for all of
+`200 {"association_name": "KÜ Sõpruse 12", "apartment_number": "14", "country_code": "EE"}`, for
+the person to confirm; `country_code` (the building's, ISO 3166-1 alpha-2) is the default country
+of the phone field in step 2. A wrong, used, expired or cancelled code: `400 INVALID_JOIN_CODE`, one answer for all of
 them. Nothing is changed.
 
 #### `POST /api/v1/auth/join` (no sign-in)
@@ -2197,9 +2213,9 @@ Step 2. Request:
   works once. Response `202 {"accepted": true}`, the same whether the e-mail has an account or not.
   **Nothing is sent to the e-mail before the chairman confirms,** so the form cannot be used to
   send mail to anyone.
-- `full_name` 1..200 characters on one line, `phone` 5..32 characters (digits, spaces, `+`, `-`,
-  `(`, `)`, at least 5 digits), `email` an e-mail address, `locale` optional (`et`, `ru` or `en`;
-  the language of the page).
+- `full_name` 1..200 characters on one line, `phone` a phone number with the country code
+  (section 0, "Phone numbers"; stored in E.164 form), `email` an e-mail address, `locale`
+  optional (`et`, `ru` or `en`; the language of the page).
 - The chairmen of the building get the notification `JOIN_REQUEST_SUBMITTED` (in the app and by
   e-mail by default, section 6) with the apartment number only, no personal data.
 - Errors: `400 INVALID_JOIN_CODE`, `422 VALIDATION_ERROR`, `429 RATE_LIMITED`.
@@ -2213,7 +2229,8 @@ cannot be a code is looked up as a code that never exists).
 
 #### Join requests: `GET /api/v1/auth/join-requests`, `POST …/{request_id}/confirm`, `POST …/{request_id}/reject` (the chairman)
 - **List** (`Cache-Control: no-store`): the waiting requests of the building, oldest first:
-  `[{"request_id", "apartment_id", "apartment_number", "full_name", "phone", "email", "locale", "created_at"}]`.
+  `[{"request_id", "apartment_id", "apartment_number", "full_name", "phone", "email", "locale", "created_at"}]`,
+  `phone` in E.164 form.
   **The chairman sees what the person typed in full** (owner decision, an exception to the masking
   of personal data listed in AGENTS.md), and only until the decision. The client shows the hint:
   "a name alone is not enough: confirm when the phone matches your list of members, or call the
