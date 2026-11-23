@@ -336,7 +336,12 @@ async def test_the_request_list_is_not_cached_and_shows_what_was_typed_oldest_fi
 ) -> None:
     first = await one_request(client, world, world.apt_2.id, full_name="Mari Esimene")
     second = await one_request(
-        client, world, world.apt_21.id, full_name="Jaan Teine", phone="(0) 555-1234", locale=None
+        client,
+        world,
+        world.apt_21.id,
+        full_name="Jaan Teine",
+        phone="+371 (2) 012-3456",
+        locale=None,
     )
     await db_session.execute(
         update(AuthJoinRequest)
@@ -350,7 +355,7 @@ async def test_the_request_list_is_not_cached_and_shows_what_was_typed_oldest_fi
     assert all(set(r) == REQUEST_FIELDS for r in listed)
     assert (listed[0]["full_name"], listed[0]["phone"], listed[0]["locale"]) == (
         "Jaan Teine",
-        "(0) 555-1234",
+        "+37120123456",
         None,
     )
 
@@ -361,6 +366,10 @@ async def test_the_request_list_is_not_cached_and_shows_what_was_typed_oldest_fi
         {"locale": "fi"},
         {"phone": "1234"},
         {"phone": "+" + "1" * 32},
+        {"phone": "5555 1234"},  # no country code: the server never guesses one
+        {"phone": "+372 1234"},  # not a number of Estonia
+        {"phone": "+999 5555 1234"},  # no such country code
+        {"phone": "+372 5555 1234 ext 7"},
         {"full_name": "x" * 201},
         {"full_name": "   "},
         {"email": "two words@example.com"},
@@ -376,11 +385,11 @@ async def test_a_bad_field_refuses_the_request_and_keeps_the_code(
     assert (await statuses(client, world))["2"] == "CODE_ISSUED"
 
 
-async def test_a_name_of_two_hundred_characters_and_the_shortest_phone_are_accepted(
+async def test_a_name_of_two_hundred_characters_and_a_phone_of_another_country_are_accepted(
     client: AsyncClient, world: World
 ) -> None:
     code = (await issue(client, world, [world.apt_2.id]))["codes"][0]["join_code"]
-    body = person(code, unique("edge"), full_name="N" * 200, phone="12345")
+    body = person(code, unique("edge"), full_name="N" * 200, phone="+358 40 123 4567")
     assert (await client.post(f"{API}/join", json=body)).status_code == 202
 
 

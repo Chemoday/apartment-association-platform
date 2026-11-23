@@ -220,7 +220,12 @@ async def test_a_new_owner_registers_through_the_invitation(
     assert opened.status_code == 200, opened.text
     body = opened.json()
     assert body["status"] == "REGISTRATION_REQUIRED"
-    assert body["invitation"] == {"kind": "OWNER", "apartment_number": "21", "building_role": None}
+    assert body["invitation"] == {
+        "kind": "OWNER",
+        "apartment_number": "21",
+        "building_role": None,
+        "country_code": "EE",
+    }
     assert body["expires_in"] == 1800 and body["session"] is None
     assert REFRESH_COOKIE not in opened.headers.get("set-cookie", "")
 
@@ -232,6 +237,7 @@ async def test_a_new_owner_registers_through_the_invitation(
     assert REFRESH_COOKIE in registered.headers["set-cookie"]
     user = await user_by_email(db_session, email)
     assert user is not None and user.full_name == "Nina Uus" and user.locale == "et"
+    assert user.phone == "+37250001111"  # stored in E.164 form
     membership = await db_session.scalar(
         select(ApartmentMembership).where(ApartmentMembership.user_id == user.id)
     )
@@ -247,6 +253,42 @@ async def test_a_new_owner_registers_through_the_invitation(
     assert (await redeem(client, token)).json()["error_code"] == "INVALID_LINK"  # used up
     again = await register(client, body["registration_token"])
     assert again.json()["error_code"] == "INVALID_LINK"
+
+
+@pytest.mark.parametrize("phone", ["5000 1111", "+372 1", "+372 5000 1111 ext 2", "+" + "5" * 32])
+async def test_a_registration_phone_needs_the_country_code_and_a_real_number(
+    client: AsyncClient, world: World, smtp_server: SmtpServer, phone: str
+) -> None:
+    _, token = await invite_and_open(
+        client, smtp_server, as_(world, world.chairman),
+        kind="OWNER", email=unique("tel"), apartment_number="21",
+    )  # fmt: skip
+    form = (await redeem(client, token)).json()
+    refused = await register(client, form["registration_token"], phone=phone)
+    assert (refused.status_code, refused.json()["error_code"]) == (422, "VALIDATION_ERROR")
+    assert [e["loc"] for e in refused.json()["errors"]] == [["body", "phone"]]
+    # The form stays usable: the person corrects the number.
+    fixed = await register(client, form["registration_token"], phone="+372 (5000) 11-11")
+    assert fixed.status_code == 200, fixed.text
+
+
+@pytest.mark.parametrize("phone", [None, "", "   "])
+async def test_a_registration_without_a_phone_stores_none(
+    client: AsyncClient,
+    world: World,
+    smtp_server: SmtpServer,
+    db_session: AsyncSession,
+    phone: str | None,
+) -> None:
+    email = unique("notel")
+    _, token = await invite_and_open(
+        client, smtp_server, as_(world, world.chairman),
+        kind="OWNER", email=email, apartment_number="21",
+    )  # fmt: skip
+    form = (await redeem(client, token)).json()
+    assert (await register(client, form["registration_token"], phone=phone)).status_code == 200
+    user = await user_by_email(db_session, email)
+    assert user is not None and user.phone is None
 
 
 async def test_registration_needs_the_csrf_header_and_a_fresh_form(
@@ -282,6 +324,7 @@ async def test_a_staff_registration_gets_the_role_and_no_membership(
         "kind": "STAFF",
         "apartment_number": None,
         "building_role": "BOARD",
+        "country_code": "EE",
     }
     assert (await register(client, form["registration_token"])).status_code == 200
     user = await user_by_email(db_session, email)
@@ -309,7 +352,12 @@ async def test_an_existing_account_signs_in_and_accepts(
         "session": None,
         "registration_token": None,
         "expires_in": None,
-        "invitation": {"kind": "OWNER", "apartment_number": "2", "building_role": None},
+        "invitation": {
+            "kind": "OWNER",
+            "apartment_number": "2",
+            "building_role": None,
+            "country_code": "EE",
+        },
     }
     # Somebody else's account cannot take it.
     stolen = await client.post(

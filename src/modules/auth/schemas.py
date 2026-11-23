@@ -10,7 +10,13 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-from src.core.validation import canonical_email, clean_text, optional_safe_text, safe_text
+from src.core.validation import (
+    OptionalPhoneNumber,
+    PhoneNumber,
+    canonical_email,
+    clean_text,
+    safe_text,
+)
 from src.modules.property.schemas import BuildingRole, DisplayMode, Locale, RelationType
 
 MAX_EMAIL_LENGTH = 254
@@ -181,6 +187,8 @@ class InvitationPreview(BaseModel):
     kind: InvitationKind
     apartment_number: str | None
     building_role: StaffRole | None
+    # The building's country (ISO 3166-1 alpha-2): the default of the phone field.
+    country_code: str
 
 
 class SignInResponse(BaseModel):
@@ -296,7 +304,7 @@ class RegistrationRequest(BaseModel):
 
     registration_token: str = Field(min_length=1, max_length=128)
     full_name: safe_text(255)  # type: ignore[valid-type]
-    phone: optional_safe_text(50) = None  # type: ignore[valid-type]
+    phone: OptionalPhoneNumber = None
     locale: Locale
     # Ignored for STAFF invitations, which create no membership.
     privacy_display_mode: DisplayMode = DisplayMode.APARTMENT_ONLY
@@ -462,14 +470,7 @@ class PaperUpdate(BaseModel):
 # --- Join codes on paper (E13 R4c) ---------------------------------------------------------------
 
 JoinCodeText = Annotated[str, Field(min_length=1, max_length=64), AfterValidator(clean_text)]
-PHONE_PATTERN = r"^[0-9+\-() ]{5,32}$"
 MAX_APARTMENTS_PER_ISSUE = 2000
-
-
-def _phone(value: str) -> str:
-    if sum(c.isdigit() for c in value) < 5:
-        raise ValueError("a phone number has at least 5 digits")
-    return value
 
 
 def _one_line(value: str) -> str:
@@ -533,6 +534,8 @@ class JoinLookup(BaseModel):
 class JoinTarget(BaseModel):
     association_name: str
     apartment_number: str
+    # The building's country (ISO 3166-1 alpha-2): the default of the phone field.
+    country_code: str
 
 
 class JoinSubmit(BaseModel):
@@ -540,9 +543,7 @@ class JoinSubmit(BaseModel):
 
     join_code: JoinCodeText
     full_name: Annotated[safe_text(200), AfterValidator(_one_line)]  # type: ignore[valid-type]
-    phone: Annotated[
-        str, AfterValidator(clean_text), Field(pattern=PHONE_PATTERN), AfterValidator(_phone)
-    ]
+    phone: PhoneNumber
     email: EmailAddress
     locale: Locale | None = None
 

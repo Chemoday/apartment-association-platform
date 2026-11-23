@@ -1179,6 +1179,7 @@ class InvitationService:
             kind=invitation.kind,
             apartment_number=await self._apartment_number(invitation),
             building_role=invitation.building_role,
+            country_code=await self.properties.building_country(invitation.building_id),
         )
 
     async def _views(

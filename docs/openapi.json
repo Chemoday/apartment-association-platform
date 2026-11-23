@@ -15795,13 +15795,18 @@
                 "type": "null"
               }
             ]
+          },
+          "country_code": {
+            "type": "string",
+            "title": "Country Code"
           }
         },
         "type": "object",
         "required": [
           "kind",
           "apartment_number",
-          "building_role"
+          "building_role",
+          "country_code"
         ],
         "title": "InvitationPreview",
         "description": "What an invitation grants, shown to the holder of its link only."
@@ -16743,6 +16748,8 @@
           },
           "phone": {
             "type": "string",
+            "maxLength": 32,
+            "pattern": "^\\+[0-9\\-() ]+$",
             "title": "Phone"
           },
           "email": {
@@ -16781,12 +16788,17 @@
           "apartment_number": {
             "type": "string",
             "title": "Apartment Number"
+          },
+          "country_code": {
+            "type": "string",
+            "title": "Country Code"
           }
         },
         "type": "object",
         "required": [
           "association_name",
-          "apartment_number"
+          "apartment_number",
+          "country_code"
         ],
         "title": "JoinTarget"
       },
@@ -19634,7 +19646,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 50
+                "maxLength": 32,
+                "pattern": "^\\+[0-9\\-() ]+$"
               },
               {
                 "type": "null"

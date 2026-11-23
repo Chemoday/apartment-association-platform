@@ -27,6 +27,7 @@ from src.modules.auth.policies import (
     normalise_join_code,
 )
 from src.modules.notifications.models import Delivery
+from src.modules.property.models import Building
 from tests.auth.test_invitations import (  # noqa: F401 (fixtures used by name)
     API,
     World,
@@ -34,8 +35,10 @@ from tests.auth.test_invitations import (  # noqa: F401 (fixtures used by name)
     as_,
     client,
     drain,
+    invite_and_open,
     links_sent,
     mail_settings,
+    redeem,
     unique,
     world,
 )
@@ -181,6 +184,23 @@ async def test_only_the_chairman_issues_and_decides(client: AsyncClient, world: 
 # --- The join page --------------------------------------------------------------------------------
 
 
+async def test_the_join_lookup_and_the_invitation_tell_the_country_of_the_building(
+    client: AsyncClient, world: World, smtp_server: SmtpServer, db_session: AsyncSession
+) -> None:
+    # Not the default EE: the value is read from the building.
+    await db_session.execute(
+        update(Building).where(Building.id == world.building.id).values(country_code="LV")
+    )
+    code = (await issue(client, world, [world.apt_2.id]))["codes"][0]["join_code"]
+    looked = await client.post(f"{API}/join/lookup", json={"join_code": code})
+    assert looked.json()["country_code"] == "LV"
+    _, token = await invite_and_open(
+        client, smtp_server, as_(world, world.chairman),
+        kind="OWNER", email=unique("lv"), apartment_number="21",
+    )  # fmt: skip
+    assert (await redeem(client, token)).json()["invitation"]["country_code"] == "LV"
+
+
 async def test_a_person_joins_and_the_chairman_confirms(
     client: AsyncClient,
     world: World,
@@ -189,7 +209,11 @@ async def test_a_person_joins_and_the_chairman_confirms(
 ) -> None:
     code = (await issue(client, world, [world.apt_2.id]))["codes"][0]["join_code"]
     looked = await client.post(f"{API}/join/lookup", json={"join_code": code.lower()})
-    assert looked.json() == {"association_name": world.building.name, "apartment_number": "2"}
+    assert looked.json() == {
+        "association_name": world.building.name,
+        "apartment_number": "2",
+        "country_code": "EE",
+    }
 
     email = unique("mari")
     response = await submit(client, code, email.upper())
@@ -203,7 +227,7 @@ async def test_a_person_joins_and_the_chairman_confirms(
     [request] = await waiting(client, world)
     assert (request["full_name"], request["phone"], request["email"]) == (
         "Mari Tamm",
-        "+372 5555 1234",
+        "+37255551234",  # typed "+372 5555 1234", stored in E.164 form
         email,
     )
     # The chairmen are told, with the apartment number only.

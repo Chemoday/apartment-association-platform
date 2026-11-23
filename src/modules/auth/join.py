@@ -288,6 +288,7 @@ class JoinService:
         return JoinTarget(
             association_name=await self.properties.building_name(row.building_id) or "",
             apartment_number=numbers.get(row.apartment_id, ""),
+            country_code=await self.properties.building_country(row.building_id),
         )
 
     async def submit(self, body: JoinSubmit, address: str) -> None:
