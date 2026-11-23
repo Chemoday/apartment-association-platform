@@ -278,7 +278,7 @@ class _Builder:
                 building_id=building.id,
                 full_name=demo.full_name,
                 email=demo.email,
-                phone=f"+372 5000 {index:04d}",
+                phone=f"+3725000{index:04d}",  # E.164 (docs/API.md section 0)
                 building_role=demo.building_role,
             )
             self.users[demo.key] = user
