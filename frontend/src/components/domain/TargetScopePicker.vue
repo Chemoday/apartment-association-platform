@@ -1,51 +1,60 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
+import type { TargetScope } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 
-const props = defineProps({
-  modelValue: {
-    type: Object,
-    required: true,
-  },
-  apartments: {
-    type: Array,
-    default: () => [],
-  },
-  availableEntrances: {
-    type: Array,
-    default: () => [1, 2],
-  },
-  errorMessage: {
-    type: String,
-    default: '',
-  },
-  testIdPrefix: {
-    type: String,
-    default: 'target-picker',
-  },
-})
+export interface TargetScopeModel {
+  target_scope?: TargetScope
+  target_entrance?: number | null
+  target_apartment_ids?: string[] | null
+  [key: string]: unknown
+}
 
-const emit = defineEmits(['update:modelValue', 'change'])
+export interface TargetScopeApartmentOption {
+  apartment_id: string
+  apartment_number: string
+}
+
+const props = withDefaults(
+  defineProps<{
+    modelValue: TargetScopeModel
+    apartments?: TargetScopeApartmentOption[]
+    availableEntrances?: number[]
+    errorMessage?: string
+    testIdPrefix?: string
+  }>(),
+  {
+    apartments: () => [],
+    availableEntrances: () => [1, 2],
+    errorMessage: '',
+    testIdPrefix: 'target-picker',
+  },
+)
+
+const emit = defineEmits<{
+  'update:modelValue': [value: TargetScopeModel]
+  change: []
+}>()
 
 const session = useSessionStore()
 
-const currentScope = computed(() => props.modelValue?.target_scope || 'ALL_BUILDING')
-const currentEntrance = computed(() => props.modelValue?.target_entrance ?? 1)
-const currentApartmentIds = computed(() =>
+const currentScope = computed<TargetScope>(() => props.modelValue?.target_scope || 'ALL_BUILDING')
+const currentEntrance = computed<number>(() => props.modelValue?.target_entrance ?? 1)
+const currentApartmentIds = computed<string[]>(() =>
   Array.isArray(props.modelValue?.target_apartment_ids) ? props.modelValue.target_apartment_ids : [],
 )
 
-function updateScope(newScope) {
+function updateScope(newScope: TargetScope): void {
   emit('update:modelValue', {
     ...props.modelValue,
     target_scope: newScope,
-    target_entrance: newScope === 'ENTRANCE' ? (currentEntrance.value || 1) : null,
+    target_entrance: newScope === 'ENTRANCE' ? currentEntrance.value || 1 : null,
     target_apartment_ids: newScope === 'APARTMENT_LIST' ? currentApartmentIds.value : null,
   })
   emit('change')
 }
 
-function updateEntrance(newEntrance) {
+function updateEntrance(newEntrance: string | number): void {
   emit('update:modelValue', {
     ...props.modelValue,
     target_entrance: Number(newEntrance),
@@ -53,7 +62,7 @@ function updateEntrance(newEntrance) {
   emit('change')
 }
 
-function toggleApartment(aptId, checked) {
+function toggleApartment(aptId: string, checked: boolean): void {
   const current = [...currentApartmentIds.value]
   const updated = checked
     ? Array.from(new Set([...current, aptId]))
@@ -64,6 +73,21 @@ function toggleApartment(aptId, checked) {
     target_apartment_ids: updated,
   })
   emit('change')
+}
+
+function onScopeSelectChange(event: Event): void {
+  const target = event.target as HTMLSelectElement | null
+  if (target) updateScope(target.value as TargetScope)
+}
+
+function onEntranceSelectChange(event: Event): void {
+  const target = event.target as HTMLSelectElement | null
+  if (target) updateEntrance(target.value)
+}
+
+function onApartmentCheckboxChange(aptId: string, event: Event): void {
+  const target = event.target as HTMLInputElement | null
+  if (target) toggleApartment(aptId, target.checked)
 }
 </script>
 
@@ -78,7 +102,7 @@ function toggleApartment(aptId, checked) {
         :value="currentScope"
         :data-testid="`${testIdPrefix}-scope-select`"
         class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
-        @change="updateScope($event.target.value)"
+        @change="onScopeSelectChange"
       >
         <option value="ALL_BUILDING">{{ session.t('polls.target.allBuilding') }}</option>
         <option value="ENTRANCE">{{ session.t('polls.editor.targetByEntrance') }}</option>
@@ -95,7 +119,7 @@ function toggleApartment(aptId, checked) {
         :value="currentEntrance"
         :data-testid="`${testIdPrefix}-entrance-select`"
         class="mt-1 block w-48 rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
-        @change="updateEntrance($event.target.value)"
+        @change="onEntranceSelectChange"
       >
         <option v-for="ent in availableEntrances" :key="ent" :value="ent">
           {{ session.t('polls.target.entrance', { entrance: ent }) }}
@@ -118,7 +142,7 @@ function toggleApartment(aptId, checked) {
             type="checkbox"
             :checked="currentApartmentIds.includes(apt.apartment_id)"
             class="h-4 w-4 rounded accent-primary"
-            @change="toggleApartment(apt.apartment_id, $event.target.checked)"
+            @change="onApartmentCheckboxChange(apt.apartment_id, $event)"
           />
           <span>{{ session.t('common.aptShort', { number: apt.apartment_number }) }}</span>
         </label>

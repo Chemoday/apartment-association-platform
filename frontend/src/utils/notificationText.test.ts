@@ -134,7 +134,7 @@ test('buildNotificationDescriptor maps all 4 known event types and unknown safel
   assert.equal(pollOpened.route, '/polls/poll-123')
   assert.equal(pollOpened.icon, 'how_to_vote')
   assert.equal(pollOpened.variant, 'deadline')
-  assert.ok(pollOpened.values.date.includes('2026'))
+  assert.ok(String(pollOpened.values.date).includes('2026'))
 
   const issueReported = buildNotificationDescriptor(
     {
@@ -299,7 +299,7 @@ test('buildNotificationDescriptor maps all 4 known event types and unknown safel
   assert.equal(certExpiringDesc.icon, 'energy_savings_leaf')
   assert.equal(certExpiringDesc.variant, 'deadline')
   assert.equal(certExpiringDesc.values.days_left, 30)
-  assert.ok(certExpiringDesc.values.valid_until.includes('2026'))
+  assert.ok(String(certExpiringDesc.values.valid_until).includes('2026'))
 
   const certTodayDesc = buildNotificationDescriptor(
     {

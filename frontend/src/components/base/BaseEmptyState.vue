@@ -1,18 +1,15 @@
-<script setup>
-defineProps({
-  icon: {
-    type: String,
-    default: 'inbox',
+<script setup lang="ts">
+withDefaults(
+  defineProps<{
+    icon?: string
+    title: string
+    description?: string
+  }>(),
+  {
+    icon: 'inbox',
+    description: '',
   },
-  title: {
-    type: String,
-    required: true,
-  },
-  description: {
-    type: String,
-    default: '',
-  },
-})
+)
 </script>
 
 <template>

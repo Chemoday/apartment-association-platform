@@ -1,6 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, type RouteRecordRaw } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { APP_ROUTES, NAV_GROUPS } from '@/router/routes.js'
@@ -11,11 +11,13 @@ const session = useSessionStore()
 const { buildingRole } = useRole()
 const { canShowChat } = useChatState()
 
-const openGroupId = ref(null)
-const navRef = ref(null)
+const openGroupId = ref<string | null>(null)
+const navRef = ref<HTMLElement | null>(null)
 
-const visibleNavRoutes = computed(() =>
-  APP_ROUTES.filter((r) => {
+type NavRouteItem = RouteRecordRaw & { meta: NonNullable<RouteRecordRaw['meta']> }
+
+const visibleNavRoutes = computed<NavRouteItem[]>(() =>
+  APP_ROUTES.filter((r): r is NavRouteItem => {
     if (!r.meta?.navKey) return false
     if (r.meta?.requiresChatEnabled && !canShowChat.value) {
       return false
@@ -43,12 +45,12 @@ const visibleNavGroups = computed(() =>
   }).filter((group) => group.items.length > 0),
 )
 
-function isRouteActive(item) {
+function isRouteActive(item: RouteRecordRaw): boolean {
   if (item.path === '/') return route.path === '/'
   return route.path === item.path || route.path.startsWith(`${item.path}/`)
 }
 
-function isGroupActive(group) {
+function isGroupActive(group: { items: RouteRecordRaw[] }): boolean {
   return group.items.some((item) => isRouteActive(item))
 }
 
@@ -59,21 +61,21 @@ const activeGroupWithSubnav = computed(() => {
   return found || null
 })
 
-function toggleGroup(groupId) {
+function toggleGroup(groupId: string): void {
   openGroupId.value = openGroupId.value === groupId ? null : groupId
 }
 
-function closeDropdown() {
+function closeDropdown(): void {
   openGroupId.value = null
 }
 
-function handleDocumentClick(e) {
-  if (openGroupId.value && navRef.value && !navRef.value.contains(e.target)) {
+function handleDocumentClick(e: MouseEvent): void {
+  if (openGroupId.value && navRef.value && !navRef.value.contains(e.target as Node | null)) {
     openGroupId.value = null
   }
 }
 
-function handleKeydown(e) {
+function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && openGroupId.value) {
     openGroupId.value = null
   }

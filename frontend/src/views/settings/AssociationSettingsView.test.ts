@@ -1,207 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createRenderer, defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h } from 'vue'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { createServer } from 'vite'
+import {
+  DEMO_USER_IDS,
+  createClientVueViteServer,
+  createFakeDomHarness,
+  createWindowSpy,
+  type VTestNode,
+} from '../../test/mountWithApp.js'
 
 const Dummy = { template: '<div />' }
 
 const USER_IDS: Record<string, string> = {
-  CHAIRMAN: '018f0000-0000-7000-8000-000000000101',
-  USER: '018f0000-0000-7000-8000-000000000102',
-  BOARD: '018f0000-0000-7000-8000-000000000105',
-}
-
-interface VTestNode {
-  kind: 'element' | 'text' | 'comment'
-  tag?: string
-  props: Record<string, any>
-  text?: string
-  children: VTestNode[]
-  parentNode: VTestNode | null
-}
-
-function createFakeDomHarness() {
-  const bodyNode: VTestNode = {
-    kind: 'element',
-    tag: 'body',
-    props: {},
-    children: [],
-    parentNode: null,
-  }
-
-  const nodeOps = {
-    patchProp(el: VTestNode, key: string, _prevValue: any, nextValue: any) {
-      if (key === 'class') {
-        el.props.class = Array.isArray(nextValue) ? nextValue.join(' ') : nextValue
-      } else {
-        el.props[key] = nextValue
-      }
-    },
-    insert(child: VTestNode, parent: VTestNode, anchor?: VTestNode | null) {
-      if (child.parentNode && child.parentNode !== parent) {
-        const idx = child.parentNode.children.indexOf(child)
-        if (idx !== -1) child.parentNode.children.splice(idx, 1)
-      }
-      child.parentNode = parent
-      if (anchor) {
-        const idx = parent.children.indexOf(anchor)
-        if (idx !== -1) {
-          parent.children.splice(idx, 0, child)
-          return
-        }
-      }
-      if (!parent.children.includes(child)) {
-        parent.children.push(child)
-      }
-    },
-    remove(child: VTestNode) {
-      if (child.parentNode) {
-        const idx = child.parentNode.children.indexOf(child)
-        if (idx !== -1) child.parentNode.children.splice(idx, 1)
-        child.parentNode = null
-      }
-    },
-    createElement(type: string) {
-      return {
-        kind: 'element',
-        tag: type,
-        props: {},
-        children: [],
-        parentNode: null,
-        options: [],
-        addEventListener() {},
-        removeEventListener() {},
-      } as any
-    },
-    createText(text: string): VTestNode {
-      return { kind: 'text', props: {}, text, children: [], parentNode: null }
-    },
-    createComment(text: string): VTestNode {
-      return { kind: 'comment', props: {}, text, children: [], parentNode: null }
-    },
-    setText(node: VTestNode, text: string) {
-      node.text = text
-    },
-    setElementText(el: VTestNode, text: string) {
-      el.children = [{ kind: 'text', props: {}, text, children: [], parentNode: el }]
-    },
-    parentNode(node: VTestNode) {
-      return node.parentNode
-    },
-    nextSibling(node: VTestNode) {
-      const parent = node.parentNode
-      if (!parent) return null
-      const idx = parent.children.indexOf(node)
-      return idx >= 0 && idx + 1 < parent.children.length ? parent.children[idx + 1] : null
-    },
-    cloneNode(node: VTestNode): VTestNode {
-      return {
-        ...node,
-        props: { ...node.props },
-        children: node.children.map((c) => ({ ...c })),
-        parentNode: null,
-      }
-    },
-    insertStaticContent(content: string, parent: VTestNode, anchor: VTestNode | null) {
-      const node: VTestNode = {
-        kind: 'text',
-        props: {},
-        text: content.replace(/<[^>]+>/g, ' '),
-        children: [],
-        parentNode: null,
-      }
-      nodeOps.insert(node, parent, anchor)
-      return [node, node] as [VTestNode, VTestNode]
-    },
-    querySelector(selector: string) {
-      if (selector === 'body') return bodyNode
-      return null
-    },
-  }
-
-  const { createApp } = createRenderer<VTestNode, VTestNode>(nodeOps as any)
-
-  function collectText(node: VTestNode): string {
-    if (node.kind === 'text') return node.text || ''
-    if (node.kind === 'comment') return ''
-    return node.children.map(collectText).join(' ')
-  }
-
-  function findAll(root: VTestNode, predicate: (node: VTestNode) => boolean): VTestNode[] {
-    const hits: VTestNode[] = []
-    if (predicate(root)) hits.push(root)
-    for (const c of root.children) {
-      hits.push(...findAll(c, predicate))
-    }
-    return hits
-  }
-
-  function findByTestId(root: VTestNode, testId: string): VTestNode | null {
-    return (
-      findAll(root, (n) => n.kind === 'element' && n.props['data-testid'] === testId)[0] ||
-      findAll(bodyNode, (n) => n.kind === 'element' && n.props['data-testid'] === testId)[0] ||
-      null
-    )
-  }
-
-  async function flushUpdates(ticks = 15) {
-    for (let i = 0; i < ticks; i += 1) {
-      await nextTick()
-      await new Promise((r) => setTimeout(r, 0))
-    }
-  }
-
-  return { createApp, bodyNode, collectText, findAll, findByTestId, flushUpdates }
-}
-
-function createClientVueViteServer() {
-  return createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-    plugins: [
-      {
-        name: 'test-client-vue',
-        configResolved(config) {
-          const vp = config.plugins.find((p) => p.name === 'vite:vue')
-          if (vp?.api?.options) {
-            vp.api.options.isProduction = true
-          }
-          if (vp?.transform) {
-            const orig = vp.transform as any
-            const fn = typeof orig === 'function' ? orig : orig.handler
-            const wrapped = function (this: any, code: string, id: string, opts: any) {
-              return fn.call(this, code, id, { ...opts, ssr: false })
-            }
-            if (typeof orig === 'function') (vp as any).transform = wrapped
-            else orig.handler = wrapped
-          }
-        },
-      },
-    ],
-  })
-}
-
-function createWindowSpy() {
-  const listeners = new Map<string, Set<Function>>()
-  const windowObj = {
-    addEventListener(type: string, fn: Function) {
-      if (!listeners.has(type)) listeners.set(type, new Set())
-      listeners.get(type)!.add(fn)
-    },
-    removeEventListener(type: string, fn: Function) {
-      listeners.get(type)?.delete(fn)
-    },
-    dispatchEvent(evt: any) {
-      for (const fn of [...(listeners.get(evt.type) || [])]) {
-        fn(evt)
-      }
-    },
-    location: { search: '' },
-  }
-  return { listeners, windowObj }
+  CHAIRMAN: DEMO_USER_IDS.CHAIRMAN,
+  USER: DEMO_USER_IDS.USER,
+  BOARD: DEMO_USER_IDS.BOARD,
 }
 
 test('AssociationSettingsView handles chat.enabled lifecycle, reset null, Escape modal, 500 error, RBAC, and async races (#032)', async () => {

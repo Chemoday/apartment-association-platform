@@ -1,10 +1,12 @@
-<script setup>
-defineProps({
-  padding: {
-    type: String,
-    default: 'p-space-lg',
+<script setup lang="ts">
+withDefaults(
+  defineProps<{
+    padding?: string
+  }>(),
+  {
+    padding: 'p-space-lg',
   },
-})
+)
 </script>
 
 <template>

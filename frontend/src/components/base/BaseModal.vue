@@ -1,42 +1,63 @@
-<script setup>
+<script lang="ts">
+let nextModalId = 0
+const openModalStack: number[] = []
+const handledEscapeEvents = new WeakSet<object>()
+</script>
+
+<script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
-const props = defineProps({
-  open: {
-    type: Boolean,
-    required: true,
+const props = withDefaults(
+  defineProps<{
+    open: boolean
+    title: string
+    subtitle?: string
+    maxWidth?: string
+    closeAriaLabel?: string
+  }>(),
+  {
+    subtitle: '',
+    maxWidth: 'max-w-lg',
+    closeAriaLabel: 'Close modal',
   },
-  title: {
-    type: String,
-    required: true,
-  },
-  subtitle: {
-    type: String,
-    default: '',
-  },
-  maxWidth: {
-    type: String,
-    default: 'max-w-lg',
-  },
-})
+)
 
-const emit = defineEmits(['close'])
-const dialogPanelRef = ref(null)
-let previousFocusedElement = null
+const emit = defineEmits<{
+  (e: 'close'): void
+}>()
+const modalId = ++nextModalId
+const dialogPanelRef = ref<HTMLElement | null>(null)
+let previousFocusedElement: Element | null = null
+
+function pushToStack(): void {
+  removeFromStack()
+  openModalStack.push(modalId)
+}
+
+function removeFromStack(): void {
+  const idx = openModalStack.indexOf(modalId)
+  if (idx !== -1) {
+    openModalStack.splice(idx, 1)
+  }
+}
+
+function isTopModal(): boolean {
+  return openModalStack.length > 0 && openModalStack[openModalStack.length - 1] === modalId
+}
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-function getFocusableElements() {
+function getFocusableElements(): HTMLElement[] {
   const panel = dialogPanelRef.value
   if (!panel || typeof panel.querySelectorAll !== 'function') return []
-  return Array.from(panel.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
     (el) => !el.hasAttribute?.('hidden') && el.offsetParent !== null,
   )
 }
 
-function restorePreviousFocus() {
-  const prev = previousFocusedElement
+function restorePreviousFocus(): void {
+  const prev = previousFocusedElement as HTMLElement | null
   previousFocusedElement = null
   if (prev && typeof prev.focus === 'function') {
     prev.focus()
@@ -47,10 +68,12 @@ watch(
   () => props.open,
   async (isOpen, wasOpen) => {
     if (isOpen && !wasOpen) {
+      pushToStack()
       if (typeof document !== 'undefined' && document.activeElement) {
         previousFocusedElement = document.activeElement
       }
       await nextTick()
+      if (!props.open || !isTopModal()) return
       const focusables = getFocusableElements()
       if (focusables.length > 0 && typeof focusables[0].focus === 'function') {
         focusables[0].focus()
@@ -58,15 +81,21 @@ watch(
         dialogPanelRef.value.focus()
       }
     } else if (!isOpen && wasOpen) {
+      removeFromStack()
       restorePreviousFocus()
     }
   },
   { immediate: true },
 )
 
-function handleKeydown(event) {
-  if (!props.open) return
+function handleKeydown(event: KeyboardEvent): void {
+  if (!props.open || !isTopModal()) return
   if (event.key === 'Escape') {
+    if (event && typeof event === 'object') {
+      if (handledEscapeEvents.has(event)) return
+      handledEscapeEvents.add(event)
+    }
+    event.stopImmediatePropagation?.()
     emit('close')
     return
   }
@@ -97,6 +126,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  removeFromStack()
   window.removeEventListener('keydown', handleKeydown)
   if (props.open) {
     restorePreviousFocus()
@@ -134,7 +164,7 @@ onUnmounted(() => {
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            :aria-label="closeAriaLabel || 'Close modal'"
             class="p-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors"
             @click="$emit('close')"
           >

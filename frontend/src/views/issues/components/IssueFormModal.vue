@@ -22,6 +22,7 @@ import {
   canQueuePhotoUploadsAfterCreate,
   createQueuedPhotoItem,
   drainPhotoUploadQueue,
+  formatPhotoErrorMessage,
   isUploadsEnabledInForm,
   resolvePostCreateAbortReason,
   revokeQueuedPhotoPreviews,

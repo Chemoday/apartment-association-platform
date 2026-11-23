@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { createPollDraft, getPoll, replacePollDraft } from '@/api/endpoints/governance.js'
@@ -9,6 +9,8 @@ import { localizeError } from '@/locales/index.js'
 import QuestionEditor from './components/QuestionEditor.vue'
 import TargetScopePicker from '@/components/domain/TargetScopePicker.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import BaseConfirmDialog from '@/components/base/BaseConfirmDialog.vue'
+import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -61,6 +63,21 @@ const questionErrors = reactive({})
 const serverValidationDetails = ref([])
 const submitError = ref('')
 const saving = ref(false)
+const baselineSnapshot = ref(JSON.stringify(form))
+
+function markFormClean() {
+  baselineSnapshot.value = JSON.stringify(form)
+}
+
+const isFormDirty = computed(
+  () => !loading.value && !saving.value && JSON.stringify(form) !== baselineSnapshot.value,
+)
+
+const {
+  showLeaveModal: showUnsavedLeaveModal,
+  confirmLeave: confirmUnsavedLeave,
+  cancelLeave: cancelUnsavedLeave,
+} = useUnsavedChangesGuard(isFormDirty)
 
 const availableEntrances = computed(() => {
   const count = session.building?.entrances_count || session.building?.total_entrances || 2
@@ -135,8 +152,12 @@ function moveQuestion(idx, delta) {
   clearErrors()
 }
 
+let loadSeq = 0
+let isUnmounted = false
+
 async function loadInitialData() {
   if (!isBoardOrChairman.value) return
+  const seq = ++loadSeq
   loading.value = true
   loadError.value = null
   notEditableError.value = false
@@ -147,6 +168,8 @@ async function loadInitialData() {
       promises.push(getPoll(pollId.value))
     }
     const [aptsRes, existingPoll] = await Promise.all(promises)
+    if (seq !== loadSeq || isUnmounted) return
+
     apartments.value = Array.isArray(aptsRes?.apartments) ? aptsRes.apartments : []
 
     if (isEditMode.value && existingPoll) {
@@ -184,10 +207,14 @@ async function loadInitialData() {
             }))
           : [makeEmptyQuestion()]
     }
+    markFormClean()
   } catch (err) {
+    if (seq !== loadSeq || isUnmounted) return
     loadError.value = err
   } finally {
-    loading.value = false
+    if (seq === loadSeq && !isUnmounted) {
+      loading.value = false
+    }
   }
 }
 
@@ -212,8 +239,11 @@ async function handleSaveDraft() {
       ? await replacePollDraft(pollId.value, check.payload)
       : await createPollDraft(check.payload)
 
+    if (isUnmounted) return
+    markFormClean()
     router.push({ name: 'poll-detail', params: { pollId: saved.id } })
   } catch (err) {
+    if (isUnmounted) return
     const errorCode = err?.errorCode || err?.payload?.error_code
     if (err?.status === 422 && errorCode === 'INVALID_TARGET') {
       fieldErrors.target = 'INVALID_TARGET'
@@ -232,19 +262,27 @@ async function handleSaveDraft() {
       submitError.value = localizeError(err, {}, session.lang)
     }
   } finally {
-    saving.value = false
+    if (!isUnmounted) {
+      saving.value = false
+    }
   }
 }
 
 watch(
-  () => [route.params.pollId, session.actingUserId],
+  () => [route.params.pollId, session.actingUserId, session.sessionRevision],
   () => {
     loadInitialData()
   },
 )
 
 onMounted(() => {
+  isUnmounted = false
   loadInitialData()
+})
+
+onBeforeUnmount(() => {
+  isUnmounted = true
+  ++loadSeq
 })
 </script>
 
@@ -544,5 +582,15 @@ onMounted(() => {
         </button>
       </div>
     </form>
+
+    <BaseConfirmDialog
+      :open="showUnsavedLeaveModal"
+      :title="session.t('common.unsavedChangesTitle')"
+      :message="session.t('common.unsavedChangesBody')"
+      :confirm-label="session.t('common.leavePage')"
+      :cancel-label="session.t('common.stayOnPage')"
+      @confirm="confirmUnsavedLeave"
+      @cancel="cancelUnsavedLeave"
+    />
   </div>
 </template>

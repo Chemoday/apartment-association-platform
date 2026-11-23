@@ -1,25 +1,26 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
+import type { AuthorBadgeDTO } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 import { useTranslations } from '@/locales/index.js'
 
-const props = defineProps({
-  badge: {
-    type: Object, // { display_label: string, role_badge: 'OWNER' | 'RESIDENT' | 'BOARD' | 'ACCOUNTANT' }
-    required: true,
+const props = withDefaults(
+  defineProps<{
+    badge: AuthorBadgeDTO
+    isMine?: boolean
+  }>(),
+  {
+    isMine: false,
   },
-  isMine: {
-    type: Boolean,
-    default: false,
-  },
-})
+)
 
 const session = useSessionStore()
 const t = computed(() => useTranslations(session.lang))
 
-const localizedRole = computed(() => {
+const localizedRole = computed<string>(() => {
   const role = props.badge?.role_badge || 'RESIDENT'
-  return t.value.roleBadge[role] || role
+  const roleMap = t.value.roleBadge as Record<string, string> | undefined
+  return roleMap?.[role] || role
 })
 </script>
 

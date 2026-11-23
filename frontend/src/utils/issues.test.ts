@@ -338,7 +338,7 @@ describe('issues utilities (#012)', () => {
       false,
     )
     assert.equal(atLimit.valid, true)
-    assert.equal(atLimit.payload?.place.length, 200)
+    assert.equal(atLimit.payload?.place?.length, 200)
     assert.equal(atLimit.payload?.title.length, 120)
 
     const overLimit = validateIssueReportDraft(
@@ -819,7 +819,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
     assert.equal(replay.ok, true)
     assert.equal(replay.status, 200)
     assert.equal(replay.photo?.id, up1.photo?.id)
-    assert.equal(issue.photos.length, 1)
+    assert.equal(issue.photos?.length, 1)
 
     // Same key on another issue -> 409 IDEMPOTENCY_KEY_REUSED
     const otherIssue = store[2]
@@ -851,6 +851,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       idempotencyStore: idem,
       nowMs,
     })
+    assert.equal(reusedSameUser.ok, false)
     assert.equal(reusedSameUser.status, 409)
     assert.equal(reusedSameUser.errorCode, 'IDEMPOTENCY_KEY_REUSED')
     assert.equal(reusedOther.status, 409) // otherIssue is RESOLVED -> ISSUE_ENDED
@@ -874,7 +875,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
     })
     assert.equal(up2.ok, true)
     assert.equal(up3.ok, true)
-    assert.equal(issue.photos.length, MAX_ISSUE_PHOTOS)
+    assert.equal(issue.photos?.length, MAX_ISSUE_PHOTOS)
     assert.equal(toIssueView(issue, RESIDENT_APT14).can_add_photo, false)
 
     const overLimit = addIssuePhotoInStore({
@@ -885,12 +886,13 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       idempotencyStore: idem,
       nowMs,
     })
+    assert.equal(overLimit.ok, false)
     assert.equal(overLimit.status, 409)
     assert.equal(overLimit.errorCode, 'PHOTO_LIMIT_REACHED')
 
     // Check mine/can_delete flags per viewer
     const neighborView = toIssueView(issue, RESIDENT_APT02)
-    assert.equal(neighborView.photos.every((p: any) => !p.mine && !p.can_delete), true)
+    assert.equal(neighborView.photos.every((p) => !p.mine && !p.can_delete), true)
 
     const chairmanView = toIssueView(issue, CHAIRMAN_USER)
     assert.equal(chairmanView.photos[0].mine, false)
@@ -916,6 +918,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
     assert.equal(reporterDel.ok, true)
 
     const missingGet = getIssuePhotoFromStore({ issue, photoId: up1.photo!.id, variant: 'thumb' })
+    assert.equal(missingGet.ok, false)
     assert.equal(missingGet.status, 404)
     assert.equal(missingGet.errorCode, 'PHOTO_NOT_FOUND')
 
@@ -928,6 +931,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       idempotencyStore: idem,
       nowMs,
     })
+    assert.equal(reuseAfterDelete.ok, false)
     assert.equal(reuseAfterDelete.status, 409)
     assert.equal(reuseAfterDelete.errorCode, 'UPLOAD_REMOVED')
   })
@@ -948,6 +952,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { category: 'LIFT', entrance: 1, title: 'Lift button stuck' },
       nowMs,
     })
+    assert.equal(created1.ok, true)
     const issue1 = created1.rawIssue
     addIssuePhotoInStore({ issue: issue1, user: RESIDENT_APT14, bytes: jpeg, contentLength: jpeg.byteLength, nowMs })
     assert.equal(toIssueView(issue1, RESIDENT_APT14).photos_delete_at, null)
@@ -962,11 +967,11 @@ describe('issue photos (#020) and retention notices (#021)', () => {
     })
     assert.equal(resolved.ok, true)
     assert.equal(
-      resolved.issue?.photos_delete_at,
+      resolved.issue.photos_delete_at,
       new Date(nowMs + 1000 + THIRTY_DAYS_MS).toISOString(),
     )
     // Uploader can no longer delete on resolved issue, board still can
-    assert.equal(resolved.issue?.photos[0].can_delete, true)
+    assert.equal(resolved.issue.photos[0].can_delete, true)
     assert.equal(toIssueView(issue1, RESIDENT_APT14).photos[0].can_delete, false)
 
     // Reopen clears photos_delete_at and preserves photo
@@ -977,8 +982,9 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { status: 'IN_PROGRESS' },
       nowMs: nowMs + 2000,
     })
-    assert.equal(reopened.issue?.photos.length, 1)
-    assert.equal(reopened.issue?.photos_delete_at, null)
+    assert.equal(reopened.ok, true)
+    assert.equal(reopened.issue.photos.length, 1)
+    assert.equal(reopened.issue.photos_delete_at, null)
 
     // Declining immediately deletes photos, never restored on reopen
     const declined = changeIssueStatusInStore({
@@ -988,8 +994,9 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { status: 'DECLINED' },
       nowMs: nowMs + 3000,
     })
-    assert.deepEqual(declined.issue?.photos, [])
-    assert.equal(declined.issue?.photos_delete_at, null)
+    assert.equal(declined.ok, true)
+    assert.deepEqual(declined.issue.photos, [])
+    assert.equal(declined.issue.photos_delete_at, null)
 
     const reopenedDeclined = changeIssueStatusInStore({
       issuesStore: store,
@@ -998,7 +1005,8 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { status: 'IN_PROGRESS' },
       nowMs: nowMs + 4000,
     })
-    assert.deepEqual(reopenedDeclined.issue?.photos, [])
+    assert.equal(reopenedDeclined.ok, true)
+    assert.deepEqual(reopenedDeclined.issue.photos, [])
 
     // Resolving an issue WITHOUT photos leaves photos_delete_at as null
     const emptyResolved = changeIssueStatusInStore({
@@ -1008,7 +1016,8 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { status: 'RESOLVED' },
       nowMs: nowMs + 5000,
     })
-    assert.equal(emptyResolved.issue?.photos_delete_at, null)
+    assert.equal(emptyResolved.ok, true)
+    assert.equal(emptyResolved.issue.photos_delete_at, null)
 
     // Withdrawing immediately deletes photos
     const created2 = createIssueInStore({
@@ -1019,14 +1028,16 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { category: 'YARD', entrance: null, title: 'Broken bench' },
       nowMs: nowMs + 6000,
     })
+    assert.equal(created2.ok, true)
     addIssuePhotoInStore({ issue: created2.rawIssue, user: RESIDENT_APT14, bytes: jpeg, contentLength: jpeg.byteLength, nowMs })
     const withdrawn = withdrawIssueInStore({
       issue: created2.rawIssue,
       user: RESIDENT_APT14,
       nowMs: nowMs + 7000,
     })
-    assert.deepEqual(withdrawn.issue?.photos, [])
-    assert.equal(withdrawn.issue?.photos_delete_at, null)
+    assert.equal(withdrawn.ok, true)
+    assert.deepEqual(withdrawn.issue.photos, [])
+    assert.equal(withdrawn.issue.photos_delete_at, null)
 
     // Marking DUPLICATE immediately deletes duplicate's photos (never copied to original)
     const created3 = createIssueInStore({
@@ -1037,7 +1048,8 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { category: 'CLEANING', entrance: 2, title: 'Dirty stairwell' },
       nowMs: nowMs + 8000,
     })
-    const rawIssue3 = created3.rawIssue!
+    assert.equal(created3.ok, true)
+    const rawIssue3 = created3.rawIssue
     assert.ok(rawIssue3)
     addIssuePhotoInStore({ issue: rawIssue3, user: RESIDENT_APT14, bytes: jpeg, contentLength: jpeg.byteLength, nowMs })
     const dupTarget = store.find((item) => item.id !== rawIssue3.id && isIssueOpen(item.status))!
@@ -1051,8 +1063,8 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       nowMs: nowMs + 9000,
     })
     assert.equal(duplicated.ok, true)
-    assert.deepEqual(duplicated.issue?.photos, [])
-    assert.equal(duplicated.issue?.photos_delete_at, null)
+    assert.deepEqual(duplicated.issue.photos, [])
+    assert.equal(duplicated.issue.photos_delete_at, null)
     assert.equal(dupTarget.photos?.length || 0, dupTargetPhotosBefore)
   })
 
@@ -1070,7 +1082,8 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       body: { category: 'DOORS_AND_LOCKS', entrance: 1, title: 'Entrance door closer broken' },
       nowMs,
     })
-    const issue = created.rawIssue!
+    assert.equal(created.ok, true)
+    const issue = created.rawIssue
     const jpeg = buildMinimalJpegBytes(1024, 768)
 
     // Reporter and Board/Chairman have can_add_photo=true when open & <3; neighbor has false
@@ -1102,17 +1115,20 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       contentLength: jpeg.byteLength,
       nowMs: nowMs + 2000,
     })
-    assert.equal(p1.ok && p2.ok && p3.ok, true)
+    assert.equal(p1.ok, true)
+    assert.equal(p2.ok, true)
+    assert.equal(p3.ok, true)
     assert.equal(toIssueView(issue, RESIDENT_APT14).can_add_photo, false)
 
     // Deleting 1 of 3 restores can_add_photo=true
-    const del = deleteIssuePhotoInStore({ issue, user: RESIDENT_APT14, photoId: p2.photo!.id })
+    const del = deleteIssuePhotoInStore({ issue, user: RESIDENT_APT14, photoId: p2.photo.id })
     assert.equal(del.ok, true)
     assert.equal(toIssueView(issue, RESIDENT_APT14).can_add_photo, true)
 
     // Summary & Detail views strip uploader_user_id and raw bytes across all roles
     const queryRes = queryIssuesStore(store, RESIDENT_APT02, {}, nowMs)
-    const listedIssue = (queryRes.items || []).find((it: any) => it.id === issue.id)
+    assert.equal(queryRes.ok, true)
+    const listedIssue = queryRes.items.find((it) => it.id === issue.id)
     assert.ok(listedIssue)
     assert.equal(listedIssue.photos.length, 2)
     for (const ph of listedIssue.photos) {
@@ -1142,8 +1158,8 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       nowMs: nowMs + 5000 + 29 * 24 * 3600 * 1000,
     })
     assert.equal(reopenedDay29.ok, true)
-    assert.equal(reopenedDay29.issue?.photos.length, 2)
-    assert.equal(reopenedDay29.issue?.photos_delete_at, null)
+    assert.equal(reopenedDay29.issue.photos.length, 2)
+    assert.equal(reopenedDay29.issue.photos_delete_at, null)
   })
 
   it('enforces #025 server answers: UPLOAD_REMOVED on ended/discarded issues, contentLength collision IDEMPOTENCY_KEY_REUSED, 24h daily limit (board exempt), and 507 quota reasons', () => {
@@ -1160,15 +1176,18 @@ describe('issue photos (#020) and retention notices (#021)', () => {
     const limitSetting = settingsStore.find((s) => s.key === 'issues.reports_per_apartment_per_day')
     if (limitSetting) limitSetting.value = 20
 
-    const createForResident = (title: string) =>
-      createIssueInStore({
+    const createForResident = (title: string) => {
+      const res = createIssueInStore({
         issuesStore: store,
         settingsStore,
         user: RESIDENT_APT14,
         userMemberships: memberships,
         body: { category: 'LIGHTING', entrance: 1, title },
         nowMs,
-      }).rawIssue!
+      })
+      assert.equal(res.ok, true)
+      return res.rawIssue
+    }
 
     // 1) Resolved keeps photo -> replay returns 200; mismatched contentLength returns 409 IDEMPOTENCY_KEY_REUSED
     const issueResolved = createForResident('Hallway lamp out')
@@ -1380,6 +1399,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       uploadsDisabled: true,
       nowMs,
     })
+    assert.equal(badMimePreflight.ok, false)
     assert.equal(badMimePreflight.status, 415)
     assert.equal(badMimePreflight.errorCode, 'UNSUPPORTED_MEDIA_TYPE')
 
@@ -1394,6 +1414,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       uploadsDisabled: true,
       nowMs,
     })
+    assert.equal(closedFirst.ok, false)
     assert.equal(closedFirst.status, 409)
     assert.equal(closedFirst.errorCode, 'ISSUE_ENDED')
 
@@ -1406,6 +1427,7 @@ describe('issue photos (#020) and retention notices (#021)', () => {
       idempotencyKey: '   ',
       nowMs,
     })
+    assert.equal(whitespaceKey.ok, false)
     assert.equal(whitespaceKey.status, 422)
     assert.equal(whitespaceKey.errorCode, 'VALIDATION_ERROR')
 

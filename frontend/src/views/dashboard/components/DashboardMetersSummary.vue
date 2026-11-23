@@ -44,11 +44,14 @@ const waterConsumptionM3 = computed(() => {
   if (!activeApartment.value) return '0.000'
   const deltas = activeApartment.value.meters
     .filter((m) => m.unit === 'm3')
-    .map((m) =>
-      m.next_submission && typeof m.next_submission === 'object'
-        ? m.next_submission.reading?.consumption_delta
-        : m.reading?.consumption_delta,
-    )
+    .map((m) => {
+      const reading =
+        m.next_submission && typeof m.next_submission === 'object'
+          ? m.next_submission.reading
+          : m.reading
+      if (!reading || reading.previous_origin === 'START') return null
+      return reading.consumption_delta
+    })
     .filter(Boolean)
   return deltas.length ? sumMeterValues(deltas) : '0.000'
 })

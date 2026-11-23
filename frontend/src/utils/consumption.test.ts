@@ -488,4 +488,178 @@ test('parseExactDecimalToScale handles high-precision area_m2, huge 13+ digit to
   assert.equal(geoHuge.bars[0].valueStr, '1000000000000.000')
 })
 
+test('START readings count as gaps (null, not 0.000) in apartment and building consumption (#038)', () => {
+  const periods = [
+    { period_code: '2026-09', status: 'LOCKED' },
+    { period_code: '2026-10', status: 'OPEN_FOR_RESIDENTS' },
+  ]
+
+  const aptRes = buildApartmentConsumptionResponse({
+    apartmentId: 'apt-14',
+    apartmentNumber: '14',
+    periods,
+    meters: [
+      {
+        meter_id: 'hw-start-only',
+        resource_type: 'HOT_WATER',
+        unit: 'm3',
+        is_active: true,
+        readings: [
+          {
+            period_code: '2026-10',
+            consumption_delta: '0.000',
+            source: 'RESIDENT',
+            previous_origin: 'START',
+          },
+        ],
+      },
+      {
+        meter_id: 'cw-zero-history',
+        resource_type: 'COLD_WATER',
+        unit: 'm3',
+        is_active: true,
+        readings: [
+          {
+            period_code: '2026-10',
+            consumption_delta: '0.000',
+            source: 'RESIDENT',
+            previous_origin: 'HISTORY',
+          },
+        ],
+      },
+      {
+        meter_id: 'gas-start',
+        resource_type: 'GAS',
+        unit: 'm3',
+        is_active: true,
+        readings: [
+          {
+            period_code: '2026-10',
+            consumption_delta: '0.000',
+            source: 'RESIDENT',
+            previous_origin: 'START',
+          },
+        ],
+      },
+      {
+        meter_id: 'gas-submitted',
+        resource_type: 'GAS',
+        unit: 'm3',
+        is_active: true,
+        readings: [
+          {
+            period_code: '2026-10',
+            consumption_delta: '4.250',
+            source: 'RESIDENT',
+            previous_origin: 'SUBMITTED',
+          },
+        ],
+      },
+    ],
+    months: 12,
+  })
+
+  const hot = aptRes.resources.find((r: any) => r.resource_type === 'HOT_WATER')
+  assert.ok(hot)
+  assert.deepEqual(hot.months, [
+    { period_code: '2026-09', consumption: null, estimated: false },
+    { period_code: '2026-10', consumption: null, estimated: false },
+  ])
+
+  const cold = aptRes.resources.find((r: any) => r.resource_type === 'COLD_WATER')
+  assert.ok(cold)
+  assert.equal(cold.months[1].consumption, '0.000')
+
+  const gas = aptRes.resources.find((r: any) => r.resource_type === 'GAS')
+  assert.ok(gas)
+  assert.equal(gas.months[1].consumption, '4.250')
+
+  const bldRes = buildBuildingConsumptionResponse({
+    periods,
+    months: 12,
+    apartments: [
+      {
+        apartment_id: 'apt-start-only',
+        area_m2: '50.00',
+        meters: [
+          {
+            meter_id: 'm-start',
+            resource_type: 'HOT_WATER',
+            unit: 'm3',
+            readings: [
+              {
+                period_code: '2026-10',
+                consumption_delta: '0.000',
+                source: 'RESIDENT',
+                previous_origin: 'START',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        apartment_id: 'apt-submitted',
+        area_m2: '40.00',
+        meters: [
+          {
+            meter_id: 'm-sub',
+            resource_type: 'HOT_WATER',
+            unit: 'm3',
+            readings: [
+              {
+                period_code: '2026-10',
+                consumption_delta: '2.000',
+                source: 'RESIDENT',
+                previous_origin: 'SUBMITTED',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  })
+
+  assert.deepEqual(bldRes.resources[0].months[1], {
+    period_code: '2026-10',
+    total: '2.000',
+    apartments_counted: 1,
+    average_per_apartment: '2.000',
+    average_per_m2: '0.0500',
+    estimated_readings: 0,
+  })
+
+  const bldOnlyStart = buildBuildingConsumptionResponse({
+    periods: [{ period_code: '2026-10', status: 'OPEN_FOR_RESIDENTS' }],
+    apartments: [
+      {
+        apartment_id: 'apt-start-only',
+        area_m2: '50.00',
+        meters: [
+          {
+            meter_id: 'm-start',
+            resource_type: 'HOT_WATER',
+            unit: 'm3',
+            readings: [
+              {
+                period_code: '2026-10',
+                consumption_delta: '0.000',
+                source: 'RESIDENT',
+                previous_origin: 'START',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  })
+  assert.deepEqual(bldOnlyStart.resources[0].months[0], {
+    period_code: '2026-10',
+    total: null,
+    apartments_counted: 0,
+    average_per_apartment: null,
+    average_per_m2: null,
+    estimated_readings: 0,
+  })
+})
+
 

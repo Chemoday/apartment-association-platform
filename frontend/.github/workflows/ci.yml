@@ -1,0 +1,50 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Lint, Typecheck, OpenAPI, Tests & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint:eslint
+
+      - name: Typecheck (vue-tsc)
+        run: npm run typecheck
+
+      - name: OpenAPI schema sync check
+        run: npm run check:openapi
+
+      - name: Unit & component tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: High-severity dependency audit
+        run: npm audit --audit-level=high

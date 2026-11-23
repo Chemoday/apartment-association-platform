@@ -95,3 +95,14 @@ test('READING_BELOW_PREVIOUS shows field error and opens no popup', () => {
   assert.equal(state.anomaly, null)
   assert.equal(state.fieldError, 'READING_BELOW_PREVIOUS')
 })
+
+test('PREVIOUS_VALUE_NOT_ALLOWED shows field error and opens no popup (#038)', () => {
+  let state = createAnomalyFlowState()
+  const prep = prepareReadingSubmission(state, '86.500', 0)
+  state = transitionOnReadingError(prep.nextState, {
+    errorCode: 'PREVIOUS_VALUE_NOT_ALLOWED',
+    payload: {},
+  })
+  assert.equal(state.anomaly, null)
+  assert.equal(state.fieldError, 'PREVIOUS_VALUE_NOT_ALLOWED')
+})

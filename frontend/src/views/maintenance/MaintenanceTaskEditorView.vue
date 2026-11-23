@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
@@ -17,6 +17,8 @@ import {
 import { localizeError } from '@/locales/index.js'
 import TargetScopePicker from '@/components/domain/TargetScopePicker.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import BaseConfirmDialog from '@/components/base/BaseConfirmDialog.vue'
+import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -56,6 +58,21 @@ const form = reactive({
 })
 
 const clientErrors = reactive({})
+const baselineSnapshot = ref(JSON.stringify(form))
+
+function markFormClean() {
+  baselineSnapshot.value = JSON.stringify(form)
+}
+
+const isFormDirty = computed(
+  () => !loading.value && !saving.value && JSON.stringify(form) !== baselineSnapshot.value,
+)
+
+const {
+  showLeaveModal: showUnsavedLeaveModal,
+  confirmLeave: confirmUnsavedLeave,
+  cancelLeave: cancelUnsavedLeave,
+} = useUnsavedChangesGuard(isFormDirty)
 
 const availableEntrances = computed(() => {
   const count = session.building?.entrances_count || session.building?.total_entrances || 2
@@ -90,11 +107,13 @@ const targetModel = computed({
   },
 })
 
-function clearErrors() {
+function clearErrors({ preserveConflictBanner = false } = {}) {
   for (const k of Object.keys(clientErrors)) delete clientErrors[k]
   serverErrors.value = {}
   submitError.value = ''
-  occurrenceClosedConflict.value = false
+  if (!preserveConflictBanner) {
+    occurrenceClosedConflict.value = false
+  }
 }
 
 function resolveFieldError(fieldKey) {
@@ -103,11 +122,15 @@ function resolveFieldError(fieldKey) {
   return session.t(`maintenance.validation.${code}`) || code
 }
 
-async function loadData() {
+let loadSeq = 0
+let isUnmounted = false
+
+async function loadData({ preserveConflictBanner = false } = {}) {
   if (!canManageMaintenance.value) return
+  const seq = ++loadSeq
   loading.value = true
   loadError.value = null
-  clearErrors()
+  clearErrors({ preserveConflictBanner })
 
   try {
     const promises = [listApartments().catch(() => ({ apartments: [] }))]
@@ -115,6 +138,8 @@ async function loadData() {
       promises.push(getMaintenanceTask(taskId.value))
     }
     const [aptsRes, taskRes] = await Promise.all(promises)
+    if (seq !== loadSeq || isUnmounted) return
+
     apartments.value = Array.isArray(aptsRes?.apartments) ? aptsRes.apartments : []
 
     if (isEditMode.value && taskRes) {
@@ -146,10 +171,14 @@ async function loadData() {
         form.has_notice = false
       }
     }
+    markFormClean()
   } catch (err) {
+    if (seq !== loadSeq || isUnmounted) return
     loadError.value = err
   } finally {
-    loading.value = false
+    if (seq === loadSeq && !isUnmounted) {
+      loading.value = false
+    }
   }
 }
 
@@ -210,17 +239,19 @@ async function handleSubmit() {
       patch.notice = noticePayload
 
       const saved = await editMaintenanceTask(taskId.value, patch)
+      markFormClean()
       router.push(`/maintenance/${saved.id}`)
     } else {
       const saved = await createMaintenanceTask(check.payload)
+      markFormClean()
       router.push(`/maintenance/${saved.id}`)
     }
   } catch (err) {
+    if (isUnmounted) return
     const errorCode = err?.errorCode || err?.payload?.error_code
     if (err?.status === 409 && errorCode === 'OCCURRENCE_CLOSED') {
       occurrenceClosedConflict.value = true
-      // reload task
-      loadData()
+      await loadData({ preserveConflictBanner: true })
     } else if (err?.status === 422 && err?.payload?.errors) {
       serverErrors.value = err.payload.errors
       submitError.value = localizeError(err, {}, session.lang)
@@ -228,19 +259,27 @@ async function handleSubmit() {
       submitError.value = localizeError(err, {}, session.lang)
     }
   } finally {
-    saving.value = false
+    if (!isUnmounted) {
+      saving.value = false
+    }
   }
 }
 
 watch(
-  () => [taskId.value, session.actingUserId],
+  () => [taskId.value, session.actingUserId, session.sessionRevision],
   () => {
     loadData()
   },
 )
 
 onMounted(() => {
+  isUnmounted = false
   loadData()
+})
+
+onBeforeUnmount(() => {
+  isUnmounted = true
+  ++loadSeq
 })
 </script>
 
@@ -563,5 +602,15 @@ onMounted(() => {
         </div>
       </form>
     </template>
+
+    <BaseConfirmDialog
+      :open="showUnsavedLeaveModal"
+      :title="session.t('common.unsavedChangesTitle')"
+      :message="session.t('common.unsavedChangesBody')"
+      :confirm-label="session.t('common.leavePage')"
+      :cancel-label="session.t('common.stayOnPage')"
+      @confirm="confirmUnsavedLeave"
+      @cancel="cancelUnsavedLeave"
+    />
   </div>
 </template>

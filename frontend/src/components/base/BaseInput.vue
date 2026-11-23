@@ -1,36 +1,29 @@
-<script setup>
-const model = defineModel({ type: String, default: '' })
+<script setup lang="ts">
+import { computed } from 'vue'
 
-defineProps({
-  id: {
-    type: String,
-    required: true,
+const model = defineModel<string>({ default: '' })
+
+const props = withDefaults(
+  defineProps<{
+    id: string
+    label?: string
+    placeholder?: string
+    suffix?: string
+    error?: string
+    disabled?: boolean
+    type?: string
+  }>(),
+  {
+    label: '',
+    placeholder: '',
+    suffix: '',
+    error: '',
+    disabled: false,
+    type: 'text',
   },
-  label: {
-    type: String,
-    default: '',
-  },
-  placeholder: {
-    type: String,
-    default: '',
-  },
-  suffix: {
-    type: String,
-    default: '',
-  },
-  error: {
-    type: String,
-    default: '',
-  },
-  disabled: {
-    type: Boolean,
-    default: false,
-  },
-  type: {
-    type: String,
-    default: 'text',
-  },
-})
+)
+
+const errorId = computed(() => (props.error ? `${props.id}-error` : undefined))
 </script>
 
 <template>
@@ -38,10 +31,9 @@ defineProps({
     <label
       v-if="label"
       :for="id"
-      class="font-label-md text-label-md text-on-surface font-semibold flex items-center justify-between"
+      class="font-label-md text-label-md text-on-surface font-semibold"
     >
-      <span>{{ label }}</span>
-      <span v-if="suffix" class="text-on-surface-variant text-[11px] font-normal">{{ suffix }}</span>
+      {{ label }}
     </label>
     <div class="relative">
       <input
@@ -50,8 +42,13 @@ defineProps({
         :type="type"
         :placeholder="placeholder"
         :disabled="disabled"
+        :aria-invalid="error ? 'true' : undefined"
+        :aria-describedby="errorId"
         class="w-full h-11 px-3 bg-surface-container-lowest border rounded-lg font-body-sm text-body-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition-colors disabled:bg-surface-container-low disabled:text-on-surface-variant"
-        :class="error ? 'border-error focus:ring-error' : 'border-outline-variant'"
+        :class="[
+          error ? 'border-error focus:ring-error' : 'border-outline-variant',
+          suffix ? 'pr-14' : '',
+        ]"
       />
       <span
         v-if="suffix"
@@ -60,6 +57,6 @@ defineProps({
         {{ suffix }}
       </span>
     </div>
-    <p v-if="error" class="text-xs text-error font-medium mt-0.5">{{ error }}</p>
+    <p v-if="error" :id="errorId" role="alert" class="text-xs text-error font-medium mt-0.5">{{ error }}</p>
   </div>
 </template>

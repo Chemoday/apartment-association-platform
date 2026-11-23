@@ -12,11 +12,11 @@ const props = defineProps({
   },
   periodStatus: {
     type: String,
-    default: 'OPEN_FOR_RESIDENTS',
+    default: '',
   },
   periods: {
     type: Array,
-    default: () => ['2026-10', '2026-09', '2026-08', '2026-07'],
+    default: () => [],
   },
   missingCount: {
     type: Number,
@@ -25,6 +25,10 @@ const props = defineProps({
   busyAction: {
     type: String,
     default: '',
+  },
+  loading: {
+    type: Boolean,
+    default: false,
   },
   csvSupported: {
     type: Boolean,
@@ -38,7 +42,9 @@ const session = useSessionStore()
 const { canManagePeriods, canViewMatrix } = useRole()
 
 // Period status transitions: OPEN_FOR_RESIDENTS <-> REVIEW_BY_BOARD <-> LOCKED, one step at a time
+// Fail-closed: never emit status transitions while period metadata is loading or unknown.
 const allowedNextStatuses = computed(() => {
+  if (props.loading || !props.periodStatus) return []
   switch (props.periodStatus) {
     case 'OPEN_FOR_RESIDENTS':
       return [{ status: 'REVIEW_BY_BOARD', label: session.t('periodToolbar.moveToReview') }]
@@ -66,7 +72,8 @@ const allowedNextStatuses = computed(() => {
         <select
           id="period-selector"
           :value="periodCode"
-          class="h-9 px-3 rounded-lg bg-surface-container-low text-on-surface font-label-md text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
+          :disabled="Boolean(busyAction) || periods.length === 0"
+          class="h-9 px-3 rounded-lg bg-surface-container-low text-on-surface font-label-md text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
           @change="$emit('change-period', $event.target.value)"
         >
           <option v-for="code in periods" :key="code" :value="code">
@@ -75,7 +82,7 @@ const allowedNextStatuses = computed(() => {
         </select>
       </div>
 
-      <StatusChip :status="periodStatus" />
+      <StatusChip v-if="periodStatus && !loading" :status="periodStatus" />
     </div>
 
     <!-- Board / Chairman / Accountant Controls -->
@@ -85,7 +92,8 @@ const allowedNextStatuses = computed(() => {
           v-for="next in allowedNextStatuses"
           :key="next.status"
           type="button"
-          :disabled="Boolean(busyAction)"
+          :data-testid="`period-toolbar-status-${next.status}`"
+          :disabled="Boolean(busyAction) || loading"
           class="px-3 py-1.5 rounded-lg font-label-md text-xs font-semibold transition-colors inline-flex items-center gap-1.5 disabled:opacity-50"
           :class="
             next.status === 'LOCKED'
@@ -101,9 +109,10 @@ const allowedNextStatuses = computed(() => {
         </button>
 
         <button
-          v-if="periodStatus === 'REVIEW_BY_BOARD'"
+          v-if="!loading && periodStatus === 'REVIEW_BY_BOARD'"
           type="button"
-          :disabled="Boolean(busyAction)"
+          data-testid="period-toolbar-estimate-btn"
+          :disabled="Boolean(busyAction) || loading"
           class="px-3 py-1.5 rounded-lg bg-secondary text-on-secondary hover:opacity-90 font-label-md text-xs font-semibold transition-opacity inline-flex items-center gap-1.5 disabled:opacity-50"
           @click="$emit('estimate-missing')"
         >
@@ -122,7 +131,8 @@ const allowedNextStatuses = computed(() => {
       <button
         v-if="csvSupported"
         type="button"
-        :disabled="Boolean(busyAction)"
+        data-testid="period-toolbar-csv-btn"
+        :disabled="Boolean(busyAction) || loading || !periodCode"
         class="px-3 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container border border-surface-container text-on-surface font-label-md text-xs font-semibold transition-colors inline-flex items-center gap-1.5 disabled:opacity-50"
         @click="$emit('export-csv')"
       >

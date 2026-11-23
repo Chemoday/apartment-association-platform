@@ -1,5 +1,6 @@
 <script setup>
 import { useSessionStore } from '@/stores/session.js'
+import { formatIncompleteBalanceMessage } from '@/utils/matrixStarts.js'
 import MeterValueText from '@/components/domain/MeterValueText.vue'
 
 defineProps({
@@ -18,6 +19,19 @@ defineProps({
 })
 
 const session = useSessionStore()
+
+function resourceLabel(resourceType) {
+  const key = `resources.${resourceType}`
+  const translated = session.t(key)
+  return translated && translated !== key ? translated : resourceType
+}
+
+function unitLabel(unit) {
+  const key = `units.${unit}`
+  const translated = session.t(key)
+  if (translated && translated !== key) return translated
+  return unit === 'm3' ? 'm³' : unit
+}
 </script>
 
 <template>
@@ -35,7 +49,15 @@ const session = useSessionStore()
         </div>
       </div>
 
-      <div class="overflow-x-auto">
+      <div
+        v-if="balances.length === 0"
+        data-testid="balance-table-empty"
+        class="p-space-lg text-center text-sm text-on-surface-variant"
+      >
+        {{ session.t('accounting.noBalancesDesc') }}
+      </div>
+
+      <div v-else class="overflow-x-auto">
         <table class="w-full text-left font-body-sm text-body-sm">
           <thead class="bg-surface-container/60 text-on-surface-variant font-label-md text-label-md uppercase tracking-wider border-b border-surface-container">
             <tr>
@@ -46,23 +68,42 @@ const session = useSessionStore()
             </tr>
           </thead>
           <tbody class="divide-y divide-surface-container">
-            <tr v-for="b in balances" :key="b.resource_type" class="hover:bg-surface-container-low/50">
-              <td class="py-3.5 px-space-md font-semibold text-on-surface">
-                {{ b.resource_type }}
+            <tr
+              v-for="b in balances"
+              :key="`${b.resource_type}-${b.unit}`"
+              class="hover:bg-surface-container-low/50"
+            >
+              <td class="py-3.5 px-space-md font-semibold text-on-surface align-top">
+                <div>{{ resourceLabel(b.resource_type) }}</div>
+                <div
+                  v-if="Number(b.starting_meters) > 0"
+                  data-testid="balance-row-incomplete"
+                  class="mt-1 inline-flex items-start gap-1 px-2 py-0.5 rounded bg-amber-100/80 dark:bg-amber-950/50 text-amber-950 dark:text-amber-200 text-[11px] font-medium leading-snug"
+                >
+                  <span class="material-symbols-outlined text-[14px] shrink-0 mt-px">flag</span>
+                  <span>{{ formatIncompleteBalanceMessage(b.starting_meters, session.t, session.lang) }}</span>
+                </div>
               </td>
-              <td class="py-3.5 px-space-md text-right">
-                <MeterValueText :value="b.master_total" :unit="b.unit" />
+              <td class="py-3.5 px-space-md text-right align-top">
+                <MeterValueText v-if="b.master_total !== null" :value="b.master_total" :unit="b.unit" />
+                <span
+                  v-else
+                  data-testid="balance-row-awaiting-master"
+                  class="text-xs text-on-surface-variant italic"
+                >
+                  {{ session.t('accounting.awaitingMasterReading') }}
+                </span>
               </td>
-              <td class="py-3.5 px-space-md text-right">
+              <td class="py-3.5 px-space-md text-right align-top">
                 <MeterValueText :value="b.apartments_sum" :unit="b.unit" />
               </td>
-              <td class="py-3.5 px-space-md text-right">
+              <td class="py-3.5 px-space-md text-right align-top">
                 <span
                   v-if="b.unallocated_loss !== null"
                   class="font-mono tabular-nums font-bold"
                   :class="b.unallocated_loss.startsWith('-') ? 'text-error' : 'text-on-surface'"
                 >
-                  {{ b.unallocated_loss }} {{ b.unit === 'm3' ? 'm³' : b.unit }}
+                  {{ b.unallocated_loss }} {{ unitLabel(b.unit) }}
                 </span>
                 <span v-else class="text-xs text-on-surface-variant italic">
                   {{ session.t('accounting.awaitingMasterReading') }}

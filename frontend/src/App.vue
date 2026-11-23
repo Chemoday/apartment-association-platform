@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import AppLayout from '@/layouts/AppLayout.vue'
 import PublicLayout from '@/layouts/PublicLayout.vue'
+import AppErrorBoundary from '@/components/base/AppErrorBoundary.vue'
 import BackendOfflineModal from '@/components/domain/BackendOfflineModal.vue'
 
 const route = useRoute()
@@ -20,7 +21,9 @@ onMounted(async () => {
 
 <template>
   <component :is="layoutComponent">
-    <RouterView />
+    <AppErrorBoundary>
+      <RouterView />
+    </AppErrorBoundary>
   </component>
   <BackendOfflineModal />
 </template>

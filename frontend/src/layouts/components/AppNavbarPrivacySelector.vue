@@ -1,19 +1,20 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
+import type { DisplayMode } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 
 const route = useRoute()
 const session = useSessionStore()
-const menuOpen = ref(false)
-const saving = ref(false)
-const rootRef = ref(null)
+const menuOpen = ref<boolean>(false)
+const saving = ref<boolean>(false)
+const rootRef = ref<HTMLElement | null>(null)
 
 const membership = computed(() => session.activeMembership)
 
-const modes = ['APARTMENT_ONLY', 'INITIALS', 'FULL_NAME']
+const modes: DisplayMode[] = ['APARTMENT_ONLY', 'INITIALS', 'FULL_NAME']
 
-const badgePreviewText = computed(() => {
+const badgePreviewText = computed<string>(() => {
   if (!membership.value) {
     const role = session.me?.building_role || 'USER'
     return session.t(`buildingRole.${role}`)
@@ -22,7 +23,7 @@ const badgePreviewText = computed(() => {
   return b.display_label
 })
 
-async function selectPrivacyMode(mode) {
+async function selectPrivacyMode(mode: DisplayMode): Promise<void> {
   if (!membership.value || saving.value) return
   saving.value = true
   try {
@@ -33,8 +34,8 @@ async function selectPrivacyMode(mode) {
   }
 }
 
-function handleDocumentClick(e) {
-  if (menuOpen.value && rootRef.value && !rootRef.value.contains(e.target)) {
+function handleDocumentClick(e: MouseEvent): void {
+  if (menuOpen.value && rootRef.value && !rootRef.value.contains(e.target as Node | null)) {
     menuOpen.value = false
   }
 }

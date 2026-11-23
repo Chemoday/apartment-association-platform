@@ -5,6 +5,7 @@ import {
   getFinalWarningMonths,
   isMeterReportedForActivePeriod,
   resolveResidentFormContext,
+  resolveStartPreviousValueSubmission,
   summarizeNextSubmissions,
 } from './nextSubmission.js'
 import { localizeError } from '../locales/index.js'
@@ -139,4 +140,226 @@ test('getFinalWarningMonths and WRONG_PERIOD error localization format target mo
   assert.match(msgEt, /November/i)
   const msgRu = localizeError('WRONG_PERIOD', { target_period_code: '2026-11' }, 'ru')
   assert.equal(msgRu.includes('{month}'), false)
+})
+
+test('resolveResidentFormContext handles needs_start, START empty prefill, SUBMITTED prefill, and board mode (#038)', () => {
+  // 1. Fresh meter without a start (no reading yet)
+  const freshMeter = {
+    meter_id: 'm-start',
+    serial_number: null,
+    previous_value: null,
+    needs_start: true,
+    average_delta: null,
+    reading: null,
+    next_submission: {
+      period_code: '2026-11',
+      due_date: '2026-12-04T21:59:59Z',
+      final: false,
+      previous_value: null,
+      needs_start: true,
+      average_delta: null,
+      reading: null,
+    },
+  }
+  const freshCtx = resolveResidentFormContext(freshMeter, true)
+  assert.equal(freshCtx.hasForm, true)
+  assert.equal(freshCtx.needsStart, true)
+  assert.equal(freshCtx.previousValue, null)
+  assert.equal(freshCtx.initialBillPreviousValue, '')
+  assert.equal(freshCtx.hasPrefilledBillPrevious, false)
+
+  // 2. Existing START reading -> bill field stays EMPTY (never prefilled with its own value!)
+  const startMeter = {
+    ...freshMeter,
+    previous_value: '1250.000',
+    next_submission: {
+      ...freshMeter.next_submission,
+      previous_value: '1250.000',
+      needs_start: true,
+      reading: {
+        reading_id: 'r-start',
+        value: '1250.000',
+        previous_value: '1250.000',
+        consumption_delta: '0.000',
+        source: 'RESIDENT',
+        is_anomaly_confirmed: false,
+        previous_origin: 'START',
+      },
+    },
+  }
+  const startCtx = resolveResidentFormContext(startMeter, true)
+  assert.equal(startCtx.needsStart, true)
+  assert.equal(startCtx.previousValue, '1250.000')
+  assert.equal(startCtx.initialBillPreviousValue, '')
+  assert.equal(startCtx.hasPrefilledBillPrevious, false)
+
+  // 3. Existing SUBMITTED reading -> bill field prefills reading.previous_value
+  const submittedMeter = {
+    ...freshMeter,
+    previous_value: '120.500',
+    next_submission: {
+      ...freshMeter.next_submission,
+      previous_value: '120.500',
+      needs_start: true,
+      reading: {
+        reading_id: 'r-sub',
+        value: '125.000',
+        previous_value: '120.500',
+        consumption_delta: '4.500',
+        source: 'RESIDENT',
+        is_anomaly_confirmed: false,
+        previous_origin: 'SUBMITTED',
+      },
+    },
+  }
+  const submittedCtx = resolveResidentFormContext(submittedMeter, true)
+  assert.equal(submittedCtx.needsStart, true)
+  assert.equal(submittedCtx.initialBillPreviousValue, '120.500')
+  assert.equal(submittedCtx.hasPrefilledBillPrevious, true)
+
+  // 4. Board mode (useNextSubmission = false) reads meter.needs_start and meter.reading directly
+  const boardSubmitted = resolveResidentFormContext(
+    {
+      meter_id: 'm-board',
+      previous_value: '50.000',
+      needs_start: true,
+      reading: {
+        reading_id: 'r-b',
+        value: '55.000',
+        previous_value: '50.000',
+        consumption_delta: '5.000',
+        source: 'RESIDENT',
+        is_anomaly_confirmed: false,
+        previous_origin: 'SUBMITTED',
+      },
+    },
+    false,
+  )
+  assert.equal(boardSubmitted.hasForm, true)
+  assert.equal(boardSubmitted.needsStart, true)
+  assert.equal(boardSubmitted.initialBillPreviousValue, '50.000')
+  assert.equal(boardSubmitted.hasPrefilledBillPrevious, true)
+
+  // 5. Locked resident mode (next_submission: null) preserves meter.reading & hasForm: false
+  const closedCtx = resolveResidentFormContext(
+    {
+      meter_id: 'm-closed',
+      previous_value: '1250.000',
+      needs_start: true,
+      reading: startMeter.next_submission.reading,
+      next_submission: null,
+    },
+    true,
+  )
+  assert.equal(closedCtx.hasForm, false)
+  assert.equal(closedCtx.needsStart, true)
+  assert.equal(closedCtx.reading?.previous_origin, 'START')
+})
+
+test('resolveStartPreviousValueSubmission enforces omitted vs null vs normalized string rules (#038)', () => {
+  // Never sends previous_value when needsStart is false
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: false,
+      rawInput: '100.000',
+      initialValue: '',
+      hasPrefilled: false,
+      touched: true,
+    }),
+    { ok: true, include: false },
+  )
+
+  // Untouched prefilled SUBMITTED field omits previous_value (keeps stored bill value)
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: true,
+      rawInput: '120.500',
+      initialValue: '120.500',
+      hasPrefilled: true,
+      touched: false,
+    }),
+    { ok: true, include: false },
+  )
+
+  // Touched prefilled field edited to canonically equal value (e.g. '120,5' vs '120.500') still omits
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: true,
+      rawInput: '120,5',
+      initialValue: '120.500',
+      hasPrefilled: true,
+      touched: true,
+    }),
+    { ok: true, include: false },
+  )
+
+  // Clearing a prefilled SUBMITTED field sends explicit null
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: true,
+      rawInput: '',
+      initialValue: '120.500',
+      hasPrefilled: true,
+      touched: true,
+    }),
+    { ok: true, include: true, value: null },
+  )
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: true,
+      rawInput: '   ',
+      initialValue: '120.500',
+      hasPrefilled: true,
+      touched: true,
+    }),
+    { ok: true, include: true, value: null },
+  )
+
+  // Leaving a non-prefilled field empty omits previous_value (even if focused/touched)
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: true,
+      rawInput: '',
+      initialValue: '',
+      hasPrefilled: false,
+      touched: true,
+    }),
+    { ok: true, include: false },
+  )
+
+  // Entering a valid decimal normalizes comma to dot and includes previous_value
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: true,
+      rawInput: ' 120,25 ',
+      initialValue: '',
+      hasPrefilled: false,
+      touched: true,
+    }),
+    { ok: true, include: true, value: '120.25' },
+  )
+  assert.deepEqual(
+    resolveStartPreviousValueSubmission({
+      needsStart: true,
+      rawInput: '0',
+      initialValue: '',
+      hasPrefilled: false,
+      touched: true,
+    }),
+    { ok: true, include: true, value: '0' },
+  )
+
+  // Invalid inputs return invalid_number error
+  for (const bad of ['abc', '-10', '1.2345', '12.3.4']) {
+    assert.deepEqual(
+      resolveStartPreviousValueSubmission({
+        needsStart: true,
+        rawInput: bad,
+        initialValue: '',
+        hasPrefilled: false,
+        touched: true,
+      }),
+      { ok: false, include: false, errorCode: 'invalid_number' },
+    )
+  }
 })

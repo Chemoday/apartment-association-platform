@@ -232,18 +232,21 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
     assert.ok(resList.items.every((d: any) => d.can_edit === false && d.can_delete === false))
 
     const accList = queryDocumentsStore(store, ACCOUNTANT, [])
-    assert.ok(accList.items.some((d: any) => d.audience === 'BOARD_AND_ACCOUNTANT'))
-    assert.equal(accList.items.some((d: any) => d.audience === 'BOARD'), false)
-    assert.ok(accList.items.every((d: any) => d.uploaded_by !== null))
-    assert.ok(accList.items.every((d: any) => d.can_edit === false && d.can_delete === false))
+    assert.equal(accList.ok, true)
+    assert.ok(accList.items.some((d) => d.audience === 'BOARD_AND_ACCOUNTANT'))
+    assert.equal(accList.items.some((d) => d.audience === 'BOARD'), false)
+    assert.ok(accList.items.every((d) => d.uploaded_by !== null))
+    assert.ok(accList.items.every((d) => d.can_edit === false && d.can_delete === false))
 
     const boardList = queryDocumentsStore(store, BOARD, [])
-    assert.ok(boardList.items.some((d: any) => d.audience === 'BOARD'))
-    assert.ok(boardList.items.every((d: any) => d.can_edit === true && d.can_delete === false))
+    assert.equal(boardList.ok, true)
+    assert.ok(boardList.items.some((d) => d.audience === 'BOARD'))
+    assert.ok(boardList.items.every((d) => d.can_edit === true && d.can_delete === false))
 
     const chairList = queryDocumentsStore(store, CHAIRMAN, [])
+    assert.equal(chairList.ok, true)
     assert.equal(chairList.items.length, store.length)
-    assert.ok(chairList.items.every((d: any) => d.can_edit === true && d.can_delete === true))
+    assert.ok(chairList.items.every((d) => d.can_edit === true && d.can_delete === true))
 
     assert.deepEqual(getUploadOptionsForUser(RESIDENT).can_upload, false)
     assert.deepEqual(getUploadOptionsForUser(ACCOUNTANT).audiences, ['BOARD_AND_ACCOUNTANT'])
@@ -269,6 +272,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       query: { title: 'Test', category: 'OTHER', audience: 'EVERYONE' },
       contentLength: pdfBytes.byteLength,
     })
+    assert.equal(resDeny.ok, false)
     assert.equal(resDeny.status, 403)
 
     // Accountant cannot upload to EVERYONE
@@ -279,6 +283,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       query: { title: 'Invoice 1', category: 'INVOICE', audience: 'EVERYONE' },
       contentLength: pdfBytes.byteLength,
     })
+    assert.equal(accScopeDeny.ok, false)
     assert.equal(accScopeDeny.status, 403)
 
     // 415 on non-PDF MIME & non-%PDF- magic bytes
@@ -289,6 +294,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       contentType: 'image/jpeg',
       contentLength: pdfBytes.byteLength,
     })
+    assert.equal(badMime.ok, false)
     assert.equal(badMime.status, 415)
 
     const fakePdf = addDocumentInStore({
@@ -299,6 +305,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       contentType: 'application/pdf',
       contentLength: 11,
     })
+    assert.equal(fakePdf.ok, false)
     assert.equal(fakePdf.status, 415)
 
     // 413 on oversized declaration & 403 UPLOADS_DISABLED
@@ -309,6 +316,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       contentType: 'application/pdf',
       contentLength: MAX_DOCUMENT_BYTES + 1,
     })
+    assert.equal(tooBig.ok, false)
     assert.equal(tooBig.status, 413)
 
     const disabled = checkDocumentUploadPreflight({
@@ -319,6 +327,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       contentLength: pdfBytes.byteLength,
       uploadsDisabled: true,
     })
+    assert.equal(disabled.ok, false)
     assert.equal(disabled.errorCode, 'UPLOADS_DISABLED')
 
     // Successful upload + idempotent replay + conflict on different payload
@@ -333,6 +342,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       idempotencyKey: key,
       idempotencyStore: idem,
     })
+    assert.equal(created.ok, true)
     assert.equal(created.status, 201)
     assert.equal(created.document.title, 'Устав 2026')
 
@@ -351,6 +361,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       idempotencyKey: key,
       idempotencyStore: idem,
     })
+    assert.equal(replay.ok, true)
     assert.equal(replay.status, 200)
     assert.equal(replay.document.id, created.document.id)
 
@@ -364,6 +375,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       idempotencyKey: key,
       idempotencyStore: idem,
     })
+    assert.equal(collision.ok, false)
     assert.equal(collision.status, 409)
     assert.equal(collision.errorCode, 'IDEMPOTENCY_KEY_REUSED')
   })
@@ -379,6 +391,7 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
       user: ACCOUNTANT,
       body: { title: 'Hacked' },
     })
+    assert.equal(accEdit.ok, false)
     assert.equal(accEdit.status, 403)
 
     // Board edits only document_date -> clears to null while keeping title intact
@@ -394,12 +407,17 @@ describe('documents store access, privacy & upload/edit/delete contract (#022 & 
 
     // Board cannot delete
     const boardDel = deleteDocumentInStore({ store, documentId: targetId, user: BOARD })
+    assert.equal(boardDel.ok, false)
     assert.equal(boardDel.status, 403)
 
     // Chairman deletes -> item and file return 404
     const chairDel = deleteDocumentInStore({ store, documentId: targetId, user: CHAIRMAN })
     assert.equal(chairDel.ok, true)
-    assert.equal(getDocumentFromStore(store, targetId, CHAIRMAN).status, 404)
-    assert.equal(getDocumentFileFromStore(store, targetId, CHAIRMAN).status, 404)
+    const missingDoc = getDocumentFromStore(store, targetId, CHAIRMAN)
+    assert.equal(missingDoc.ok, false)
+    assert.equal(missingDoc.status, 404)
+    const missingFile = getDocumentFileFromStore(store, targetId, CHAIRMAN)
+    assert.equal(missingFile.ok, false)
+    assert.equal(missingFile.status, 404)
   })
 })

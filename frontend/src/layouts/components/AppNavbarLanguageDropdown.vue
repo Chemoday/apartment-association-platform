@@ -1,42 +1,39 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import type { Locale } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 
 const session = useSessionStore()
-const isOpen = ref(false)
-const rootRef = ref(null)
+const isOpen = ref<boolean>(false)
+const rootRef = ref<HTMLElement | null>(null)
 
-const localeNames = {
+const localeNames: Record<string, string> = {
   en: 'English (EN)',
   et: 'Eesti (ET)',
   ru: 'Русский (RU)',
 }
 
-const currentLocaleLabel = computed(() => {
+const currentLocaleLabel = computed<string>(() => {
   const current = session.supportedLocales.find((l) => l.code === session.lang)
   return current ? current.label : session.lang.toUpperCase()
 })
 
-function toggleDropdown() {
+function toggleDropdown(): void {
   isOpen.value = !isOpen.value
 }
 
-function closeDropdown() {
-  isOpen.value = false
-}
-
-function selectLocale(code) {
+function selectLocale(code: Locale | string): void {
   session.setLang(code)
   isOpen.value = false
 }
 
-function handleDocumentClick(event) {
-  if (rootRef.value && !rootRef.value.contains(event.target)) {
+function handleDocumentClick(event: MouseEvent): void {
+  if (rootRef.value && !rootRef.value.contains(event.target as Node | null)) {
     isOpen.value = false
   }
 }
 
-function handleKeydown(event) {
+function handleKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && isOpen.value) {
     isOpen.value = false
   }
