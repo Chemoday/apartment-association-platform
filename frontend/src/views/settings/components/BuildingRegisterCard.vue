@@ -189,8 +189,6 @@ function scrollToRegisterHashIfNeeded() {
   }
 }
 
-defineExpose({ scrollIntoViewIfHash: scrollToRegisterHashIfNeeded })
-
 function abortActiveRequests() {
   if (loadAbortController) {
     loadAbortController.abort()
@@ -597,6 +595,18 @@ onBeforeUnmount(() => {
   ++actionSeq
   abortActiveRequests()
   clearQuotaTimer()
+})
+
+const isDirty = computed(
+  () =>
+    isChairman.value &&
+    !isBusy.value &&
+    (Boolean(searchQuery.value.trim()) || candidates.value.length > 0 || Boolean(proposalFacts.value)),
+)
+
+defineExpose({
+  scrollIntoViewIfHash: scrollToRegisterHashIfNeeded,
+  isDirty,
 })
 </script>
 

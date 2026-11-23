@@ -2208,6 +2208,452 @@ describe('apiMiddleware Property & Building Register (#034 & #035)', () => {
   })
 })
 
+describe('apiMiddleware HTTP meter without a start (#038)', () => {
+  const CHAIRMAN_ID = '018f0000-0000-7000-8000-000000000101'
+  const ACCOUNTANT_ID = '018f0000-0000-7000-8000-000000000103'
+  const APT14_ID = '018f0000-0000-7000-8000-000000000314'
+  const START_METER_ID = '018f0000-0000-7000-8000-000000000519'
+  const NORMAL_METER_ID = '018f0000-0000-7000-8000-000000000516'
+
+  beforeEach(() => {
+    resetApiMiddlewareStateForTest()
+  })
+
+  it('handles START, downward correction, SUBMITTED, omit-keeps, null-drops, anomaly, PREVIOUS_VALUE_NOT_ALLOWED, matrix, and estimate-missing skip (#038)', async () => {
+    const mw = createApiMiddleware()
+
+    const postJson = async (url: string, userId: string, body?: any) => {
+      const payload = body !== undefined ? Buffer.from(JSON.stringify(body)) : undefined
+      return invokeMiddleware(mw, {
+        method: 'POST',
+        url,
+        headers: {
+          'x-demo-user-id': userId,
+          ...(payload
+            ? {
+                'content-type': 'application/json',
+                'content-length': String(payload.byteLength),
+              }
+            : {}),
+        },
+        ...(payload ? { chunks: [payload] } : {}),
+      })
+    }
+
+    // 1. Seeded meter 0519 on Apt 14 my-dashboard has needs_start: true, serial_number: null, previous_value: null
+    const dashBefore = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/meters/my-dashboard',
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    assert.equal(dashBefore.status, 200)
+    const m519 = dashBefore.json.apartments[0].meters.find((m: any) => m.meter_id === START_METER_ID)
+    assert.ok(m519)
+    assert.equal(m519.serial_number, null)
+    assert.equal(m519.previous_value, null)
+    assert.equal(m519.needs_start, true)
+    assert.equal(m519.next_submission?.needs_start, true)
+    assert.equal(m519.next_submission?.previous_value, null)
+
+    // 2. estimate-missing rejects OPEN_FOR_RESIDENTS with 409 PERIOD_NOT_IN_REVIEW,
+    //    then after moving to REVIEW_BY_BOARD skips 0519 into skipped_without_start
+    const estBeforeReview = await postJson(
+      '/api/v1/meters/periods/2026-10/estimate-missing',
+      ACCOUNTANT_ID,
+    )
+    assert.equal(estBeforeReview.status, 409)
+    assert.equal(estBeforeReview.json.error_code, 'PERIOD_NOT_IN_REVIEW')
+
+    const toReviewPayload = Buffer.from(JSON.stringify({ status: 'REVIEW_BY_BOARD' }))
+    const toReviewRes = await invokeMiddleware(mw, {
+      method: 'PATCH',
+      url: '/api/v1/meters/periods/2026-10/status',
+      headers: {
+        'x-demo-user-id': ACCOUNTANT_ID,
+        'content-type': 'application/json',
+        'content-length': String(toReviewPayload.byteLength),
+      },
+      chunks: [toReviewPayload],
+    })
+    assert.equal(toReviewRes.status, 200)
+    assert.equal(toReviewRes.json.status, 'REVIEW_BY_BOARD')
+
+    const estRes = await postJson('/api/v1/meters/periods/2026-10/estimate-missing', ACCOUNTANT_ID)
+    assert.equal(estRes.status, 200)
+    assert.deepEqual(estRes.json.skipped_without_start, [START_METER_ID])
+
+    // Reset before resident flow
+    resetApiMiddlewareStateForTest()
+
+    // 3. First reading without previous_value -> START (0.000 delta)
+    const startRes = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '1250',
+      confirmation_level: 0,
+    })
+    assert.equal(startRes.status, 200)
+    assert.equal(startRes.json.value, '1250.000')
+    assert.equal(startRes.json.consumption_delta, '0.000')
+    assert.equal(startRes.json.previous_origin, 'START')
+
+    // Matrix counts starting_meters = 1 for HOT_WATER and exposes needs_start
+    const matrixStart = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/meters/periods/2026-10/matrix',
+      headers: { 'x-demo-user-id': CHAIRMAN_ID },
+    })
+    assert.equal(matrixStart.status, 200)
+    const hotBal = matrixStart.json.balances.find((b: any) => b.resource_type === 'HOT_WATER')
+    assert.equal(hotBal.starting_meters, 1)
+
+    // 4. Correcting START reading downward (1250 -> 125) succeeds
+    const downRes = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '125',
+      confirmation_level: 0,
+    })
+    assert.equal(downRes.status, 200)
+    assert.equal(downRes.json.value, '125.000')
+    assert.equal(downRes.json.previous_origin, 'START')
+
+    // 5. Adding previous_value while keeping value 125 converts START -> SUBMITTED
+    const subRes = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '125',
+      previous_value: '120',
+      confirmation_level: 0,
+    })
+    assert.equal(subRes.status, 200)
+    assert.equal(subRes.json.previous_origin, 'SUBMITTED')
+    assert.equal(subRes.json.consumption_delta, '5.000')
+
+    // Consumption endpoint now includes Kitchen Hot (1.350) + Laundry Hot (5.000) = 6.350
+    const consSub = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: `/api/v1/meters/apartments/${APT14_ID}/consumption?months=12`,
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    const hotOctSub = consSub.json.resources
+      .find((r: any) => r.resource_type === 'HOT_WATER')
+      .months.find((m: any) => m.period_code === '2026-10')
+    assert.equal(hotOctSub.consumption, '6.350')
+
+    // 6. Omitting previous_value keeps 120.000; going below 120.000 returns 422 READING_BELOW_PREVIOUS
+    const omitRes = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '128',
+      confirmation_level: 0,
+    })
+    assert.equal(omitRes.status, 200)
+    assert.equal(omitRes.json.previous_origin, 'SUBMITTED')
+    assert.equal(omitRes.json.consumption_delta, '8.000')
+
+    const belowRes = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '110',
+      confirmation_level: 0,
+    })
+    assert.equal(belowRes.status, 422)
+    assert.equal(belowRes.json.error_code, 'READING_BELOW_PREVIOUS')
+    assert.equal(belowRes.json.previous_value, '120.000')
+
+    // 7. Anomaly 2-step flow with SUBMITTED previous_value
+    const a1 = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '200',
+      previous_value: '120',
+      confirmation_level: 0,
+    })
+    assert.equal(a1.status, 409)
+    assert.equal(a1.json.error_code, 'ANOMALY_CONFIRMATION_STEP_1')
+
+    const a2 = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '200',
+      previous_value: '120',
+      confirmation_level: 1,
+    })
+    assert.equal(a2.status, 409)
+    assert.equal(a2.json.error_code, 'ANOMALY_CONFIRMATION_STEP_2')
+
+    const aOk = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '200',
+      previous_value: '120',
+      confirmation_level: 2,
+    })
+    assert.equal(aOk.status, 200)
+    assert.equal(aOk.json.is_anomaly_confirmed, true)
+    assert.equal(aOk.json.previous_origin, 'SUBMITTED')
+
+    // 8. Explicit previous_value: null clears bill start -> START; consumption returns to Kitchen Hot only (1.350)
+    const clearRes = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: START_METER_ID,
+      period_code: '2026-10',
+      value: '110',
+      previous_value: null,
+      confirmation_level: 0,
+    })
+    assert.equal(clearRes.status, 200)
+    assert.equal(clearRes.json.previous_origin, 'START')
+    assert.equal(clearRes.json.consumption_delta, '0.000')
+
+    const consBack = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: `/api/v1/meters/apartments/${APT14_ID}/consumption?months=12`,
+      headers: { 'x-demo-user-id': RESIDENT_APT14_ID },
+    })
+    const hotOctBack = consBack.json.resources
+      .find((r: any) => r.resource_type === 'HOT_WATER')
+      .months.find((m: any) => m.period_code === '2026-10')
+    assert.equal(hotOctBack.consumption, '1.350')
+
+    // 9. Sending previous_value on normal meter returns 422 PREVIOUS_VALUE_NOT_ALLOWED
+    const notAllowedRes = await postJson('/api/v1/meters/readings', RESIDENT_APT14_ID, {
+      meter_id: NORMAL_METER_ID,
+      period_code: '2026-10',
+      value: '145',
+      previous_value: '140',
+      confirmation_level: 0,
+    })
+    assert.equal(notAllowedRes.status, 422)
+    assert.equal(notAllowedRes.json.error_code, 'PREVIOUS_VALUE_NOT_ALLOWED')
+
+    // 10. CSV export never outputs literal "null" for serial_number
+    const csvRes = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/meters/periods/2026-10/export-csv',
+      headers: { 'x-demo-user-id': CHAIRMAN_ID },
+    })
+    assert.equal(csvRes.status, 200)
+    assert.equal(csvRes.body.includes(',null,'), false)
+    assert.ok(csvRes.body.includes(',START'))
+  })
+
+  it('serves matrix starts, starting building meter 0993 (null master_total while missing/START), board override omit/null + reason, and privacy (#039)', async () => {
+    const mw = createApiMiddleware()
+    const START_MASTER_ID = '018f0000-0000-7000-8000-000000000993'
+    const SUBMITTED_APT_METER_ID = '018f0000-0000-7000-8000-000000000504'
+
+    const postJson = async (url: string, userId: string, body?: any) => {
+      const payload = body !== undefined ? Buffer.from(JSON.stringify(body)) : undefined
+      return invokeMiddleware(mw, {
+        method: 'POST',
+        url,
+        headers: {
+          'x-demo-user-id': userId,
+          ...(payload
+            ? {
+                'content-type': 'application/json',
+                'content-length': String(payload.byteLength),
+              }
+            : {}),
+        },
+        ...(payload ? { chunks: [payload] } : {}),
+      })
+    }
+
+    // 1. Matrix exposes starting_meters=1 on COLD_WATER (Apt 01 0520 START), SUBMITTED on Apt 02 0504,
+    //    needs_start master meter 0993 with HOT_WATER master_total=null, and zero resident names
+    const mat0 = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/meters/periods/2026-10/matrix',
+      headers: { 'x-demo-user-id': CHAIRMAN_ID },
+    })
+    assert.equal(mat0.status, 200)
+    assert.equal(mat0.body.includes('Kati Kask'), false)
+    assert.equal(mat0.body.includes('Peeter Tamm'), false)
+    assert.equal(mat0.body.includes('Martin Saar'), false)
+
+    const cold0 = mat0.json.balances.find((b: any) => b.resource_type === 'COLD_WATER')
+    const hot0 = mat0.json.balances.find((b: any) => b.resource_type === 'HOT_WATER')
+    assert.equal(cold0.master_total, '28.500')
+    assert.equal(cold0.starting_meters, 1)
+    assert.equal(hot0.master_total, null)
+    assert.equal(hot0.unallocated_loss, null)
+
+    const mm993 = mat0.json.master_meters.find((m: any) => m.meter_id === START_MASTER_ID)
+    assert.ok(mm993)
+    assert.equal(mm993.needs_start, true)
+    assert.equal(mm993.previous_value, null)
+
+    // 2. Submit master meter 0993 without bill -> START; HOT_WATER master_total stays null
+    const mStart = await postJson('/api/v1/meters/readings', CHAIRMAN_ID, {
+      meter_id: START_MASTER_ID,
+      period_code: '2026-10',
+      value: '500',
+      confirmation_level: 0,
+    })
+    assert.equal(mStart.status, 200)
+    assert.equal(mStart.json.previous_origin, 'START')
+
+    const mat1 = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/meters/periods/2026-10/matrix',
+      headers: { 'x-demo-user-id': CHAIRMAN_ID },
+    })
+    assert.equal(
+      mat1.json.balances.find((b: any) => b.resource_type === 'HOT_WATER').master_total,
+      null,
+    )
+
+    // 3. Override master meter 0993 with bill previous_value -> requires reason, then computes master_total 25.400
+    const mNoReason = await postJson('/api/v1/meters/readings', CHAIRMAN_ID, {
+      meter_id: START_MASTER_ID,
+      period_code: '2026-10',
+      value: '510',
+      previous_value: '500',
+      confirmation_level: 0,
+    })
+    assert.equal(mNoReason.status, 422)
+    assert.equal(mNoReason.json.error_code, 'REASON_REQUIRED')
+
+    const mSub = await postJson('/api/v1/meters/readings', CHAIRMAN_ID, {
+      meter_id: START_MASTER_ID,
+      period_code: '2026-10',
+      value: '510',
+      previous_value: '500',
+      reason: 'Initial paper bill verified',
+      confirmation_level: 0,
+    })
+    assert.equal(mSub.status, 200)
+    assert.equal(mSub.json.previous_origin, 'SUBMITTED')
+    assert.equal(mSub.json.consumption_delta, '10.000')
+
+    const mat2 = await invokeMiddleware(mw, {
+      method: 'GET',
+      url: '/api/v1/meters/periods/2026-10/matrix',
+      headers: { 'x-demo-user-id': CHAIRMAN_ID },
+    })
+    const hot2 = mat2.json.balances.find((b: any) => b.resource_type === 'HOT_WATER')
+    assert.equal(hot2.master_total, '25.400')
+    assert.notEqual(hot2.unallocated_loss, null)
+
+    // 4. Board override on SUBMITTED meter 0504: omit keeps bill; explicit null converts to START
+    const keepRes = await postJson('/api/v1/meters/readings', ACCOUNTANT_ID, {
+      meter_id: SUBMITTED_APT_METER_ID,
+      period_code: '2026-10',
+      value: '98.5',
+      reason: 'Verified reading',
+      confirmation_level: 0,
+    })
+    assert.equal(keepRes.status, 200)
+    assert.equal(keepRes.json.previous_origin, 'SUBMITTED')
+    assert.equal(keepRes.json.consumption_delta, '3.000')
+
+    const dropRes = await postJson('/api/v1/meters/readings', ACCOUNTANT_ID, {
+      meter_id: SUBMITTED_APT_METER_ID,
+      period_code: '2026-10',
+      value: '98.5',
+      previous_value: null,
+      reason: 'Bill reading could not be verified',
+      confirmation_level: 0,
+    })
+    assert.equal(dropRes.status, 200)
+    assert.equal(dropRes.json.previous_origin, 'START')
+    assert.equal(dropRes.json.consumption_delta, '0.000')
+  })
+
+  it('enforces RBAC (BOARD 403 on estimate/status/non-own, USER 403 on matrix/csv), 404 PERIOD_NOT_FOUND, 409 INVALID_PERIOD_TRANSITION, and 15-column CSV with MASTER rows (P1-8, P2-6)', async () => {
+    const mw = createApiMiddleware()
+    const BOARD_ID = '018f0000-0000-7000-8000-000000000105'
+    const sendJsonReq = async (method: string, url: string, userId: string, body?: any) => {
+      const payload = body !== undefined ? Buffer.from(JSON.stringify(body)) : undefined
+      return invokeMiddleware(mw, {
+        method,
+        url,
+        headers: {
+          'x-demo-user-id': userId,
+          ...(payload
+            ? {
+                'content-type': 'application/json',
+                'content-length': String(payload.byteLength),
+              }
+            : {}),
+        },
+        ...(payload ? { chunks: [payload] } : {}),
+      })
+    }
+
+    // 1. BOARD cannot call estimate-missing, PATCH status, or override another apartment's meter
+    const boardEst = await sendJsonReq(
+      'POST',
+      '/api/v1/meters/periods/2026-10/estimate-missing',
+      BOARD_ID,
+    )
+    assert.equal(boardEst.status, 403)
+    assert.equal(boardEst.json.error_code, 'FORBIDDEN')
+
+    const boardStatus = await sendJsonReq('PATCH', '/api/v1/meters/periods/2026-10/status', BOARD_ID, {
+      status: 'REVIEW_BY_BOARD',
+    })
+    assert.equal(boardStatus.status, 403)
+    assert.equal(boardStatus.json.error_code, 'FORBIDDEN')
+
+    const boardOverride = await sendJsonReq('POST', '/api/v1/meters/readings', BOARD_ID, {
+      meter_id: '018f0000-0000-7000-8000-000000000501',
+      period_code: '2026-10',
+      value: '120',
+      confirmation_level: 0,
+    })
+    assert.equal(boardOverride.status, 403)
+    assert.equal(boardOverride.json.error_code, 'FORBIDDEN')
+
+    // 2. Unknown period returns 404 PERIOD_NOT_FOUND across all period routes
+    for (const [method, url, body] of [
+      ['GET', '/api/v1/meters/periods/2099-01/matrix', undefined],
+      ['POST', '/api/v1/meters/periods/2099-01/estimate-missing', undefined],
+      ['PATCH', '/api/v1/meters/periods/2099-01/status', { status: 'REVIEW_BY_BOARD' }],
+      ['GET', '/api/v1/meters/periods/2099-01/export-csv', undefined],
+    ] as const) {
+      const r = await sendJsonReq(method, url, CHAIRMAN_ID, body)
+      assert.equal(r.status, 404, `${method} ${url} should return 404`)
+      assert.equal(r.json.error_code, 'PERIOD_NOT_FOUND')
+    }
+
+    // 3. PATCH status rejects multi-step jump OPEN_FOR_RESIDENTS -> LOCKED with 409 INVALID_PERIOD_TRANSITION
+    const badJump = await sendJsonReq('PATCH', '/api/v1/meters/periods/2026-10/status', CHAIRMAN_ID, {
+      status: 'LOCKED',
+    })
+    assert.equal(badJump.status, 409)
+    assert.equal(badJump.json.error_code, 'INVALID_PERIOD_TRANSITION')
+    assert.deepEqual(badJump.json.allowed_statuses, ['REVIEW_BY_BOARD'])
+
+    const badStatus = await sendJsonReq(
+      'PATCH',
+      '/api/v1/meters/periods/2026-10/status',
+      CHAIRMAN_ID,
+      { status: 'UNKNOWN' },
+    )
+    assert.equal(badStatus.status, 422)
+    assert.equal(badStatus.json.error_code, 'VALIDATION_ERROR')
+
+    // 4. CSV export uses 15-column format with MASTER rows and hyphenated filename
+    const csvRes = await sendJsonReq(
+      'GET',
+      '/api/v1/meters/periods/2026-10/export-csv',
+      CHAIRMAN_ID,
+    )
+    assert.equal(csvRes.status, 200)
+    assert.equal(
+      csvRes.headers['content-disposition'],
+      'attachment; filename="readings-2026-10.csv"',
+    )
+    const lines = csvRes.body.split('\n')
+    assert.equal(lines[0].split(',').length, 15)
+    assert.ok(lines[0].endsWith(',previous_origin'))
+    assert.ok(lines.some((line: string) => line.startsWith('2026-10,,MASTER,')))
+  })
+})
+
 
 
 

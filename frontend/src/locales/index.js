@@ -1,8 +1,7 @@
+import { ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import { formatMonthName } from '../utils/dates.js'
 import en from './en.js'
-import et from './et.js'
-import ru from './ru.js'
 
 export const SUPPORTED_LOCALES = [
   { code: 'en', label: 'EN' },
@@ -11,6 +10,13 @@ export const SUPPORTED_LOCALES = [
 ]
 
 const LANG_KEY = 'hoa_ui_lang'
+
+/**
+ * Reactive counter incremented whenever a lazy locale dictionary chunk finishes loading.
+ * Consumed by `session.t`, `localizeError`, `useTranslations`, and layout title watchers
+ * so UI and `document.title` re-evaluate immediately when `et.js` / `ru.js` arrives.
+ */
+export const localeMessagesRevision = ref(0)
 
 export function readStoredLocale() {
   try {
@@ -24,11 +30,22 @@ export function readStoredLocale() {
   return 'en'
 }
 
+/** @type {Record<'en' | 'et' | 'ru', any>} */
 const MESSAGES = {
   en,
-  et,
-  ru,
+  et: {},
+  ru: {},
 }
+
+const loadedLocales = new Set(['en'])
+
+const LOCALE_LOADERS = {
+  en: async () => en,
+  et: () => import('./et.js').then((mod) => mod.default),
+  ru: () => import('./ru.js').then((mod) => mod.default),
+}
+
+const inFlightLoads = new Map()
 
 export const i18n = createI18n({
   legacy: false,
@@ -38,17 +55,83 @@ export const i18n = createI18n({
   messages: MESSAGES,
 })
 
-/**
- * Synchronize vue-i18n locale, localStorage, and document.documentElement.lang.
- * @param {string} newLocale
- * @returns {string}
- */
-export function setI18nLocale(newLocale) {
+export function normalizeLocaleCode(newLocale) {
   const code =
     newLocale && typeof newLocale === 'object' && typeof newLocale.code === 'string'
       ? newLocale.code
       : newLocale
-  const valid = SUPPORTED_LOCALES.some((l) => l.code === code) ? code : 'en'
+  return SUPPORTED_LOCALES.some((l) => l.code === code) ? code : 'en'
+}
+
+export function isLocaleLoaded(localeCode) {
+  return loadedLocales.has(normalizeLocaleCode(localeCode))
+}
+
+/**
+ * Test-only helper to simulate a cold (unloaded) lazy locale chunk in unit tests.
+ * @param {'et' | 'ru'} localeCode
+ * @param {(() => Promise<Record<string, any>>) | null} [customLoader]
+ */
+export function evictLocaleForTest(localeCode, customLoader = null) {
+  if (localeCode !== 'et' && localeCode !== 'ru') return
+  loadedLocales.delete(localeCode)
+  inFlightLoads.delete(localeCode)
+  MESSAGES[localeCode] = {}
+  i18n.global.setLocaleMessage(localeCode, {})
+  if (customLoader) {
+    LOCALE_LOADERS[localeCode] = customLoader
+  } else if (localeCode === 'et') {
+    LOCALE_LOADERS.et = () => import('./et.js').then((mod) => mod.default)
+  } else {
+    LOCALE_LOADERS.ru = () => import('./ru.js').then((mod) => mod.default)
+  }
+  localeMessagesRevision.value += 1
+}
+
+/**
+ * Lazy-load a locale dictionary chunk on demand and register it with vue-i18n.
+ * @param {string} localeCode
+ * @returns {Promise<Record<string, any>>}
+ */
+export async function ensureLocaleLoaded(localeCode) {
+  const valid = normalizeLocaleCode(localeCode)
+  if (loadedLocales.has(valid)) return MESSAGES[valid]
+  if (inFlightLoads.has(valid)) return inFlightLoads.get(valid)
+
+  const loader = LOCALE_LOADERS[valid]
+  const promise = loader()
+    .then((dict) => {
+      MESSAGES[valid] = dict
+      loadedLocales.add(valid)
+      i18n.global.setLocaleMessage(valid, dict)
+      localeMessagesRevision.value += 1
+      return dict
+    })
+    .finally(() => {
+      inFlightLoads.delete(valid)
+    })
+
+  inFlightLoads.set(valid, promise)
+  return promise
+}
+
+// Under Node/Vite-SSR test runners, preload et & ru so synchronous assertions work,
+// while production client Vite builds replace import.meta.env.SSR with false and code-split them.
+if (typeof import.meta.env === 'undefined' || import.meta.env.SSR) {
+  await Promise.all([ensureLocaleLoaded('et'), ensureLocaleLoaded('ru')])
+}
+
+/**
+ * Synchronize vue-i18n locale, localStorage, and document.documentElement.lang.
+ * Triggers lazy dictionary loading automatically if the locale chunk is not yet loaded.
+ * @param {string} newLocale
+ * @returns {string}
+ */
+export function setI18nLocale(newLocale) {
+  const valid = normalizeLocaleCode(newLocale)
+  if (!loadedLocales.has(valid)) {
+    ensureLocaleLoaded(valid).catch(() => {})
+  }
   i18n.global.locale.value = valid
   try {
     localStorage.setItem(LANG_KEY, valid)
@@ -91,9 +174,12 @@ export function localizeError(errorOrCode, payload = {}, lang) {
     return localizeError(code, mergedPayload, resolvedLang)
   }
 
+  // Touch reactive revision so computed callers (e.g. ErrorCard) re-evaluate when lazy locale loads
+  void localeMessagesRevision.value
   const errorCode = errorOrCode
   const activeLocale = resolvedLang || i18n.global.locale.value || 'en'
-  const dict = MESSAGES[activeLocale]?.errors || MESSAGES.en.errors
+  const dict =
+    (loadedLocales.has(activeLocale) ? MESSAGES[activeLocale]?.errors : null) || MESSAGES.en.errors
   payload = normalizedPayload
 
   let key = dict[errorCode] ? errorCode : 'DEFAULT'
@@ -158,7 +244,8 @@ export function localizeError(errorOrCode, payload = {}, lang) {
  * @param {string} [lang]
  */
 export function useTranslations(lang) {
+  void localeMessagesRevision.value
   const activeLocale = lang || i18n.global.locale.value || 'en'
-  return MESSAGES[activeLocale] || MESSAGES.en
+  return loadedLocales.has(activeLocale) ? MESSAGES[activeLocale] : MESSAGES.en
 }
 

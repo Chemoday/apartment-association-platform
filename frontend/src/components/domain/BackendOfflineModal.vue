@@ -1,16 +1,16 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onUnmounted } from 'vue'
 import { RECONNECT_INTERVAL_MS, useSessionStore } from '@/stores/session.js'
 
 const session = useSessionStore()
 
-const isOpen = computed(() => session.backendOffline && !session.offlineDemoMode)
+const isOpen = computed<boolean>(() => session.backendOffline && !session.offlineDemoMode)
 
-const secondsRemaining = computed(() =>
+const secondsRemaining = computed<number>(() =>
   Math.max(0, Math.ceil(session.retryCountdownMs / 1000)),
 )
 
-const progressPercent = computed(() => {
+const progressPercent = computed<number>(() => {
   const elapsed = RECONNECT_INTERVAL_MS - session.retryCountdownMs
   const pct = (elapsed / RECONNECT_INTERVAL_MS) * 100
   return Math.max(0, Math.min(100, pct))

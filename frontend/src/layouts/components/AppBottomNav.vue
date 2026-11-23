@@ -1,6 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, type RouteRecordRaw } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { unread } from '@/composables/useUnreadCount.js'
@@ -12,10 +12,12 @@ const session = useSessionStore()
 const { buildingRole } = useRole()
 const { canShowChat, recentCount: chatRecentCount } = useChatState()
 
-const activeSheetGroupId = ref(null)
+const activeSheetGroupId = ref<string | null>(null)
 
-const visibleNavRoutes = computed(() =>
-  APP_ROUTES.filter((r) => {
+type NavRouteItem = RouteRecordRaw & { meta: NonNullable<RouteRecordRaw['meta']> }
+
+const visibleNavRoutes = computed<NavRouteItem[]>(() =>
+  APP_ROUTES.filter((r): r is NavRouteItem => {
     if (!r.meta?.navKey) return false
     if (r.meta?.requiresChatEnabled && !canShowChat.value) {
       return false
@@ -47,24 +49,24 @@ const activeSheetGroup = computed(
   () => visibleNavGroups.value.find((g) => g.id === activeSheetGroupId.value) || null,
 )
 
-function isRouteActive(item) {
+function isRouteActive(item: RouteRecordRaw): boolean {
   if (item.path === '/') return route.path === '/'
   return route.path === item.path || route.path.startsWith(`${item.path}/`)
 }
 
-function isGroupActive(group) {
+function isGroupActive(group: { items: RouteRecordRaw[] }): boolean {
   return group.items.some((item) => isRouteActive(item))
 }
 
-function toggleSheet(groupId) {
+function toggleSheet(groupId: string): void {
   activeSheetGroupId.value = activeSheetGroupId.value === groupId ? null : groupId
 }
 
-function closeSheet() {
+function closeSheet(): void {
   activeSheetGroupId.value = null
 }
 
-function handleKeydown(e) {
+function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && activeSheetGroupId.value) {
     activeSheetGroupId.value = null
   }

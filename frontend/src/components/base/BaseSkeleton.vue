@@ -1,10 +1,12 @@
-<script setup>
-defineProps({
-  lines: {
-    type: Number,
-    default: 3,
+<script setup lang="ts">
+withDefaults(
+  defineProps<{
+    lines?: number
+  }>(),
+  {
+    lines: 3,
   },
-})
+)
 </script>
 
 <template>

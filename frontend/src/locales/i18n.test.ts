@@ -365,7 +365,117 @@ test('localizeError translates all #020 and #025 photo error codes and #021 rete
     assert.ok(i18n.global.t('associationSettings.registry.findBtn', {}, { locale }).length > 2)
     assert.ok(i18n.global.t('associationSettings.registry.acceptBtn', {}, { locale }).length > 2)
     assert.ok(i18n.global.t('associationSettings.registry.removeConfirmBody', {}, { locale }).length > 5)
+
+    // #038 & #039 Meter starts and estimate error codes
+    const prevNotAllowed = localizeError('PREVIOUS_VALUE_NOT_ALLOWED', {}, locale)
+    assert.ok(prevNotAllowed.length > 10)
+    assert.notEqual(prevNotAllowed, defaultText)
+    const estOutOfRange = localizeError('ESTIMATE_OUT_OF_RANGE', {}, locale)
+    assert.ok(estOutOfRange.length > 10)
+    assert.notEqual(estOutOfRange, defaultText)
+    for (const key of [
+      'readings.meterCard.lastBillReadingLabel',
+      'readings.meterCard.lastBillReadingPlaceholder',
+      'readings.meterCard.lastBillReadingHelp',
+      'readings.meterCard.optionalTag',
+      'readings.meterCard.noStartYet',
+      'readings.meterCard.originStart',
+      'readings.meterCard.originSubmitted',
+      'matrix.originStart',
+      'matrix.originSubmitted',
+      'matrix.coldWaterSubtotal',
+      'matrix.hotWaterSubtotal',
+      'apartments.originStart',
+      'apartments.originSubmitted',
+      'accounting.estimateSkippedReason',
+      'accounting.noPeriodsTitle',
+      'accounting.noPeriodsDesc',
+      'accounting.noBalancesDesc',
+      'masterKpi.noBuildingMeters',
+    ]) {
+      assert.ok(i18n.global.t(key, {}, { locale }).length > 2, `Missing ${locale}.${key}`)
+    }
+    assert.ok(
+      i18n.global.t('accounting.balanceIncompleteOne', { count: 1 }, { locale }).includes('1'),
+    )
+    assert.ok(
+      i18n.global.t('accounting.balanceIncompleteFew', { count: 2 }, { locale }).includes('2'),
+    )
+    assert.ok(
+      i18n.global.t('accounting.balanceIncompleteMany', { count: 5 }, { locale }).includes('5'),
+    )
+    assert.ok(
+      i18n.global
+        .t(
+          'accounting.estimateSkippedItem',
+          { apartment: '14', resource: 'Hot Water' },
+          { locale },
+        )
+        .includes('14'),
+    )
   }
+})
+
+test('cold lazy-loaded locale increments localeMessagesRevision, updates reactive computed localizeError, and handles chunk failure gracefully (#046 CTO audit P1-1 & P1-2)', async () => {
+  const { computed } = await import('vue')
+  const { createPinia, setActivePinia } = await import('pinia')
+  const { useSessionStore } = await import('../stores/session.js')
+  const {
+    ensureLocaleLoaded,
+    evictLocaleForTest,
+    isLocaleLoaded,
+    localeMessagesRevision,
+  } = await import('./index.js')
+
+  setActivePinia(createPinia())
+  const session = useSessionStore()
+  await session.setLang('en')
+
+  // 1. Simulate cold unloaded 'et' locale with delayed async loader
+  let resolveEtChunk!: (dict: Record<string, any>) => void
+  evictLocaleForTest(
+    'et',
+    () =>
+      new Promise((resolve) => {
+        resolveEtChunk = resolve
+      }),
+  )
+  assert.equal(isLocaleLoaded('et'), false)
+
+  const revBefore = localeMessagesRevision.value
+  const reactiveErr = computed(() =>
+    localizeError('READING_BELOW_PREVIOUS', { previous_value: '84.100' }, session.lang),
+  )
+
+  // Start switching to 'et' while chunk is still in-flight: falls back to English temporarily
+  const switchPromise = session.setLang('et')
+  assert.equal(
+    reactiveErr.value,
+    'Reading cannot be lower than the previous recorded value (84.100).',
+  )
+
+  // Resolve the lazy 'et' chunk: computed must automatically re-evaluate to Estonian!
+  resolveEtChunk(et)
+  await switchPromise
+  assert.equal(isLocaleLoaded('et'), true)
+  assert.ok(localeMessagesRevision.value > revBefore)
+  assert.equal(
+    reactiveErr.value,
+    'Näit ei saa olla väiksem kui eelmine kinnitatud näit (84.100).',
+  )
+
+  // 2. Simulate network failure on cold 'ru' chunk: setLang must not reject and must fall back cleanly to 'et'
+  evictLocaleForTest('ru', async () => {
+    throw new Error('Failed to fetch dynamically imported module ru.js')
+  })
+  const fallbackLang = await session.setLang('ru')
+  assert.equal(fallbackLang, 'et')
+  assert.equal(session.lang, 'et')
+
+  // Restore 'ru' dictionary for any subsequent tests
+  evictLocaleForTest('ru', null)
+  await ensureLocaleLoaded('ru')
+  await session.setLang('en')
 })
 
 

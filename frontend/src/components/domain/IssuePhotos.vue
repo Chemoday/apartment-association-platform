@@ -1,5 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { asApiErrorLike } from '@/api/client.js'
+import type { IssuePhoto } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 import { localizeError } from '@/locales/index.js'
 import { formatDate } from '@/utils/dates.js'
@@ -14,64 +16,64 @@ import {
   scaleQueuedPhotoItem,
   shouldShowIssuePhotosSection,
   uploadQueuedPhotoItem,
+  type QueuedPhotoItem,
 } from '@/utils/issuePhotoQueue.js'
-import {
-  fetchIssuePhotoBlob,
-  deleteIssuePhoto,
-} from '@/api/endpoints/issues.js'
+import { fetchIssuePhotoBlob, deleteIssuePhoto } from '@/api/endpoints/issues.js'
 
 const MAX_PHOTOS = 3
 
-const props = defineProps({
-  issueId: {
-    type: String,
-    required: true,
-  },
-  photos: {
-    type: Array,
-    default: () => [],
-  },
-  canAddPhoto: {
-    type: Boolean,
-    default: false,
-  },
-  issueOpen: {
-    type: Boolean,
-    default: undefined,
-  },
-  photosDeleteAt: {
-    type: String,
-    default: null,
-  },
-})
+type PhotoQueueTask =
+  | { kind: 'scale-and-upload'; localId: string; file: File; issueId: string }
+  | { kind: 'upload'; localId: string; issueId: string }
 
-const emit = defineEmits(['uploaded', 'deleted', 'photo-gone', 'sync-needed'])
+const props = withDefaults(
+  defineProps<{
+    issueId: string
+    photos?: IssuePhoto[]
+    canAddPhoto?: boolean
+    issueOpen?: boolean
+    photosDeleteAt?: string | null
+  }>(),
+  {
+    photos: () => [],
+    canAddPhoto: false,
+    issueOpen: undefined,
+    photosDeleteAt: null,
+  },
+)
+
+const emit = defineEmits<{
+  uploaded: [photo: IssuePhoto]
+  deleted: [photoId: string]
+  'photo-gone': [photoId: string]
+  'sync-needed': []
+}>()
 
 const session = useSessionStore()
 
-const cameraInputRef = ref(null)
-const galleryInputRef = ref(null)
+const cameraInputRef = ref<HTMLInputElement | null>(null)
+const galleryInputRef = ref<HTMLInputElement | null>(null)
 
 // Cached blob URLs per photo id, revoked when photo leaves or component unmounts
-const thumbUrls = ref({})
-const displayUrls = ref({})
-const thumbLoading = ref({})
-const thumbErrors = ref({})
+const thumbUrls = ref<Record<string, string>>({})
+const displayUrls = ref<Record<string, string>>({})
+const thumbLoading = ref<Record<string, boolean>>({})
+const thumbErrors = ref<Record<string, boolean>>({})
 
 // Active upload queue for photos picked on the detail page
-const uploadQueue = ref([])
+const uploadQueue = ref<QueuedPhotoItem[]>([])
 
 // Delete confirmation & in-flight tracking
-const confirmDeletePhotoId = ref('')
-const deletingPhotoId = ref('')
-const actionError = ref('')
+const confirmDeletePhotoId = ref<string>('')
+const deletingPhotoId = ref<string>('')
+const actionError = ref<string>('')
 
 // Lightbox viewer state
-const viewerPhotoId = ref('')
-const viewerLoading = ref(false)
-const viewerError = ref('')
+const viewerPhotoId = ref<string>('')
+const viewerLoading = ref<boolean>(false)
+const viewerError = ref<string>('')
 
-const hasAnythingToShow = computed(() =>
+const hasAnythingToShow = computed<boolean>(() =>
   shouldShowIssuePhotosSection({
     photosCount: props.photos ? props.photos.length : 0,
     canAddPhoto: props.canAddPhoto,
@@ -81,23 +83,23 @@ const hasAnythingToShow = computed(() =>
   }),
 )
 
-const remainingSlots = computed(() => {
+const remainingSlots = computed<number>(() => {
   const existing = Array.isArray(props.photos) ? props.photos.length : 0
   const pending = uploadQueue.value.filter((q) => !q.unrecoverable).length
   return Math.max(0, MAX_PHOTOS - existing - pending)
 })
 
-const formattedDeleteDate = computed(() => {
+const formattedDeleteDate = computed<string>(() => {
   if (!props.photosDeleteAt) return ''
   return formatDate(props.photosDeleteAt, session.lang || 'en')
 })
 
-const viewerPhotoIndex = computed(() => {
+const viewerPhotoIndex = computed<number>(() => {
   if (!viewerPhotoId.value || !Array.isArray(props.photos)) return -1
   return props.photos.findIndex((p) => p.id === viewerPhotoId.value)
 })
 
-const viewerSrc = computed(() => {
+const viewerSrc = computed<string>(() => {
   if (!viewerPhotoId.value) return ''
   if (displayUrls.value[viewerPhotoId.value]) {
     return displayUrls.value[viewerPhotoId.value]
@@ -111,13 +113,13 @@ const viewerSrc = computed(() => {
 let isUnmounted = false
 let issueAbortController = new AbortController()
 let uploadAbortController = new AbortController()
-const displayInFlight = new Map()
-const pendingQueueTasks = []
-let drainQueuePromise = null
+const displayInFlight = new Map<string, Promise<void>>()
+const pendingQueueTasks: PhotoQueueTask[] = []
+let drainQueuePromise: Promise<unknown> | null = null
 let lastSyncAbortReason = ''
 let lastPickLimitBanner = false
 
-function resetUploadAbortController() {
+function resetUploadAbortController(): void {
   pendingQueueTasks.length = 0
   try {
     uploadAbortController.abort()
@@ -127,7 +129,7 @@ function resetUploadAbortController() {
   uploadAbortController = new AbortController()
 }
 
-function resetIssueAbortController() {
+function resetIssueAbortController(): void {
   try {
     issueAbortController.abort()
   } catch {
@@ -138,7 +140,7 @@ function resetIssueAbortController() {
   resetUploadAbortController()
 }
 
-function revokePhotoUrls(photoId) {
+function revokePhotoUrls(photoId: string): void {
   if (thumbUrls.value[photoId]) {
     safeRevokeObjectUrl(thumbUrls.value[photoId])
     const next = { ...thumbUrls.value }
@@ -153,7 +155,7 @@ function revokePhotoUrls(photoId) {
   }
 }
 
-function revokeAllCachedPhotoUrls() {
+function revokeAllCachedPhotoUrls(): void {
   const allIds = new Set([
     ...Object.keys(thumbUrls.value),
     ...Object.keys(displayUrls.value),
@@ -163,25 +165,25 @@ function revokeAllCachedPhotoUrls() {
   }
 }
 
-function setCachedThumbUrl(photoId, blob) {
+function setCachedThumbUrl(photoId: string, blob: Blob): void {
   const prev = thumbUrls.value[photoId]
   const nextUrl = URL.createObjectURL(blob)
   if (prev) safeRevokeObjectUrl(prev)
   thumbUrls.value = { ...thumbUrls.value, [photoId]: nextUrl }
 }
 
-function setCachedDisplayUrl(photoId, blob) {
+function setCachedDisplayUrl(photoId: string, blob: Blob): void {
   const prev = displayUrls.value[photoId]
   const nextUrl = URL.createObjectURL(blob)
   if (prev) safeRevokeObjectUrl(prev)
   displayUrls.value = { ...displayUrls.value, [photoId]: nextUrl }
 }
 
-function formatPhotoError(err) {
+function formatPhotoError(err: unknown): string {
   return formatPhotoErrorMessage(err, session.t, session.lang)
 }
 
-async function ensureThumbnailLoaded(photo) {
+async function ensureThumbnailLoaded(photo: IssuePhoto): Promise<void> {
   if (isUnmounted || !photo?.id || !props.issueId) return
   if (thumbUrls.value[photo.id] || thumbLoading.value[photo.id]) return
 
@@ -201,16 +203,17 @@ async function ensureThumbnailLoaded(photo) {
       (props.photos || []).some((p) => p.id === photo.id)
     if (!stillExists) return
     setCachedThumbUrl(photo.id, blob)
-  } catch (err) {
+  } catch (err: unknown) {
+    const errLike = asApiErrorLike(err)
     if (
       isUnmounted ||
       signal.aborted ||
       props.issueId !== targetIssueId ||
-      err?.errorCode === 'REQUEST_ABORTED'
+      errLike.errorCode === 'REQUEST_ABORTED'
     ) {
       return
     }
-    if (err?.status === 404 || err?.errorCode === 'PHOTO_NOT_FOUND') {
+    if (errLike.status === 404 || errLike.errorCode === 'PHOTO_NOT_FOUND') {
       emit('photo-gone', photo.id)
     } else {
       thumbErrors.value = { ...thumbErrors.value, [photo.id]: true }
@@ -222,7 +225,7 @@ async function ensureThumbnailLoaded(photo) {
   }
 }
 
-function handleThumbImgError(photoId) {
+function handleThumbImgError(photoId: string): void {
   if (thumbUrls.value[photoId]) {
     safeRevokeObjectUrl(thumbUrls.value[photoId])
     const next = { ...thumbUrls.value }
@@ -232,7 +235,7 @@ function handleThumbImgError(photoId) {
   thumbErrors.value = { ...thumbErrors.value, [photoId]: true }
 }
 
-function handleViewerImgError() {
+function handleViewerImgError(): void {
   const photoId = viewerPhotoId.value
   if (photoId && displayUrls.value[photoId]) {
     safeRevokeObjectUrl(displayUrls.value[photoId])
@@ -335,7 +338,7 @@ watch(
   { immediate: true },
 )
 
-async function openViewer(photoId) {
+async function openViewer(photoId: string): Promise<void> {
   if (isUnmounted || !photoId) return
   const targetIssueId = props.issueId
   const signal = issueAbortController.signal
@@ -359,16 +362,17 @@ async function openViewer(photoId) {
           (props.photos || []).some((p) => p.id === photoId)
         if (!stillExists) return
         setCachedDisplayUrl(photoId, blob)
-      } catch (err) {
+      } catch (err: unknown) {
+        const errLike = asApiErrorLike(err)
         if (
           isUnmounted ||
           signal.aborted ||
           props.issueId !== targetIssueId ||
-          err?.errorCode === 'REQUEST_ABORTED'
+          errLike.errorCode === 'REQUEST_ABORTED'
         ) {
           return
         }
-        if (err?.status === 404 || err?.errorCode === 'PHOTO_NOT_FOUND') {
+        if (errLike.status === 404 || errLike.errorCode === 'PHOTO_NOT_FOUND') {
           if (viewerPhotoId.value === photoId) {
             viewerPhotoId.value = ''
           }
@@ -388,24 +392,24 @@ async function openViewer(photoId) {
   await pending
 }
 
-function closeViewer() {
+function closeViewer(): void {
   viewerPhotoId.value = ''
   viewerError.value = ''
   viewerLoading.value = false
 }
 
-function stepViewer(delta) {
+function stepViewer(delta: number): void {
   const list = props.photos || []
   if (list.length <= 1 || viewerPhotoIndex.value === -1) return
   const nextIndex = (viewerPhotoIndex.value + delta + list.length) % list.length
   openViewer(list[nextIndex].id)
 }
 
-function getQueueItem(localId) {
+function getQueueItem(localId: string): QueuedPhotoItem | undefined {
   return uploadQueue.value.find((q) => q.localId === localId)
 }
 
-function updateQueueItem(localId, patch) {
+function updateQueueItem(localId: string, patch: Partial<QueuedPhotoItem>): void {
   const idx = uploadQueue.value.findIndex((q) => q.localId === localId)
   if (idx === -1) return
   const updated = [...uploadQueue.value]
@@ -413,7 +417,7 @@ function updateQueueItem(localId, patch) {
   uploadQueue.value = updated
 }
 
-function removeQueueItem(localId) {
+function removeQueueItem(localId: string): void {
   for (let i = pendingQueueTasks.length - 1; i >= 0; i -= 1) {
     if (pendingQueueTasks[i].localId === localId) {
       pendingQueueTasks.splice(i, 1)
@@ -426,8 +430,8 @@ function removeQueueItem(localId) {
   uploadQueue.value = uploadQueue.value.filter((q) => q.localId !== localId)
 }
 
-function handleWholeIssueUploadAbort(err) {
-  lastSyncAbortReason = err?.errorCode || ''
+function handleWholeIssueUploadAbort(err: unknown): void {
+  lastSyncAbortReason = asApiErrorLike(err).errorCode || ''
   lastPickLimitBanner = false
   resetUploadAbortController()
   const cancelled = uploadQueue.value.filter((q) => q.status !== 'error')
@@ -441,7 +445,7 @@ function handleWholeIssueUploadAbort(err) {
   emit('sync-needed')
 }
 
-async function performUpload(localId, signal) {
+async function performUpload(localId: string, signal?: AbortSignal) {
   if (isUnmounted || signal?.aborted || !props.canAddPhoto) {
     return { ok: false, aborted: true }
   }
@@ -458,7 +462,7 @@ async function performUpload(localId, signal) {
   }
   if (result.ok) {
     removeQueueItem(localId)
-    emit('uploaded', result.photo)
+    emit('uploaded', result.photo as IssuePhoto)
     if (uploadQueue.value.length === 0 && lastPickLimitBanner) {
       lastPickLimitBanner = false
       actionError.value = ''
@@ -475,7 +479,7 @@ async function performUpload(localId, signal) {
   return { ok: false, error: result.error }
 }
 
-async function runSingleQueueTask(task, signal) {
+async function runSingleQueueTask(task: PhotoQueueTask, signal?: AbortSignal) {
   if (!task || isUnmounted || props.issueId !== task.issueId || !props.canAddPhoto || signal?.aborted) {
     return { ok: false, aborted: true }
   }
@@ -507,7 +511,7 @@ async function runSingleQueueTask(task, signal) {
   return { ok: false }
 }
 
-function processUploadQueue() {
+function processUploadQueue(): Promise<unknown> {
   if (drainQueuePromise) {
     return drainQueuePromise
   }
@@ -537,8 +541,8 @@ function processUploadQueue() {
   return drainQueuePromise
 }
 
-async function handleFileInputChange(event) {
-  const input = event.target
+async function handleFileInputChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement | null
   const files = Array.from(input?.files || [])
   if (input) input.value = ''
   if (files.length === 0 || isUnmounted || !props.canAddPhoto) return
@@ -568,7 +572,7 @@ async function handleFileInputChange(event) {
   await processUploadQueue()
 }
 
-async function handleRetryItem(item) {
+async function handleRetryItem(item: QueuedPhotoItem): Promise<void> {
   if (
     !item ||
     item.unrecoverable ||
@@ -593,7 +597,7 @@ async function handleRetryItem(item) {
   await processUploadQueue()
 }
 
-async function handleConfirmDelete(photoId) {
+async function handleConfirmDelete(photoId: string): Promise<void> {
   if (!photoId || deletingPhotoId.value || isUnmounted) return
   const targetIssueId = props.issueId
   deletingPhotoId.value = photoId
@@ -604,10 +608,11 @@ async function handleConfirmDelete(photoId) {
     confirmDeletePhotoId.value = ''
     revokePhotoUrls(photoId)
     emit('deleted', photoId)
-  } catch (err) {
+  } catch (err: unknown) {
     if (isUnmounted || props.issueId !== targetIssueId) return
     confirmDeletePhotoId.value = ''
-    if (err?.status === 404 || err?.errorCode === 'PHOTO_NOT_FOUND') {
+    const errLike = asApiErrorLike(err)
+    if (errLike.status === 404 || errLike.errorCode === 'PHOTO_NOT_FOUND') {
       revokePhotoUrls(photoId)
       emit('photo-gone', photoId)
     } else {
@@ -618,7 +623,7 @@ async function handleConfirmDelete(photoId) {
   }
 }
 
-function handleWindowKeydown(ev) {
+function handleWindowKeydown(ev: KeyboardEvent): void {
   if (!viewerPhotoId.value) return
   if (ev.key === 'Escape') {
     closeViewer()

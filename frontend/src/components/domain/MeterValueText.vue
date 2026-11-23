@@ -1,22 +1,20 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
+import type { MeterUnit } from '@/api/schema.js'
 
-const props = defineProps({
-  value: {
-    type: String,
-    default: null,
+const props = withDefaults(
+  defineProps<{
+    value?: string | null
+    unit: MeterUnit
+    size?: 'sm' | 'md' | 'lg'
+  }>(),
+  {
+    value: null,
+    size: 'md',
   },
-  unit: {
-    type: String,
-    required: true, // 'm3' | 'kWh' | 'MWh'
-  },
-  size: {
-    type: String,
-    default: 'md', // 'sm' | 'md' | 'lg'
-  },
-})
+)
 
-const displayUnit = computed(() => (props.unit === 'm3' ? 'm³' : props.unit))
+const displayUnit = computed<string>(() => (props.unit === 'm3' ? 'm³' : props.unit))
 </script>
 
 <template>

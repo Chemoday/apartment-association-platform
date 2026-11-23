@@ -7,6 +7,7 @@ import { getApartmentReadings } from '@/api/endpoints/meters.js'
 import { useApartmentConsumption } from '@/composables/useApartmentConsumption.js'
 import { createApartmentThread, listApartmentThreads } from '@/api/endpoints/communication.js'
 import { formatDate, formatDateTime, formatPeriodLabel, formatRelativeTime } from '@/utils/dates.js'
+import { formatSignedDelta } from '@/utils/meterValue.js'
 import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ConsumptionChart from '@/components/domain/ConsumptionChart.vue'
@@ -87,7 +88,8 @@ function getResourceIcon(resourceType) {
   if (resourceType === 'COLD_WATER') return 'water_drop'
   if (resourceType === 'HOT_WATER') return 'thermostat'
   if (resourceType === 'ELECTRICITY') return 'bolt'
-  if (resourceType === 'HEATING') return 'mode_heat'
+  if (resourceType === 'HEAT' || resourceType === 'HEATING') return 'mode_heat'
+  if (resourceType === 'GAS') return 'local_fire_department'
   return 'speed'
 }
 
@@ -526,7 +528,7 @@ watch(
             </p>
           </div>
 
-          <!-- Legend for Estimates, Anomalies, and Replaced Meters -->
+          <!-- Legend for Estimates, Anomalies, Replaced, and Starting Meters (#039) -->
           <div class="flex flex-wrap items-center gap-2 text-xs">
             <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-800 dark:text-amber-300 font-medium">
               {{ session.t('apartments.estimatedBadge') }}
@@ -536,6 +538,14 @@ watch(
             </span>
             <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-surface-container-high text-on-surface-variant font-medium">
               {{ session.t('apartments.replacedMeter') }}
+            </span>
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-900 dark:text-amber-200 font-medium">
+              <span class="material-symbols-outlined text-[13px]">receipt_long</span>
+              <span>{{ session.t('apartments.originSubmitted') }}</span>
+            </span>
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-surface-container text-on-surface-variant font-medium">
+              <span class="material-symbols-outlined text-[13px]">flag</span>
+              <span>{{ session.t('apartments.originStart') }}</span>
             </span>
           </div>
         </div>
@@ -577,7 +587,10 @@ watch(
                     {{ m.location_label || '—' }}
                   </div>
                   <div class="font-mono text-[10px] text-on-surface-variant font-normal">
-                    {{ m.serial_number }} ({{ session.t(`units.${m.unit}`) || m.unit }})
+                    <template v-if="m.serial_number && String(m.serial_number).trim()">
+                      {{ String(m.serial_number).trim() }} ({{ session.t(`units.${m.unit}`) || m.unit }})
+                    </template>
+                    <template v-else>{{ session.t(`units.${m.unit}`) || m.unit }}</template>
                   </div>
                 </th>
               </tr>
@@ -604,11 +617,31 @@ watch(
                         {{ session.t(`units.${m.unit}`) || m.unit }}
                       </span>
                     </div>
-                    <div class="font-mono text-[11px] text-on-surface-variant mt-0.5">
-                      +{{ getCellReading(m.meter_id, p.period_code).consumption_delta }}
+                    <div
+                      v-if="getCellReading(m.meter_id, p.period_code).previous_origin !== 'START'"
+                      data-testid="apt-card-reading-delta"
+                      class="font-mono text-[11px] text-on-surface-variant mt-0.5"
+                    >
+                      {{ formatSignedDelta(getCellReading(m.meter_id, p.period_code).consumption_delta) }}
                       {{ session.t(`units.${m.unit}`) || m.unit }}
                     </div>
                     <div class="flex flex-wrap items-center gap-1 mt-1">
+                      <span
+                        v-if="getCellReading(m.meter_id, p.period_code).previous_origin === 'START'"
+                        data-testid="apt-card-origin-start"
+                        class="inline-flex items-start gap-1 px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant text-[10px] font-medium leading-snug"
+                      >
+                        <span class="material-symbols-outlined text-[13px] shrink-0 mt-px">flag</span>
+                        <span>{{ session.t('apartments.originStart') }}</span>
+                      </span>
+                      <span
+                        v-else-if="getCellReading(m.meter_id, p.period_code).previous_origin === 'SUBMITTED'"
+                        data-testid="apt-card-origin-submitted"
+                        class="inline-flex items-start gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-900 dark:text-amber-200 text-[10px] font-medium leading-snug"
+                      >
+                        <span class="material-symbols-outlined text-[13px] shrink-0 mt-px">receipt_long</span>
+                        <span>{{ session.t('apartments.originSubmitted') }}</span>
+                      </span>
                       <span
                         v-if="getCellReading(m.meter_id, p.period_code).source === 'AUTO_ESTIMATED'"
                         class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px] font-semibold"

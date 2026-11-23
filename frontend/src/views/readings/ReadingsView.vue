@@ -208,10 +208,14 @@ function getEffectiveDelta(meter) {
   if (draftDeltas.value[meter.meter_id] !== undefined) {
     return draftDeltas.value[meter.meter_id]
   }
-  if (meter.next_submission && typeof meter.next_submission === 'object') {
-    return meter.next_submission.reading?.consumption_delta || null
+  const reading =
+    meter.next_submission && typeof meter.next_submission === 'object'
+      ? meter.next_submission.reading
+      : meter.reading
+  if (!reading || reading.previous_origin === 'START') {
+    return null
   }
-  return meter.reading?.consumption_delta || null
+  return reading.consumption_delta || null
 }
 
 // Total Cold Water (m³) using scaled BigInt
@@ -290,10 +294,20 @@ function handleDraftChange({ meterId, delta }) {
   }
 }
 
-async function handleWrongPeriod({ meterId, targetPeriodCode, draftValue }) {
+async function handleWrongPeriod({
+  meterId,
+  targetPeriodCode,
+  draftValue,
+  billPreviousValue = '',
+  billPreviousTouched = false,
+}) {
   wrongPeriodDrafts.value = {
     ...wrongPeriodDrafts.value,
-    [meterId]: draftValue,
+    [meterId]: {
+      value: draftValue,
+      billPreviousValue,
+      billPreviousTouched: Boolean(billPreviousTouched),
+    },
   }
   submitBannerMessage.value = ''
   const monthLabel = targetPeriodCode
@@ -305,20 +319,23 @@ async function handleWrongPeriod({ meterId, targetPeriodCode, draftValue }) {
 
 async function handleMeterSaved(savedReading) {
   if (!dashboard.value) return
+  const savedUser = session.actingUserId
+  const savedRevision = session.sessionRevision
   if (wrongPeriodDrafts.value[savedReading.meter_id] !== undefined) {
     const nextDrafts = { ...wrongPeriodDrafts.value }
     delete nextDrafts[savedReading.meter_id]
     wrongPeriodDrafts.value = nextDrafts
   }
+  wrongPeriodBanner.value = ''
+  submitBannerMessage.value = session.t('readings.savedBanner', { value: savedReading.value })
+  // Refresh dashboard in-place so late-final submissions advance next_submission cleanly to the new month
+  await loadDashboard({ quiet: true })
+  if (session.actingUserId !== savedUser || session.sessionRevision !== savedRevision) return
   if (draftDeltas.value[savedReading.meter_id] !== undefined) {
     const nextDeltas = { ...draftDeltas.value }
     delete nextDeltas[savedReading.meter_id]
     draftDeltas.value = nextDeltas
   }
-  wrongPeriodBanner.value = ''
-  submitBannerMessage.value = session.t('readings.savedBanner', { value: savedReading.value })
-  // Refresh dashboard in-place so late-final submissions advance next_submission cleanly to the new month
-  await loadDashboard({ quiet: true })
   if (activeApartment.value?.apartment_id) {
     await loadConsumption(activeApartment.value.apartment_id, 12, { preserveDataOnReload: true })
   }
@@ -525,7 +542,15 @@ function openHistory(readingId, label) {
                     :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
                     :can-submit="activeApartment.can_submit_readings"
                     :use-next-submission="true"
-                    :preserved-draft="wrongPeriodDrafts[meter.meter_id] ?? null"
+                    :preserved-draft="wrongPeriodDrafts[meter.meter_id]?.value ?? null"
+                    :preserved-bill-previous-draft="
+                      wrongPeriodDrafts[meter.meter_id]?.billPreviousTouched
+                        ? {
+                            value: wrongPeriodDrafts[meter.meter_id].billPreviousValue,
+                            touched: true,
+                          }
+                        : null
+                    "
                     @saved="handleMeterSaved"
                     @wrong-period="handleWrongPeriod"
                     @draft-change="handleDraftChange"
@@ -565,7 +590,15 @@ function openHistory(readingId, label) {
                     :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
                     :can-submit="activeApartment.can_submit_readings"
                     :use-next-submission="true"
-                    :preserved-draft="wrongPeriodDrafts[meter.meter_id] ?? null"
+                    :preserved-draft="wrongPeriodDrafts[meter.meter_id]?.value ?? null"
+                    :preserved-bill-previous-draft="
+                      wrongPeriodDrafts[meter.meter_id]?.billPreviousTouched
+                        ? {
+                            value: wrongPeriodDrafts[meter.meter_id].billPreviousValue,
+                            touched: true,
+                          }
+                        : null
+                    "
                     @saved="handleMeterSaved"
                     @wrong-period="handleWrongPeriod"
                     @draft-change="handleDraftChange"
@@ -605,7 +638,15 @@ function openHistory(readingId, label) {
                     :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
                     :can-submit="activeApartment.can_submit_readings"
                     :use-next-submission="true"
-                    :preserved-draft="wrongPeriodDrafts[meter.meter_id] ?? null"
+                    :preserved-draft="wrongPeriodDrafts[meter.meter_id]?.value ?? null"
+                    :preserved-bill-previous-draft="
+                      wrongPeriodDrafts[meter.meter_id]?.billPreviousTouched
+                        ? {
+                            value: wrongPeriodDrafts[meter.meter_id].billPreviousValue,
+                            touched: true,
+                          }
+                        : null
+                    "
                     @saved="handleMeterSaved"
                     @wrong-period="handleWrongPeriod"
                     @draft-change="handleDraftChange"

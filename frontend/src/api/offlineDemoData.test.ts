@@ -18,14 +18,14 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
 
   // Switch to Owner Apt 14
   setDemoUser('018f0000-0000-7000-8000-000000000102')
-  const me = await apiRequest('/property/me')
+  const me = await apiRequest<any>('/property/me')
   assert.equal(me.building_role, 'USER')
   assert.equal(me.memberships[0].apartment_number, '14')
 
-  const building = await apiRequest('/property/building')
+  const building = await apiRequest<any>('/property/building')
   assert.equal(building.name, 'KÜ Sõpruse 12')
 
-  const dashboard = await apiRequest('/meters/my-dashboard')
+  const dashboard = await apiRequest<any>('/meters/my-dashboard')
   assert.equal(dashboard.period.period_code, '2026-10')
   assert.equal(dashboard.apartments.length, 1)
   assert.equal(dashboard.apartments[0].apartment_number, '14')
@@ -33,10 +33,10 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
 
   // Switch to Chairman role and inspect matrix
   setDemoUser('018f0000-0000-7000-8000-000000000101')
-  const chairmanMe = await apiRequest('/property/me')
+  const chairmanMe = await apiRequest<any>('/property/me')
   assert.equal(chairmanMe.building_role, 'CHAIRMAN')
 
-  const matrix = await apiRequest('/meters/periods/2026-10/matrix')
+  const matrix = await apiRequest<any>('/meters/periods/2026-10/matrix')
   assert.equal(matrix.period.period_code, '2026-10')
   assert.equal(matrix.apartments.length, 5)
   assert.equal(matrix.balances.length, 2)
@@ -3762,3 +3762,535 @@ test('offlineDemoData supports #037 energy certificate feed seed, demo-energy un
     disableOfflineDemo()
   }
 })
+
+test('offlineDemoData handles #038 meter without a start (START, downward correction, SUBMITTED, omit-keeps, null-drops, anomaly, PREVIOUS_VALUE_NOT_ALLOWED, consumption gap, matrix, CSV)', async () => {
+  enableOfflineDemo()
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const apt14Id = '018f0000-0000-7000-8000-000000000314'
+  const startMeterId = '018f0000-0000-7000-8000-000000000519'
+  const normalMeterId = '018f0000-0000-7000-8000-000000000516'
+
+  try {
+    // 1. Seeded meter 0519 appears on Apt 14 dashboard with needs_start: true, serial_number: null, previous_value: null
+    const dash = await resolveOfflineDemoRequest('/meters/my-dashboard?period_code=2026-11', {
+      actingUserId: residentId,
+    })
+    const m519 = dash.apartments[0].meters.find((m: any) => m.meter_id === startMeterId)
+    assert.ok(m519)
+    assert.equal(m519.serial_number, null)
+    assert.equal(m519.previous_value, null)
+    assert.equal(m519.needs_start, true)
+    assert.equal(m519.reading, null)
+    assert.equal(m519.next_submission?.period_code, '2026-11')
+    assert.equal(m519.next_submission?.needs_start, true)
+    assert.equal(m519.next_submission?.previous_value, null)
+
+    // 2. First reading without previous_value -> START, consumption_delta 0.000, consumption chart treats it as a gap (null)
+    const startSaved = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: residentId,
+      body: {
+        meter_id: startMeterId,
+        period_code: '2026-11',
+        value: '1250',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(startSaved.value, '1250.000')
+    assert.equal(startSaved.consumption_delta, '0.000')
+    assert.equal(startSaved.previous_origin, 'START')
+
+    const consStart = await resolveOfflineDemoRequest(
+      `/meters/apartments/${apt14Id}/consumption?months=12`,
+      { actingUserId: residentId },
+    )
+    const novHotStart = consStart.resources
+      .find((r: any) => r.resource_type === 'HOT_WATER')
+      .months.find((m: any) => m.period_code === '2026-11')
+    assert.equal(novHotStart.consumption, null)
+
+    // Matrix reflects starting_meters = 1 for HOT_WATER in 2026-11
+    const matrixStart = await resolveOfflineDemoRequest('/meters/periods/2026-11/matrix', {
+      actingUserId: chairmanId,
+    })
+    const hotBalStart = matrixStart.balances.find((b: any) => b.resource_type === 'HOT_WATER')
+    assert.equal(hotBalStart.starting_meters, 1)
+    assert.equal(hotBalStart.apartments_sum, '0.000')
+
+    // 3. Correcting mistyped START reading downward (1250 -> 125) succeeds (previous_value is NOT a floor!)
+    const correctedDown = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: residentId,
+      body: {
+        meter_id: startMeterId,
+        period_code: '2026-11',
+        value: '125',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(correctedDown.value, '125.000')
+    assert.equal(correctedDown.previous_origin, 'START')
+    assert.equal(correctedDown.consumption_delta, '0.000')
+
+    // 4. Adding previous_value while keeping same value 125 converts START -> SUBMITTED (not wrongly idempotent!)
+    const convertedSub = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: residentId,
+      body: {
+        meter_id: startMeterId,
+        period_code: '2026-11',
+        value: '125',
+        previous_value: '120.5',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(convertedSub.value, '125.000')
+    assert.equal(convertedSub.previous_origin, 'SUBMITTED')
+    assert.equal(convertedSub.consumption_delta, '4.500')
+
+    // Consumption chart now reflects 4.500 for 2026-11 HOT_WATER
+    const consSub = await resolveOfflineDemoRequest(
+      `/meters/apartments/${apt14Id}/consumption?months=12`,
+      { actingUserId: residentId },
+    )
+    const novHotSub = consSub.resources
+      .find((r: any) => r.resource_type === 'HOT_WATER')
+      .months.find((m: any) => m.period_code === '2026-11')
+    assert.equal(novHotSub.consumption, '4.500')
+
+    // 5. Omitting previous_value on a correction keeps the stored bill value (120.500)
+    const omitKeeps = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: residentId,
+      body: {
+        meter_id: startMeterId,
+        period_code: '2026-11',
+        value: '128',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(omitKeeps.previous_origin, 'SUBMITTED')
+    assert.equal(omitKeeps.consumption_delta, '7.500')
+
+    // 6. Submitting below stored bill value (omitting previous_value) fails with 422 READING_BELOW_PREVIOUS
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/readings', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: {
+            meter_id: startMeterId,
+            period_code: '2026-11',
+            value: '115',
+            confirmation_level: 0,
+          },
+        }),
+      (err: any) =>
+        err?.status === 422 &&
+        err?.errorCode === 'READING_BELOW_PREVIOUS' &&
+        err?.payload?.previous_value === '120.500',
+    )
+
+    // 7. Large delta with SUBMITTED start triggers 2-step anomaly confirmation
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/readings', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: {
+            meter_id: startMeterId,
+            period_code: '2026-11',
+            value: '200',
+            previous_value: '120.5',
+            confirmation_level: 0,
+          },
+        }),
+      (err: any) => err?.status === 409 && err?.errorCode === 'ANOMALY_CONFIRMATION_STEP_1',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/readings', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: {
+            meter_id: startMeterId,
+            period_code: '2026-11',
+            value: '200',
+            previous_value: '120.5',
+            confirmation_level: 1,
+          },
+        }),
+      (err: any) => err?.status === 409 && err?.errorCode === 'ANOMALY_CONFIRMATION_STEP_2',
+    )
+    const anomSaved = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: residentId,
+      body: {
+        meter_id: startMeterId,
+        period_code: '2026-11',
+        value: '200',
+        previous_value: '120.5',
+        confirmation_level: 2,
+      },
+    })
+    assert.equal(anomSaved.is_anomaly_confirmed, true)
+    assert.equal(anomSaved.previous_origin, 'SUBMITTED')
+    assert.equal(anomSaved.consumption_delta, '79.500')
+
+    // 8. Explicit previous_value: null drops bill start and converts back to START (even with lower value 115)
+    const droppedToStart = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: residentId,
+      body: {
+        meter_id: startMeterId,
+        period_code: '2026-11',
+        value: '115',
+        previous_value: null,
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(droppedToStart.value, '115.000')
+    assert.equal(droppedToStart.previous_origin, 'START')
+    assert.equal(droppedToStart.consumption_delta, '0.000')
+
+    const consBackToGap = await resolveOfflineDemoRequest(
+      `/meters/apartments/${apt14Id}/consumption?months=12`,
+      { actingUserId: residentId },
+    )
+    const novHotGap = consBackToGap.resources
+      .find((r: any) => r.resource_type === 'HOT_WATER')
+      .months.find((m: any) => m.period_code === '2026-11')
+    assert.equal(novHotGap.consumption, null)
+
+    // 9. Sending previous_value on a normal meter (needs_start: false) returns 422 PREVIOUS_VALUE_NOT_ALLOWED
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/readings', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: {
+            meter_id: normalMeterId,
+            period_code: '2026-10',
+            value: '145',
+            previous_value: '140',
+            confirmation_level: 0,
+          },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'PREVIOUS_VALUE_NOT_ALLOWED',
+    )
+
+    // 10. CSV export never outputs literal "null" for null serial_number
+    const csvResp = await resolveOfflineDemoRequest('/meters/periods/2026-11/export-csv', {
+      actingUserId: chairmanId,
+      raw: true,
+    })
+    const csvText = await csvResp.text()
+    assert.equal(csvText.includes(',null,'), false)
+    assert.ok(csvText.includes(',START'))
+  } finally {
+    disableOfflineDemo()
+  }
+})
+
+test('offlineDemoData handles #039 board starts in matrix, starting master meter 0993, and estimate-missing skipped_without_start', async () => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const accountantId = '018f0000-0000-7000-8000-000000000103'
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+  const startMasterId = '018f0000-0000-7000-8000-000000000993'
+  const startAptMeterId = '018f0000-0000-7000-8000-000000000519'
+  const submittedAptMeterId = '018f0000-0000-7000-8000-000000000504'
+
+  try {
+    // 1. Matrix exposes seeded START (Apt 01 0520), SUBMITTED (Apt 02 0504), needs_start missing (Apt 14 0519),
+    //    starting master meter 0993, COLD_WATER starting_meters=1, and HOT_WATER master_total=null
+    const matrix = await resolveOfflineDemoRequest('/meters/periods/2026-10/matrix', {
+      actingUserId: chairmanId,
+    })
+    const coldBal = matrix.balances.find((b: any) => b.resource_type === 'COLD_WATER')
+    const hotBal = matrix.balances.find((b: any) => b.resource_type === 'HOT_WATER')
+    assert.equal(coldBal.master_total, '28.500')
+    assert.equal(coldBal.starting_meters, 1)
+    assert.equal(hotBal.master_total, null)
+    assert.equal(hotBal.unallocated_loss, null)
+
+    const m993 = matrix.master_meters.find((m: any) => m.meter_id === startMasterId)
+    assert.ok(m993)
+    assert.equal(m993.needs_start, true)
+    assert.equal(m993.previous_value, null)
+    assert.equal(m993.reading, null)
+
+    // 2. Submitting starting master meter 0993 without previous_value -> START; HOT_WATER master_total STAYS null
+    const masterStart = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: {
+        meter_id: startMasterId,
+        period_code: '2026-10',
+        value: '500',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(masterStart.previous_origin, 'START')
+    assert.equal(masterStart.source, 'ADMIN_OVERRIDE')
+
+    const matrixAfterMasterStart = await resolveOfflineDemoRequest('/meters/periods/2026-10/matrix', {
+      actingUserId: chairmanId,
+    })
+    const hotAfterStart = matrixAfterMasterStart.balances.find(
+      (b: any) => b.resource_type === 'HOT_WATER',
+    )
+    assert.equal(hotAfterStart.master_total, null)
+    assert.equal(hotAfterStart.unallocated_loss, null)
+
+    // 3. Updating master meter 0993 with bill previous_value requires reason, then switches to SUBMITTED -> computes HOT_WATER master_total!
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/readings', {
+          method: 'POST',
+          actingUserId: chairmanId,
+          body: {
+            meter_id: startMasterId,
+            period_code: '2026-10',
+            value: '510',
+            previous_value: '500',
+            confirmation_level: 0,
+          },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'REASON_REQUIRED',
+    )
+
+    const masterSub = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: {
+        meter_id: startMasterId,
+        period_code: '2026-10',
+        value: '510',
+        previous_value: '500',
+        reason: 'Verified against initial utility bill',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(masterSub.previous_origin, 'SUBMITTED')
+    assert.equal(masterSub.consumption_delta, '10.000')
+
+    const matrixAfterMasterSub = await resolveOfflineDemoRequest('/meters/periods/2026-10/matrix', {
+      actingUserId: chairmanId,
+    })
+    const hotAfterSub = matrixAfterMasterSub.balances.find(
+      (b: any) => b.resource_type === 'HOT_WATER',
+    )
+    // 0992 (15.400) + 0993 (10.000) = 25.400
+    assert.equal(hotAfterSub.master_total, '25.400')
+    assert.notEqual(hotAfterSub.unallocated_loss, null)
+
+    // Resident cannot submit master meters -> 403 FORBIDDEN
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/readings', {
+          method: 'POST',
+          actingUserId: residentId,
+          body: {
+            meter_id: startMasterId,
+            period_code: '2026-10',
+            value: '511',
+            confirmation_level: 0,
+          },
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+
+    // 4. Board editing SUBMITTED apartment meter 0504: omitting previous_value keeps 95.500; explicit null drops to START
+    const boardKeep = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: {
+        meter_id: submittedAptMeterId,
+        period_code: '2026-10',
+        value: '98.5',
+        reason: 'Checked photo',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(boardKeep.previous_origin, 'SUBMITTED')
+    assert.equal(boardKeep.consumption_delta, '3.000')
+
+    const boardDrop = await resolveOfflineDemoRequest('/meters/readings', {
+      method: 'POST',
+      actingUserId: chairmanId,
+      body: {
+        meter_id: submittedAptMeterId,
+        period_code: '2026-10',
+        value: '98.5',
+        previous_value: null,
+        reason: 'No previous bill available',
+        confirmation_level: 0,
+      },
+    })
+    assert.equal(boardDrop.previous_origin, 'START')
+    assert.equal(boardDrop.consumption_delta, '0.000')
+
+    // 5. Move period to REVIEW_BY_BOARD and run estimate-missing -> skips 0519 into skipped_without_start
+    const patchStatus = await resolveOfflineDemoRequest('/meters/periods/2026-10/status', {
+      method: 'PATCH',
+      actingUserId: chairmanId,
+      body: { status: 'REVIEW_BY_BOARD' },
+    })
+    assert.equal(patchStatus.status, 'REVIEW_BY_BOARD')
+
+    const est = await resolveOfflineDemoRequest('/meters/periods/2026-10/estimate-missing', {
+      method: 'POST',
+      actingUserId: accountantId,
+    })
+    assert.ok(est.estimated_count >= 1)
+    assert.deepEqual(est.skipped_without_start, [startAptMeterId])
+  } finally {
+    disableOfflineDemo()
+  }
+})
+
+test('offlineDemoData enforces RBAC, 404 PERIOD_NOT_FOUND, 409 PERIOD_NOT_IN_REVIEW, 409 INVALID_PERIOD_TRANSITION, and 15-column CSV with MASTER rows (P1-8, P2-6)', async () => {
+  enableOfflineDemo()
+  const chairmanId = '018f0000-0000-7000-8000-000000000101'
+  const residentId = '018f0000-0000-7000-8000-000000000102'
+  const boardId = '018f0000-0000-7000-8000-000000000105'
+
+  try {
+    // 1. Resident (USER) gets 403 FORBIDDEN on matrix and export-csv
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/matrix', {
+          actingUserId: residentId,
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/export-csv', {
+          actingUserId: residentId,
+          raw: true,
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+
+    // 2. BOARD gets 403 FORBIDDEN on estimate-missing, PATCH status, and non-own meter submit
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/estimate-missing', {
+          method: 'POST',
+          actingUserId: boardId,
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/status', {
+          method: 'PATCH',
+          actingUserId: boardId,
+          body: { status: 'REVIEW_BY_BOARD' },
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/readings', {
+          method: 'POST',
+          actingUserId: boardId,
+          body: {
+            meter_id: '018f0000-0000-7000-8000-000000000501',
+            period_code: '2026-10',
+            value: '120',
+            confirmation_level: 0,
+          },
+        }),
+      (err: any) => err?.status === 403 && err?.errorCode === 'FORBIDDEN',
+    )
+
+    // 3. Unknown period_code returns 404 PERIOD_NOT_FOUND (never silent fallback to 2026-10)
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2099-01/matrix', {
+          actingUserId: chairmanId,
+        }),
+      (err: any) => err?.status === 404 && err?.errorCode === 'PERIOD_NOT_FOUND',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2099-01/estimate-missing', {
+          method: 'POST',
+          actingUserId: chairmanId,
+        }),
+      (err: any) => err?.status === 404 && err?.errorCode === 'PERIOD_NOT_FOUND',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2099-01/status', {
+          method: 'PATCH',
+          actingUserId: chairmanId,
+          body: { status: 'REVIEW_BY_BOARD' },
+        }),
+      (err: any) => err?.status === 404 && err?.errorCode === 'PERIOD_NOT_FOUND',
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2099-01/export-csv', {
+          actingUserId: chairmanId,
+          raw: true,
+        }),
+      (err: any) => err?.status === 404 && err?.errorCode === 'PERIOD_NOT_FOUND',
+    )
+
+    // 4. estimate-missing in OPEN_FOR_RESIDENTS returns 409 PERIOD_NOT_IN_REVIEW
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/estimate-missing', {
+          method: 'POST',
+          actingUserId: chairmanId,
+        }),
+      (err: any) => err?.status === 409 && err?.errorCode === 'PERIOD_NOT_IN_REVIEW',
+    )
+
+    // 5. PATCH status enforces one-step transitions (OPEN_FOR_RESIDENTS -> LOCKED rejected with 409)
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/status', {
+          method: 'PATCH',
+          actingUserId: chairmanId,
+          body: { status: 'LOCKED' },
+        }),
+      (err: any) =>
+        err?.status === 409 &&
+        err?.errorCode === 'INVALID_PERIOD_TRANSITION' &&
+        Array.isArray(err?.payload?.allowed_statuses) &&
+        err.payload.allowed_statuses.includes('REVIEW_BY_BOARD'),
+    )
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/status', {
+          method: 'PATCH',
+          actingUserId: chairmanId,
+          body: { status: 'INVALID_STATUS' },
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+    )
+
+    // 6. CSV export matches 15-column API contract with MASTER rows and Content-Disposition
+    const csvResp = await resolveOfflineDemoRequest('/meters/periods/2026-10/export-csv', {
+      actingUserId: chairmanId,
+      raw: true,
+    })
+    assert.equal(
+      csvResp.headers.get('Content-Disposition'),
+      'attachment; filename="readings-2026-10.csv"',
+    )
+    const csvLines = (await csvResp.text()).split('\n')
+    assert.equal(csvLines[0].split(',').length, 15)
+    assert.ok(csvLines[0].endsWith(',previous_origin'))
+    assert.ok(csvLines.some((line: string) => line.startsWith('2026-10,,MASTER,')))
+  } finally {
+    disableOfflineDemo()
+  }
+})
+

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
@@ -6,7 +6,7 @@ import { useSessionStore } from '@/stores/session.js'
 const route = useRoute()
 const session = useSessionStore()
 
-const isDashboardRoute = computed(() => route.path === '/')
+const isDashboardRoute = computed<boolean>(() => route.path === '/')
 </script>
 
 <template>

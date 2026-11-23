@@ -1,6 +1,8 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { asApiErrorLike } from '@/api/client.js'
+import type { NotificationView } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 import { bellEnabled, setUnread, unread } from '@/composables/useUnreadCount.js'
 import { getFeed, markAllRead, markRead } from '@/api/endpoints/notifications.js'
@@ -12,14 +14,14 @@ const router = useRouter()
 const route = useRoute()
 const session = useSessionStore()
 
-const isOpen = ref(false)
-const items = ref([])
-const loading = ref(false)
-const markingAll = ref(false)
-const rootRef = ref(null)
-const taskTitles = ref({})
+const isOpen = ref<boolean>(false)
+const items = ref<NotificationView[]>([])
+const loading = ref<boolean>(false)
+const markingAll = ref<boolean>(false)
+const rootRef = ref<HTMLElement | null>(null)
+const taskTitles = ref<Record<string, string | null>>({})
 
-function resolveMaintenanceTitles(batch) {
+function resolveMaintenanceTitles(batch: NotificationView[]): void {
   for (const item of batch) {
     if (item.event_type === 'MAINTENANCE_DUE' && item.subject_id) {
       const id = item.subject_id
@@ -37,20 +39,20 @@ function resolveMaintenanceTitles(batch) {
   }
 }
 
-const badgeLabel = computed(() => {
+const badgeLabel = computed<string>(() => {
   if (unread.value <= 0) return ''
   return unread.value > 99 ? '99+' : String(unread.value)
 })
 
-async function loadLatest() {
+async function loadLatest(): Promise<void> {
   if (!bellEnabled.value || session.authMode === 'none') return
   loading.value = true
   try {
     const res = await getFeed({ unreadOnly: false, limit: 10, offset: 0 })
     items.value = Array.isArray(res) ? res : []
     resolveMaintenanceTitles(items.value)
-  } catch (err) {
-    if (err?.status === 404) {
+  } catch (err: unknown) {
+    if (asApiErrorLike(err).status === 404) {
       bellEnabled.value = false
       isOpen.value = false
     }
@@ -59,18 +61,18 @@ async function loadLatest() {
   }
 }
 
-function toggleBell() {
+function toggleBell(): void {
   isOpen.value = !isOpen.value
   if (isOpen.value) {
     loadLatest()
   }
 }
 
-function closeBell() {
+function closeBell(): void {
   isOpen.value = false
 }
 
-async function handleSelectItem(item) {
+async function handleSelectItem(item: NotificationView): Promise<void> {
   const desc = buildNotificationDescriptor(item, session.lang)
   const wasUnread = !item.read_at
   try {
@@ -79,8 +81,8 @@ async function handleSelectItem(item) {
     if (wasUnread) {
       setUnread(unread.value - 1)
     }
-  } catch (err) {
-    if (err?.status === 404) {
+  } catch (err: unknown) {
+    if (asApiErrorLike(err).status === 404) {
       items.value = items.value.filter((i) => i.id !== item.id)
       return
     }
@@ -91,7 +93,7 @@ async function handleSelectItem(item) {
   }
 }
 
-async function handleMarkAllRead() {
+async function handleMarkAllRead(): Promise<void> {
   if (markingAll.value || unread.value === 0) return
   markingAll.value = true
   try {
@@ -107,18 +109,18 @@ async function handleMarkAllRead() {
   }
 }
 
-function goToAllNotifications() {
+function goToAllNotifications(): void {
   closeBell()
   router.push({ name: 'notifications' })
 }
 
-function goToSettings() {
+function goToSettings(): void {
   closeBell()
   router.push({ name: 'settings-notifications' })
 }
 
-function getItemUi(item) {
-  const title = taskTitles.value[item.subject_id]
+function getItemUi(item: NotificationView) {
+  const title = item.subject_id ? taskTitles.value[item.subject_id] : null
   const effectiveItem =
     item.event_type === 'MAINTENANCE_DUE' && title
       ? { ...item, params: { ...item.params, title } }
@@ -144,8 +146,8 @@ function getItemUi(item) {
   }
 }
 
-function handleDocumentClick(e) {
-  if (isOpen.value && rootRef.value && !rootRef.value.contains(e.target)) {
+function handleDocumentClick(e: MouseEvent): void {
+  if (isOpen.value && rootRef.value && !rootRef.value.contains(e.target as Node | null)) {
     isOpen.value = false
   }
 }

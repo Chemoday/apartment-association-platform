@@ -1,159 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createRenderer, defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h } from 'vue'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { createServer } from 'vite'
+import {
+  DEMO_USER_IDS,
+  createClientVueViteServer,
+  createFakeDomHarness,
+  type VTestNode,
+} from '../../test/mountWithApp.js'
 
 const Dummy = { template: '<div />' }
 
 const USER_IDS: Record<string, string> = {
-  CHAIRMAN: '018f0000-0000-7000-8000-000000000101',
-  USER: '018f0000-0000-7000-8000-000000000102',
-  ACCOUNTANT: '018f0000-0000-7000-8000-000000000103',
-  BOARD: '018f0000-0000-7000-8000-000000000105',
-}
-
-interface VTestNode {
-  kind: 'element' | 'text' | 'comment'
-  tag?: string
-  props: Record<string, any>
-  text?: string
-  children: VTestNode[]
-  parentNode: VTestNode | null
-}
-
-function createFakeDomHarness() {
-  const { createApp } = createRenderer<VTestNode, VTestNode>({
-    patchProp(el, key, _prevValue, nextValue) {
-      if (key === 'class') {
-        el.props.class = Array.isArray(nextValue) ? nextValue.join(' ') : nextValue
-      } else {
-        el.props[key] = nextValue
-      }
-    },
-    insert(child, parent, anchor) {
-      if (child.parentNode && child.parentNode !== parent) {
-        const idx = child.parentNode.children.indexOf(child)
-        if (idx !== -1) child.parentNode.children.splice(idx, 1)
-      }
-      child.parentNode = parent
-      if (anchor) {
-        const idx = parent.children.indexOf(anchor)
-        if (idx !== -1) {
-          parent.children.splice(idx, 0, child)
-          return
-        }
-      }
-      if (!parent.children.includes(child)) {
-        parent.children.push(child)
-      }
-    },
-    remove(child) {
-      if (child.parentNode) {
-        const idx = child.parentNode.children.indexOf(child)
-        if (idx !== -1) child.parentNode.children.splice(idx, 1)
-        child.parentNode = null
-      }
-    },
-    createElement(type) {
-      return {
-        kind: 'element',
-        tag: type,
-        props: {},
-        children: [],
-        parentNode: null,
-        options: [],
-        addEventListener() {},
-        removeEventListener() {},
-      } as any
-    },
-    createText(text) {
-      return { kind: 'text', props: {}, text, children: [], parentNode: null }
-    },
-    createComment(text) {
-      return { kind: 'comment', props: {}, text, children: [], parentNode: null }
-    },
-    setText(node, text) {
-      node.text = text
-    },
-    setElementText(el, text) {
-      el.children = [{ kind: 'text', props: {}, text, children: [], parentNode: el }]
-    },
-    parentNode(node) {
-      return node.parentNode
-    },
-    nextSibling(node) {
-      const parent = node.parentNode
-      if (!parent) return null
-      const idx = parent.children.indexOf(node)
-      return idx >= 0 && idx + 1 < parent.children.length ? parent.children[idx + 1] : null
-    },
-    cloneNode(node) {
-      return {
-        ...node,
-        props: { ...node.props },
-        children: node.children.map((c) => ({ ...c })),
-        parentNode: null,
-      }
-    },
-  })
-
-  function collectText(node: VTestNode): string {
-    if (node.kind === 'text') return node.text || ''
-    if (node.kind === 'comment') return ''
-    return node.children.map(collectText).join(' ')
-  }
-
-  function findAll(root: VTestNode, predicate: (node: VTestNode) => boolean): VTestNode[] {
-    const hits: VTestNode[] = []
-    if (predicate(root)) hits.push(root)
-    for (const c of root.children) {
-      hits.push(...findAll(c, predicate))
-    }
-    return hits
-  }
-
-  function findByTestId(root: VTestNode, testId: string): VTestNode | null {
-    return findAll(root, (n) => n.kind === 'element' && n.props['data-testid'] === testId)[0] || null
-  }
-
-  async function flushUpdates(ticks = 15) {
-    for (let i = 0; i < ticks; i += 1) {
-      await nextTick()
-      await new Promise((r) => setTimeout(r, 0))
-    }
-  }
-
-  return { createApp, collectText, findAll, findByTestId, flushUpdates }
-}
-
-function createClientVueViteServer() {
-  return createServer({
-    server: { middlewareMode: true },
-    appType: 'custom',
-    logLevel: 'silent',
-    plugins: [
-      {
-        name: 'test-client-vue',
-        configResolved(config) {
-          const vp = config.plugins.find((p) => p.name === 'vite:vue')
-          if (vp?.api?.options) {
-            vp.api.options.isProduction = true
-          }
-          if (vp?.transform) {
-            const orig = vp.transform as any
-            const fn = typeof orig === 'function' ? orig : orig.handler
-            const wrapped = function (this: any, code: string, id: string, opts: any) {
-              return fn.call(this, code, id, { ...opts, ssr: false })
-            }
-            if (typeof orig === 'function') (vp as any).transform = wrapped
-            else orig.handler = wrapped
-          }
-        },
-      },
-    ],
-  })
+  CHAIRMAN: DEMO_USER_IDS.CHAIRMAN,
+  USER: DEMO_USER_IDS.USER,
+  ACCOUNTANT: DEMO_USER_IDS.ACCOUNTANT,
+  BOARD: DEMO_USER_IDS.BOARD,
 }
 
 test('useBuildingConsumption cancels stale window requests, ignores REQUEST_ABORTED, and aborts on unmount (#031)', async () => {

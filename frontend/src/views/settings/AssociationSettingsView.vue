@@ -21,8 +21,10 @@ import {
   isDisablingChatSetting,
 } from '@/utils/associationSettings.js'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BaseConfirmDialog from '@/components/base/BaseConfirmDialog.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 import BuildingRegisterCard from './components/BuildingRegisterCard.vue'
+import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard.js'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -64,6 +66,14 @@ const hasPendingChanges = computed(() => Object.keys(pendingDiff.value).length >
 
 const isDisablingChatDraft = computed(() =>
   isDisablingChatSetting(settings.value, pendingDiff.value),
+)
+
+const {
+  showLeaveModal: showUnsavedLeaveModal,
+  confirmLeave: confirmUnsavedLeave,
+  cancelLeave: cancelUnsavedLeave,
+} = useUnsavedChangesGuard(
+  () => (hasPendingChanges.value || Boolean(registerCardRef.value?.isDirty)) && !saving.value,
 )
 
 const storagePercent = computed(() => clampUsedPercent(storageUsage.value?.used_percent))
@@ -1008,5 +1018,15 @@ onBeforeUnmount(() => {
         </button>
       </template>
     </BaseModal>
+
+    <BaseConfirmDialog
+      :open="showUnsavedLeaveModal"
+      :title="session.t('common.unsavedChangesTitle')"
+      :message="session.t('common.unsavedChangesBody')"
+      :confirm-label="session.t('common.leavePage')"
+      :cancel-label="session.t('common.stayOnPage')"
+      @confirm="confirmUnsavedLeave"
+      @cancel="cancelUnsavedLeave"
+    />
   </div>
 </template>

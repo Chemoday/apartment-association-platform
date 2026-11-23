@@ -1,21 +1,31 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
+import type { PeriodStatus, ReadingSource } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 import { useTranslations } from '@/locales/index.js'
 
-const props = defineProps({
-  status: {
-    type: String,
-    required: true, // SUBMITTED | MISSING | AUTO_ESTIMATED | ANOMALY_CONFIRMED | ADMIN_OVERRIDE | OPEN_FOR_RESIDENTS | REVIEW_BY_BOARD | LOCKED
-  },
-})
+export type StatusChipValue =
+  | PeriodStatus
+  | ReadingSource
+  | 'SUBMITTED'
+  | 'MISSING'
+  | 'ANOMALY_CONFIRMED'
+  | 'AUTO_ESTIMATED'
+  | 'ADMIN_OVERRIDE'
+
+const props = defineProps<{
+  status: StatusChipValue | string
+}>()
 
 const session = useSessionStore()
 const t = computed(() => useTranslations(session.lang))
 
-const label = computed(() => t.value.status[props.status] || props.status)
+const label = computed<string>(() => {
+  const statusMap = t.value.status as Record<string, string> | undefined
+  return statusMap?.[props.status] || props.status
+})
 
-const classes = computed(() => {
+const classes = computed<string>(() => {
   switch (props.status) {
     case 'SUBMITTED':
     case 'OPEN_FOR_RESIDENTS':
@@ -32,7 +42,7 @@ const classes = computed(() => {
   }
 })
 
-const icon = computed(() => {
+const icon = computed<string>(() => {
   switch (props.status) {
     case 'SUBMITTED':
     case 'OPEN_FOR_RESIDENTS':

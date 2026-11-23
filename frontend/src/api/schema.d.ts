@@ -1,6 +1,6 @@
 /**
  * Generated from docs/openapi.json (OpenAPI 3.1.0 - Apartment Association Platform v0.1.0)
- * Handed-over backend commit: ebe1eb3
+ * Handed-over backend commit: 0f2613b
  */
 
 export type AnswerMode = 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE' | 'OWN_VALUE'
@@ -41,6 +41,7 @@ export type PostType =
   | 'FORUM_TOPIC'
   | 'APARTMENT_THREAD'
   | 'BOARD_TOPIC'
+export type PreviousOrigin = 'HISTORY' | 'INITIAL' | 'SUBMITTED' | 'START'
 export type ReadingSource = 'RESIDENT' | 'ADMIN_OVERRIDE' | 'AUTO_ESTIMATED' | 'IOT_WEBHOOK'
 export type RelationType = 'OWNER' | 'TENANT' | 'RESIDENT'
 export type ResourceType = 'COLD_WATER' | 'HOT_WATER' | 'ELECTRICITY' | 'HEAT' | 'GAS'
@@ -176,12 +177,13 @@ export interface ApartmentReading {
   consumption_delta: string
   source: ReadingSource
   is_anomaly_confirmed: boolean
+  previous_origin: PreviousOrigin
 }
 
 export interface ApartmentMeterHistory {
   meter_id: string
   resource_type: ResourceType
-  serial_number: string
+  serial_number: string | null
   location_label: string
   unit: MeterUnit
   is_active: boolean
@@ -489,16 +491,19 @@ export interface PeriodListResponse {
 export interface ReadingSummary {
   reading_id: string
   value: string
+  previous_value: string
   consumption_delta: string
   source: ReadingSource
   is_anomaly_confirmed: boolean
+  previous_origin: PreviousOrigin
 }
 
 export interface NextSubmission {
   period_code: string
   due_date: string
   final: boolean
-  previous_value: string
+  previous_value: string | null
+  needs_start: boolean
   average_delta: string | null
   reading: ReadingSummary | null
 }
@@ -506,10 +511,11 @@ export interface NextSubmission {
 export interface DashboardMeter {
   meter_id: string
   resource_type: ResourceType
-  serial_number: string
+  serial_number: string | null
   location_label: string
   unit: MeterUnit
-  previous_value: string
+  previous_value: string | null
+  needs_start: boolean
   previous_delta: string | null
   average_delta: string | null
   reading: ReadingSummary | null
@@ -532,6 +538,7 @@ export interface ReadingSubmitRequest {
   meter_id: string
   period_code: string
   value: string
+  previous_value?: string | null
   confirmation_level?: number
   reason?: string | null
 }
@@ -544,6 +551,7 @@ export interface ReadingResponse {
   consumption_delta: string
   source: ReadingSource
   is_anomaly_confirmed: boolean
+  previous_origin: PreviousOrigin
 }
 
 export interface HistoryEntry {
@@ -568,6 +576,7 @@ export interface ResourceBalance {
   master_total: string | null
   apartments_sum: string
   unallocated_loss: string | null
+  starting_meters: number
 }
 
 export interface MasterMeterRow {
@@ -575,7 +584,8 @@ export interface MasterMeterRow {
   resource_type: ResourceType
   location_label: string
   unit: MeterUnit
-  previous_value: string
+  previous_value: string | null
+  needs_start: boolean
   status: SubmissionStatus
   reading: ReadingSummary | null
 }
@@ -585,6 +595,8 @@ export interface MatrixMeter {
   resource_type: ResourceType
   location_label: string
   unit: MeterUnit
+  previous_value: string | null
+  needs_start: boolean
   status: SubmissionStatus
   reading: ReadingSummary | null
 }
@@ -617,6 +629,7 @@ export interface EstimateResponse {
   period_code: string
   estimated_count: number
   estimated: EstimatedReading[]
+  skipped_without_start: string[]
 }
 
 export interface PeriodStatusUpdateRequest {
@@ -1179,6 +1192,7 @@ export interface IssueSummary {
   created_at: string
   updated_at: string
   ended_at: string | null
+  reporter: ReporterView | null
   photos?: IssuePhoto[]
   can_add_photo?: boolean
   photos_delete_at?: string | null
@@ -1350,12 +1364,26 @@ export interface DocumentView {
   uploaded_by: AuthorBadgeDTO | null
 }
 
-export interface DocumentUploadOptions {
+export type PhotoVariantName = 'display' | 'thumb'
+
+export interface NoticeView {
+  title: string
+  body: string
+  category: PostCategory
+  target_scope: TargetScope
+  target_entrance: number | null
+  target_apartment_ids: string[] | null
+  comments_enabled: boolean
+}
+
+export interface UploadOptions {
   can_upload: boolean
   audiences: DocumentAudience[]
   categories: Array<DocumentCategory | string>
   max_bytes: number
 }
+
+export type DocumentUploadOptions = UploadOptions
 
 export interface DocumentEdit {
   title?: string

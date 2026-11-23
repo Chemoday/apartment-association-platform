@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
@@ -12,7 +12,7 @@ import AppNavbarLanguageDropdown from './AppNavbarLanguageDropdown.vue'
 const session = useSessionStore()
 const { canShowChat, recentCount, recentMinutes } = useChatState()
 
-const chatTooltip = computed(() => {
+const chatTooltip = computed<string>(() => {
   if (recentCount.value > 0) {
     return session.t('chat.indicatorActiveTooltip', {
       count: recentCount.value,
@@ -22,7 +22,7 @@ const chatTooltip = computed(() => {
   return session.t('chat.indicatorTitle')
 })
 
-const chatCountLabel = computed(() => {
+const chatCountLabel = computed<string>(() => {
   if (recentCount.value <= 0) return ''
   return recentCount.value > 99 ? '99+' : String(recentCount.value)
 })

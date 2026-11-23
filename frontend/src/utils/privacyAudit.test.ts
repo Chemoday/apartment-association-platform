@@ -64,16 +64,16 @@ test('Section 8.2 Privacy Check: console.* never logs tokens, emails, link codes
   }
 })
 
-test('Section 8.2 Privacy Check: accessToken variable is confined strictly to src/api/client.js', () => {
+test('Section 8.2 Privacy Check: accessToken variable is confined strictly to src/api/client.ts', () => {
   const files = walkSourceFiles(SRC_DIR)
   for (const file of files) {
     const rel = path.relative(SRC_DIR, file).replace(/\\/g, '/')
-    if (rel === 'api/client.js') continue
+    if (rel === 'api/client.ts' || rel === 'api/client.js') continue
     const content = fs.readFileSync(file, 'utf8')
     assert.equal(
       /\baccessToken\b/.test(content),
       false,
-      `accessToken must only exist inside api/client.js, but was found in ${rel}`,
+      `accessToken must only exist inside api/client.ts, but was found in ${rel}`,
     )
   }
 })

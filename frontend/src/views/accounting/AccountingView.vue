@@ -12,6 +12,7 @@ import {
   listPeriods,
 } from '@/api/endpoints/meters.js'
 import { formatPeriodLabel } from '@/utils/dates.js'
+import { resolveSkippedMetersWithoutStart } from '@/utils/matrixStarts.js'
 import { localizeError } from '@/locales/index.js'
 import PeriodToolbar from '@/views/readings/components/PeriodToolbar.vue'
 import MasterMeterKpi from '@/views/readings/components/MasterMeterKpi.vue'
@@ -19,6 +20,7 @@ import ReadingsMatrix from '@/views/readings/components/ReadingsMatrix.vue'
 import ReadingHistoryModal from '@/views/readings/components/ReadingHistoryModal.vue'
 import AccountingBalanceTab from './components/AccountingBalanceTab.vue'
 import BuildingConsumptionTab from './components/BuildingConsumptionTab.vue'
+import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 import StatusChip from '@/components/domain/StatusChip.vue'
@@ -34,27 +36,29 @@ function resolveTabFromQuery(rawTab) {
   return 'matrix'
 }
 
-const periodCode = ref('2026-10')
+const periodCode = ref('')
 const periodsList = ref([])
-const periodCodes = computed(() =>
-  periodsList.value.length > 0
-    ? periodsList.value.map((p) => p.period_code)
-    : ['2026-10', '2026-09', '2026-08', '2026-07'],
-)
+const periodsLoaded = ref(false)
+const periodCodes = computed(() => periodsList.value.map((p) => p.period_code))
 const activeTab = ref(resolveTabFromQuery(route?.query?.tab)) // 'matrix' | 'balance' | 'consumption'
 const matrix = ref(null)
 const loading = ref(true)
+const refreshing = ref(false)
 const error = ref(null)
 
 const busyAction = ref('')
-const actionBanner = ref(null) // { tone: 'success' | 'error', text: string }
+const actionBanner = ref(null) // { tone: 'success' | 'error', text: string, skippedItems?: Array }
 const csvSupported = ref(true)
 
 const historyReadingId = ref('')
 const historyTitle = ref('')
 
+let isUnmounted = false
 let loadMatrixSeq = 0
+let actionSeq = 0
 let matrixController = null
+let csvController = null
+let suppressPeriodWatch = false
 
 function abortMatrixRequest() {
   if (matrixController) {
@@ -63,43 +67,69 @@ function abortMatrixRequest() {
   }
 }
 
-async function loadMatrix() {
+function abortCsvRequest() {
+  if (csvController) {
+    csvController.abort()
+    csvController = null
+  }
+}
+
+async function loadMatrix({ silent = false } = {}) {
   if (!session.actingUserId || !canViewMatrix.value) {
     abortMatrixRequest()
     matrix.value = null
     error.value = null
     loading.value = false
+    refreshing.value = false
     return
   }
   abortMatrixRequest()
   const controller = new AbortController()
   matrixController = controller
   const seq = ++loadMatrixSeq
-  loading.value = true
+  const keepMounted = Boolean(silent && matrix.value)
+  if (keepMounted) {
+    refreshing.value = true
+  } else {
+    loading.value = true
+  }
   error.value = null
   try {
-    if (!periodsList.value.length) {
-      const fetchedPeriods = await listPeriods({ signal: controller.signal }).catch(() => [])
-      if (seq !== loadMatrixSeq || controller.signal.aborted) return
-      if (Array.isArray(fetchedPeriods) && fetchedPeriods.length > 0) {
-        periodsList.value = fetchedPeriods
-        if (!fetchedPeriods.some((p) => p.period_code === periodCode.value)) {
-          periodCode.value = fetchedPeriods[0].period_code
+    if (!periodsLoaded.value) {
+      const fetchedPeriods = await listPeriods({ signal: controller.signal })
+      if (isUnmounted || seq !== loadMatrixSeq || controller.signal.aborted) return
+      periodsLoaded.value = true
+      periodsList.value = Array.isArray(fetchedPeriods) ? fetchedPeriods : []
+      if (periodsList.value.length === 0) {
+        matrix.value = null
+        if (periodCode.value !== '') {
+          suppressPeriodWatch = true
+          periodCode.value = ''
         }
+        return
+      }
+      if (!periodsList.value.some((p) => p.period_code === periodCode.value)) {
+        suppressPeriodWatch = true
+        periodCode.value = periodsList.value[0].period_code
       }
     }
+    if (!periodCode.value) {
+      matrix.value = null
+      return
+    }
     const data = await getPeriodMatrix(periodCode.value, { signal: controller.signal })
-    if (seq !== loadMatrixSeq || controller.signal.aborted) return
+    if (isUnmounted || seq !== loadMatrixSeq || controller.signal.aborted) return
     matrix.value = data
   } catch (err) {
-    if (seq !== loadMatrixSeq || isAbortLikeError(err, controller.signal)) return
+    if (isUnmounted || seq !== loadMatrixSeq || isAbortLikeError(err, controller.signal)) return
     error.value = err
   } finally {
     if (matrixController === controller) {
       matrixController = null
     }
-    if (seq === loadMatrixSeq) {
+    if (!isUnmounted && seq === loadMatrixSeq) {
       loading.value = false
+      refreshing.value = false
     }
   }
 }
@@ -113,8 +143,11 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  isUnmounted = true
   loadMatrixSeq += 1
+  actionSeq += 1
   abortMatrixRequest()
+  abortCsvRequest()
 })
 
 watch(
@@ -126,6 +159,7 @@ watch(
       if (resolved === 'consumption') {
         abortMatrixRequest()
         loading.value = false
+        refreshing.value = false
       } else if (canViewMatrix.value && !matrix.value) {
         loadMatrix()
       }
@@ -139,6 +173,7 @@ function selectTab(nextTab) {
   if (nextTab === 'consumption') {
     abortMatrixRequest()
     loading.value = false
+    refreshing.value = false
   } else if (!matrix.value) {
     loadMatrix()
   }
@@ -150,13 +185,38 @@ function selectTab(nextTab) {
 
 watch(
   () => [session.actingUserId, session.sessionRevision, session.buildingRole, periodCode.value],
-  () => {
-    matrix.value = null
+  ([newUser, newRev, newRole], oldTuple) => {
+    const oldUser = oldTuple?.[0]
+    const oldRev = oldTuple?.[1]
+    const oldRole = oldTuple?.[2]
+    const sessionChanged = newUser !== oldUser || newRev !== oldRev || newRole !== oldRole
+
+    if (!sessionChanged && suppressPeriodWatch) {
+      suppressPeriodWatch = false
+      return
+    }
+    suppressPeriodWatch = false
+
+    actionSeq += 1
+    busyAction.value = ''
+    abortCsvRequest()
     actionBanner.value = null
+    matrix.value = null
+
+    if (sessionChanged) {
+      periodsList.value = []
+      periodsLoaded.value = false
+      if (periodCode.value !== '') {
+        suppressPeriodWatch = true
+        periodCode.value = ''
+      }
+    }
+
     if (!session.actingUserId || !canViewMatrix.value) {
       abortMatrixRequest()
       error.value = null
       loading.value = false
+      refreshing.value = false
       return
     }
     if (activeTab.value !== 'consumption') {
@@ -178,73 +238,151 @@ const reportedUnitsCount = computed(
   () => apartments.value.filter((a) => a.status !== 'MISSING').length,
 )
 
-async function handleStatusChange(newStatus) {
-  if (busyAction.value) return
-  busyAction.value = 'status'
-  actionBanner.value = null
-  try {
-    await changePeriodStatus(periodCode.value, newStatus)
-    await loadMatrix()
-    actionBanner.value = {
-      tone: 'success',
-      text: session.t('accounting.statusUpdatedBanner', { status: newStatus }),
-    }
-  } catch (err) {
-    actionBanner.value = {
-      tone: 'error',
-      text: localizeError(err.errorCode, err.payload, session.lang),
-    }
-  } finally {
-    busyAction.value = ''
+function captureActionContext() {
+  const mySeq = ++actionSeq
+  const reqPeriod = periodCode.value
+  const reqUser = session.actingUserId
+  const reqRev = session.sessionRevision
+  const reqRole = session.buildingRole
+  return {
+    mySeq,
+    reqPeriod,
+    isStale: () =>
+      isUnmounted ||
+      mySeq !== actionSeq ||
+      periodCode.value !== reqPeriod ||
+      session.actingUserId !== reqUser ||
+      session.sessionRevision !== reqRev ||
+      session.buildingRole !== reqRole ||
+      !canViewMatrix.value,
   }
 }
 
-async function handleEstimateMissing() {
-  if (busyAction.value) return
-  busyAction.value = 'estimate'
+async function handleStatusChange(newStatus) {
+  if (busyAction.value || loading.value || !period.value || !periodCode.value) return
+  const ctx = captureActionContext()
+  busyAction.value = 'status'
   actionBanner.value = null
   try {
-    const res = await estimateMissingReadings(periodCode.value)
-    await loadMatrix()
+    await changePeriodStatus(ctx.reqPeriod, newStatus)
+    if (ctx.isStale()) return
+    await loadMatrix({ silent: true })
+    if (ctx.isStale()) return
+    const statusKey = `status.${newStatus}`
+    const translatedStatus = session.t(statusKey)
+    const statusLabel = translatedStatus && translatedStatus !== statusKey ? translatedStatus : newStatus
     actionBanner.value = {
       tone: 'success',
-      text: session.t('accounting.estimatedBanner', { count: res.estimated_count }),
+      text: session.t('accounting.statusUpdatedBanner', { status: statusLabel }),
     }
   } catch (err) {
+    if (ctx.isStale()) return
     actionBanner.value = {
       tone: 'error',
       text: localizeError(err.errorCode, err.payload, session.lang),
     }
   } finally {
-    busyAction.value = ''
+    if (!isUnmounted && ctx.mySeq === actionSeq) {
+      busyAction.value = ''
+    }
+  }
+}
+
+function formatSkippedMeterLine(item) {
+  if (item.apartment_number && item.resource_type) {
+    const resourceKey = `resources.${item.resource_type}`
+    const translated = session.t(resourceKey)
+    const resourceLabel = translated && translated !== resourceKey ? translated : item.resource_type
+    if (item.location_label) {
+      return session.t('accounting.estimateSkippedItemWithLocation', {
+        apartment: item.apartment_number,
+        resource: resourceLabel,
+        location: item.location_label,
+      })
+    }
+    return session.t('accounting.estimateSkippedItem', {
+      apartment: item.apartment_number,
+      resource: resourceLabel,
+    })
+  }
+  return session.t('accounting.estimateSkippedFallback', { meterId: item.meter_id })
+}
+
+async function handleEstimateMissing() {
+  if (busyAction.value || loading.value || !period.value || !periodCode.value) return
+  const ctx = captureActionContext()
+  busyAction.value = 'estimate'
+  actionBanner.value = null
+  const apartmentsSnapshot = matrix.value?.apartments || []
+  try {
+    const res = await estimateMissingReadings(ctx.reqPeriod)
+    if (ctx.isStale()) return
+    await loadMatrix({ silent: true })
+    if (ctx.isStale()) return
+    const lookupApartments = matrix.value?.apartments?.length
+      ? matrix.value.apartments
+      : apartmentsSnapshot
+    const skippedItems = resolveSkippedMetersWithoutStart(
+      res.skipped_without_start,
+      lookupApartments,
+    )
+    actionBanner.value = {
+      tone: 'success',
+      text: session.t('accounting.estimatedBanner', { count: res.estimated_count }),
+      skippedItems,
+    }
+  } catch (err) {
+    if (ctx.isStale()) return
+    actionBanner.value = {
+      tone: 'error',
+      text: localizeError(err.errorCode, err.payload, session.lang),
+    }
+  } finally {
+    if (!isUnmounted && ctx.mySeq === actionSeq) {
+      busyAction.value = ''
+    }
   }
 }
 
 async function handleExportCsv() {
-  if (busyAction.value) return
+  if (busyAction.value || loading.value || !periodCode.value) return
+  const ctx = captureActionContext()
+  abortCsvRequest()
+  const controller = new AbortController()
+  csvController = controller
   busyAction.value = 'csv'
   actionBanner.value = null
   try {
-    const response = await exportPeriodCsv(periodCode.value)
+    const response = await exportPeriodCsv(ctx.reqPeriod, { signal: controller.signal })
+    if (ctx.isStale() || controller.signal.aborted) return
     const blob = await response.blob()
+    if (ctx.isStale() || controller.signal.aborted) return
     const disposition = response.headers.get('Content-Disposition') || ''
     const match = disposition.match(/filename="?([^";]+)"?/i)
-    const filename = match ? match[1] : `readings-${periodCode.value}.csv`
+    const filename = match ? match[1] : `readings-${ctx.reqPeriod}.csv`
 
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+    try {
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+    } finally {
+      if (link.parentNode) {
+        link.parentNode.removeChild(link)
+      }
+      setTimeout(() => {
+        URL.revokeObjectURL(url)
+      }, 1000)
+    }
 
     actionBanner.value = {
       tone: 'success',
       text: session.t('accounting.csvDownloadedBanner', { filename }),
     }
   } catch (err) {
+    if (ctx.isStale() || isAbortLikeError(err, controller.signal)) return
     if (err.errorCode === 'EXPORTER_NOT_ENABLED') {
       csvSupported.value = false
     }
@@ -253,7 +391,12 @@ async function handleExportCsv() {
       text: localizeError(err.errorCode, err.payload, session.lang),
     }
   } finally {
-    busyAction.value = ''
+    if (csvController === controller) {
+      csvController = null
+    }
+    if (!isUnmounted && ctx.mySeq === actionSeq) {
+      busyAction.value = ''
+    }
   }
 }
 
@@ -272,13 +415,18 @@ function openHistory(readingId, label) {
           <div class="flex items-center gap-space-xs text-on-surface-variant font-label-md text-[11px] tracking-wider uppercase font-medium">
             <span>{{ session.t('accounting.breadcrumb') }}</span>
             <span>/</span>
-            <span>{{ session.buildingName }} • Reg: {{ session.buildingRegistryCode }}</span>
+            <span>
+              {{ session.buildingName }}
+              <template v-if="session.buildingRegistryCode">
+                • Reg: {{ session.buildingRegistryCode }}
+              </template>
+            </span>
           </div>
           <h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight font-bold">
             {{ session.t('accounting.title') }}
           </h1>
           <p v-if="canViewMatrix" class="text-on-surface-variant font-body-sm text-body-sm">
-            <template v-if="activeTab !== 'consumption'">
+            <template v-if="activeTab !== 'consumption' && periodCode">
               {{ session.t('accounting.billingPeriod') }}
               {{ formatPeriodLabel(periodCode, session.lang) }}
               <template v-if="apartments.length || session.knownBuildingApartmentsCount !== null">
@@ -351,9 +499,10 @@ function openHistory(readingId, label) {
           </button>
 
           <button
-            v-if="csvSupported"
+            v-if="csvSupported && activeTab !== 'consumption'"
             type="button"
-            class="flex items-center gap-2 px-space-md py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-label-lg text-label-lg whitespace-nowrap transition-colors"
+            :disabled="Boolean(busyAction) || loading || !periodCode"
+            class="flex items-center gap-2 px-space-md py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-label-lg text-label-lg whitespace-nowrap transition-colors disabled:opacity-50"
             @click="handleExportCsv"
           >
             <span class="material-symbols-outlined text-[19px]">file_download</span>
@@ -396,10 +545,11 @@ function openHistory(readingId, label) {
         v-if="canViewMatrix"
         class="mb-space-md"
         :period-code="periodCode"
-        :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
+        :period-status="period?.status || ''"
         :periods="periodCodes"
         :missing-count="missingCount"
         :busy-action="busyAction"
+        :loading="loading || !period"
         :csv-supported="csvSupported"
         @change-period="(code) => (periodCode = code)"
         @change-status="handleStatusChange"
@@ -410,29 +560,62 @@ function openHistory(readingId, label) {
       <!-- Action Feedback Banner -->
       <div
         v-if="actionBanner"
+        data-testid="accounting-action-banner"
         role="status"
-        class="mb-space-md p-3 rounded-xl font-label-md text-xs font-semibold flex items-center justify-between"
+        class="mb-space-md p-3 rounded-xl font-label-md text-xs font-semibold flex flex-col gap-2"
         :class="
           actionBanner.tone === 'error'
             ? 'bg-error-container text-on-error-container'
             : 'bg-secondary-container/50 text-on-secondary-container'
         "
       >
-        <div class="flex items-center gap-2">
-          <span class="material-symbols-outlined text-[18px]">
-            {{ actionBanner.tone === 'error' ? 'error' : 'check_circle' }}
-          </span>
-          <span>{{ actionBanner.text }}</span>
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-[18px] shrink-0">
+              {{ actionBanner.tone === 'error' ? 'error' : 'check_circle' }}
+            </span>
+            <span>{{ actionBanner.text }}</span>
+          </div>
+          <button type="button" class="underline text-xs shrink-0" @click="actionBanner = null">
+            {{ session.t('common.dismiss') }}
+          </button>
         </div>
-        <button type="button" class="underline text-xs" @click="actionBanner = null">
-          {{ session.t('common.dismiss') }}
-        </button>
+
+        <div
+          v-if="actionBanner.skippedItems?.length"
+          data-testid="estimate-skipped-list"
+          class="pl-6 pt-1.5 border-t border-current/15 font-normal space-y-1"
+        >
+          <div class="flex items-center gap-1.5 font-semibold">
+            <span class="material-symbols-outlined text-[15px] shrink-0">flag</span>
+            <span>
+              {{ session.t('accounting.estimateSkippedHeading', { count: actionBanner.skippedItems.length }) }}
+            </span>
+          </div>
+          <ul class="list-disc pl-5 space-y-0.5">
+            <li v-for="item in actionBanner.skippedItems" :key="item.meter_id">
+              {{ formatSkippedMeterLine(item) }}
+            </li>
+          </ul>
+        </div>
       </div>
 
-      <ErrorCard v-if="error" :error="error" @retry="loadMatrix" />
+      <ErrorCard v-if="error" :error="error" @retry="() => loadMatrix()" />
 
       <div v-else-if="loading" class="py-8">
         <BaseSkeleton :lines="6" />
+      </div>
+
+      <div
+        v-else-if="periodsLoaded && periodCodes.length === 0"
+        data-testid="accounting-no-periods"
+        class="py-6"
+      >
+        <BaseEmptyState
+          icon="calendar_month"
+          :title="session.t('accounting.noPeriodsTitle')"
+          :description="session.t('accounting.noPeriodsDesc')"
+        />
       </div>
 
       <template v-else-if="matrix">
@@ -442,8 +625,8 @@ function openHistory(readingId, label) {
           :master-meters="masterMeters"
           :apartments="apartments"
           :period-code="periodCode"
-          :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
-          @master-saved="loadMatrix"
+          :period-status="period?.status || ''"
+          @master-saved="() => loadMatrix({ silent: true })"
           @open-history="openHistory"
         />
 
@@ -452,9 +635,9 @@ function openHistory(readingId, label) {
           v-if="activeTab === 'matrix'"
           :apartments="apartments"
           :period-code="periodCode"
-          :period-status="period?.status || 'OPEN_FOR_RESIDENTS'"
+          :period-status="period?.status || ''"
           @open-history="openHistory"
-          @reading-updated="loadMatrix"
+          @reading-updated="() => loadMatrix({ silent: true })"
         />
 
         <!-- Tab 2: Building Balance & Phase 2 Demo Preview -->

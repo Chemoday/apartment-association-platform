@@ -1,28 +1,24 @@
-<script setup>
-defineProps({
-  variant: {
-    type: String,
-    default: 'primary', // 'primary' | 'secondary' | 'danger' | 'ghost'
+<script setup lang="ts">
+withDefaults(
+  defineProps<{
+    variant?: 'primary' | 'secondary' | 'danger' | 'ghost'
+    size?: 'sm' | 'md' | 'lg'
+    type?: 'button' | 'submit' | 'reset'
+    disabled?: boolean
+    loading?: boolean
+  }>(),
+  {
+    variant: 'primary',
+    size: 'md',
+    type: 'button',
+    disabled: false,
+    loading: false,
   },
-  size: {
-    type: String,
-    default: 'md', // 'sm' | 'md' | 'lg'
-  },
-  type: {
-    type: String,
-    default: 'button',
-  },
-  disabled: {
-    type: Boolean,
-    default: false,
-  },
-  loading: {
-    type: Boolean,
-    default: false,
-  },
-})
+)
 
-defineEmits(['click'])
+defineEmits<{
+  (e: 'click', event: MouseEvent): void
+}>()
 </script>
 
 <template>

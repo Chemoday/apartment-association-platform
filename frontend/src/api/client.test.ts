@@ -1061,7 +1061,7 @@ test('sendUpload ends session fail-closed when 401 INVALID_TOKEN refresh fails, 
     // Verify offline demo mode path for apiUpload streams progress and creates photo
     enableOfflineDemo()
     setDemoUser('018f0000-0000-7000-8000-000000000102')
-    const createdIssue = await apiRequest('/issues', {
+    const createdIssue = await apiRequest<{ id: string }>('/issues', {
       method: 'POST',
       body: {
         category: 'LIFT',
@@ -1135,7 +1135,7 @@ test('sendUpload ends session fail-closed when 401 INVALID_TOKEN refresh fails, 
     // Verify offline apiUpload throws UPLOAD_ABORTED when signal aborts before final progress
     enableOfflineDemo()
     setDemoUser('018f0000-0000-7000-8000-000000000102')
-    const created2 = await apiRequest('/issues', {
+    const created2 = await apiRequest<{ id: string }>('/issues', {
       method: 'POST',
       body: {
         category: 'LIFT',
@@ -1330,3 +1330,28 @@ test('getFileUsage calls GET /api/v1/files/usage with signal support', async () 
 
 
 
+
+test('CTO audit P1-3: refreshSession rejects corrupted 200 OK payload (missing/NaN expires_in) fail-closed without infinite loop', async () => {
+  const originalFetch = globalThis.fetch
+  let refreshFetchCount = 0
+
+  globalThis.fetch = async () => {
+    refreshFetchCount += 1
+    return mockJsonResponse(200, {
+      access_token: '',
+      expires_in: Number.NaN,
+    })
+  }
+
+  try {
+    await assert.rejects(
+      () => refreshSession(),
+      (err: any) => err?.status === 503 && err?.errorCode === 'INVALID_SESSION_RESPONSE',
+    )
+    assert.equal(refreshFetchCount, 1)
+    assert.equal(signedIn.value, false)
+  } finally {
+    clearSession()
+    globalThis.fetch = originalFetch
+  }
+})

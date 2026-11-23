@@ -32,6 +32,8 @@ import HideReasonModal from './components/HideReasonModal.vue'
 import PostEditModal from './components/PostEditModal.vue'
 import CommentList from './components/CommentList.vue'
 import CommentComposer from './components/CommentComposer.vue'
+import ForumPrivacyChip from './components/ForumPrivacyChip.vue'
+import ForumNoticesStrip from './components/ForumNoticesStrip.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseChip from '@/components/base/BaseChip.vue'
@@ -97,9 +99,6 @@ const activeModerationError = computed(() =>
     ? moderationError.value
     : '',
 )
-const savingPrivacy = ref(false)
-const privacyMenuOpen = ref(false)
-const privacyMenuRef = ref(null)
 const noticesCollapsed = ref(false)
 
 const NOTICES_COLLAPSED_STORAGE_KEY = 'aap_forum_notices_collapsed'
@@ -111,34 +110,6 @@ const filters = computed(() => [
   { key: 'MAINTENANCE', label: session.t('forum.filterMaintenance'), icon: null },
   { key: 'MARKETPLACE', label: session.t('forum.filterMarketplace'), icon: null },
 ])
-
-const privacyModes = computed(() => [
-  {
-    value: 'FULL_NAME',
-    label: session.t('forum.privacyFullName'),
-    desc: 'Kati Kask • OWNER',
-  },
-  {
-    value: 'INITIALS',
-    label: session.t('forum.privacyInitials'),
-    desc: 'K. K. (Apt 14) • OWNER',
-  },
-  {
-    value: 'APARTMENT_ONLY',
-    label: session.t('forum.privacyApartmentOnly'),
-    desc: 'Apt 14 • OWNER',
-  },
-])
-
-const currentPrivacyBadgeLabel = computed(() => {
-  const mem = session.activeMembership
-  if (!mem) return ''
-  if (mem.preview_badge?.display_label) {
-    return mem.preview_badge.display_label
-  }
-  const found = privacyModes.value.find((m) => m.value === mem.privacy_display_mode)
-  return found ? found.label : session.t('forum.privacyFullName')
-})
 
 const filteredPosts = computed(() => {
   const q = searchQuery.value.trim()
@@ -730,28 +701,6 @@ async function handleCommentAdded() {
   }
 }
 
-async function handlePrivacyChange(mode) {
-  const membership = session.activeMembership
-  if (!membership || savingPrivacy.value || mode === membership.privacy_display_mode) {
-    privacyMenuOpen.value = false
-    return
-  }
-  savingPrivacy.value = true
-  try {
-    await session.changePrivacyMode(membership.membership_id, mode)
-    privacyMenuOpen.value = false
-    await loadPosts()
-  } finally {
-    savingPrivacy.value = false
-  }
-}
-
-function handleDocumentClick(e) {
-  if (privacyMenuOpen.value && privacyMenuRef.value && !privacyMenuRef.value.contains(e.target)) {
-    privacyMenuOpen.value = false
-  }
-}
-
 watch(activeFilter, () => {
   moderationSeq += 1
   editSeq += 1
@@ -811,7 +760,6 @@ onMounted(() => {
   } catch {
     noticesCollapsed.value = false
   }
-  document.addEventListener('click', handleDocumentClick)
   if (typeof window !== 'undefined') {
     window.addEventListener('focus', refreshNowClock)
   }
@@ -822,7 +770,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('click', handleDocumentClick)
   if (editExpiryTimer) clearTimeout(editExpiryTimer)
   if (typeof window !== 'undefined') {
     window.removeEventListener('focus', refreshNowClock)
@@ -870,71 +817,7 @@ watch(
         </div>
 
         <!-- Compact Privacy Signature Popover Chip (for Residents with an Apartment Membership) -->
-        <div v-if="session.activeMembership" ref="privacyMenuRef" class="relative">
-          <button
-            type="button"
-            class="px-3 py-1.5 rounded-xl border border-outline-variant/50 bg-surface-container-low/60 hover:bg-surface-container-low text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
-            :title="session.t('forum.privacyWidgetTitle')"
-            @click="privacyMenuOpen = !privacyMenuOpen"
-          >
-            <span class="material-symbols-outlined text-[16px] text-primary">badge</span>
-            <span class="text-on-surface-variant hidden sm:inline">{{ session.t('forum.signingAsLabel') }}</span>
-            <span class="font-semibold text-on-surface">{{ currentPrivacyBadgeLabel }}</span>
-            <span class="material-symbols-outlined text-[15px] text-on-surface-variant">
-              {{ privacyMenuOpen ? 'expand_less' : 'expand_more' }}
-            </span>
-          </button>
-
-          <!-- Dropdown Popover -->
-          <div
-            v-if="privacyMenuOpen"
-            class="absolute right-0 mt-2 w-72 bg-surface-container-lowest border border-surface-container-high rounded-2xl shadow-lg p-3.5 z-30 space-y-2.5"
-          >
-            <div>
-              <h3 class="text-xs font-bold text-on-surface">
-                {{ session.t('forum.privacyWidgetTitle') }}
-              </h3>
-              <p class="text-[11px] text-on-surface-variant mt-0.5 leading-snug">
-                {{ session.t('forum.privacyWidgetDesc') }}
-              </p>
-            </div>
-
-            <div class="space-y-1.5">
-              <button
-                v-for="mode in privacyModes"
-                :key="mode.value"
-                type="button"
-                class="w-full text-left p-2 rounded-xl border transition-colors flex items-center justify-between gap-2"
-                :class="
-                  session.activeMembership.privacy_display_mode === mode.value
-                    ? 'bg-primary/10 border-primary text-on-surface'
-                    : 'bg-surface-container-low/40 border-surface-container-high text-on-surface-variant hover:bg-surface-container-low'
-                "
-                :disabled="savingPrivacy"
-                @click="handlePrivacyChange(mode.value)"
-              >
-                <div>
-                  <div class="text-xs font-semibold text-on-surface">{{ mode.label }}</div>
-                  <div class="text-[11px] text-on-surface-variant font-mono">{{ mode.desc }}</div>
-                </div>
-                <span
-                  class="material-symbols-outlined text-[18px]"
-                  :class="
-                    session.activeMembership.privacy_display_mode === mode.value
-                      ? 'text-primary'
-                      : 'text-outline-variant'
-                  "
-                >
-                  {{
-                    session.activeMembership.privacy_display_mode === mode.value
-                      ? 'check_circle'
-                      : 'radio_button_unchecked'
-                  }}
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <ForumPrivacyChip @changed="loadPosts" />
 
         <!-- New Post Button -->
         <BaseButton variant="primary" size="sm" @click="composerOpen = true">
@@ -976,131 +859,15 @@ watch(
 
     <template v-else>
       <!-- Collapsible Official Board Notices Block (Shown when notices exist and filter is not a specific non-notice category) -->
-      <section
+      <ForumNoticesStrip
         v-if="pinnedNotices.length > 0 && activeFilter !== 'OFFICIAL_NOTICE'"
-        aria-label="Official Board Notices"
-      >
-        <!-- Collapsed Single Horizontal Bar Button -->
-        <button
-          v-if="noticesCollapsed"
-          type="button"
-          class="w-full px-4 py-2.5 rounded-xl bg-primary/8 hover:bg-primary/12 border border-primary/25 transition-colors flex items-center justify-between gap-3 text-left cursor-pointer"
-          @click="toggleNoticesCollapsed"
-        >
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="material-symbols-outlined text-[18px] text-primary">campaign</span>
-            <span class="text-xs font-bold text-on-surface">
-              {{ session.t('forum.pinnedNoticesHeading') }}
-            </span>
-            <span class="px-2 py-0.5 rounded-full bg-primary text-on-primary text-[11px] font-mono font-bold">
-              {{ pinnedNotices.length }}
-            </span>
-            <span class="text-xs text-on-surface-variant truncate hidden md:inline">
-              — {{ pinnedNotices[0]?.title }}
-            </span>
-          </div>
-          <span class="inline-flex items-center gap-1 text-xs font-semibold text-primary shrink-0">
-            <span>{{ session.t('forum.expandNoticesBtn') }}</span>
-            <span class="material-symbols-outlined text-[16px]">expand_more</span>
-          </span>
-        </button>
-
-        <!-- Expanded Official Notices Grid -->
-        <div
-          v-else
-          class="rounded-2xl bg-primary/5 border border-primary/20 p-4 space-y-3"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2">
-              <span class="material-symbols-outlined text-[18px] text-primary">campaign</span>
-              <h2 class="text-xs font-bold uppercase tracking-wider text-on-surface">
-                {{ session.t('forum.pinnedNoticesHeading') }} ({{ pinnedNotices.length }})
-              </h2>
-            </div>
-
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-primary/10 text-xs font-semibold text-primary transition-colors cursor-pointer"
-              @click="toggleNoticesCollapsed"
-            >
-              <span>{{ session.t('forum.collapseNoticesBtn') }}</span>
-              <span class="material-symbols-outlined text-[16px]">expand_less</span>
-            </button>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <article
-              v-for="notice in pinnedNotices"
-              :key="notice.id"
-              class="p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-2.5"
-              :class="
-                selectedPostDetail?.id === notice.id
-                  ? 'bg-surface-container-lowest border-primary ring-2 ring-primary/20 shadow-xs'
-                  : 'bg-surface-container-lowest/90 border-surface-container-high hover:border-primary/50'
-              "
-              @click="selectPost(notice)"
-            >
-              <div>
-                <div class="flex items-center justify-between gap-2 mb-1.5">
-                  <div class="flex items-center gap-1.5 flex-wrap">
-                    <BaseChip tone="primary">
-                      <span class="material-symbols-outlined text-[13px] mr-0.5">campaign</span>
-                      <span>{{ session.t('forum.officialNoticeBadge') }}</span>
-                    </BaseChip>
-                    <PostOriginBadge
-                      :origin="notice.origin"
-                      :post-type="notice.post_type"
-                    />
-                  </div>
-                  <div class="flex items-center gap-1">
-                    <span class="text-[11px] font-mono text-on-surface-variant">
-                      {{ formatDateTime(notice.created_at, session.lang) }}
-                    </span>
-                    <span
-                      v-if="notice.edited_at"
-                      class="text-[11px] text-on-surface-variant italic underline decoration-dotted cursor-help"
-                      :title="
-                        session.t('forum.editedAtTooltip', {
-                          time: formatDateTime(notice.edited_at, session.lang),
-                        })
-                      "
-                    >
-                      {{ session.t('forum.editedLabel') }}
-                    </span>
-                    <button
-                      type="button"
-                      class="p-1 rounded text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
-                      :title="session.t('forum.fullThreadBtn')"
-                      @click.stop="openPostDetail(notice)"
-                    >
-                      <span class="material-symbols-outlined text-[15px]">open_in_new</span>
-                    </button>
-                  </div>
-                </div>
-
-                <h3 class="text-sm font-bold text-on-surface line-clamp-1 mb-1">
-                  {{ notice.title }}
-                </h3>
-                <p class="text-xs text-on-surface-variant line-clamp-2 whitespace-pre-line">
-                  {{ notice.body ?? '' }}
-                </p>
-              </div>
-
-              <div class="flex items-center justify-between gap-2 pt-2 border-t border-surface-container-high text-xs">
-                <AuthorBadge
-                  v-if="notice.author_badge"
-                  :badge="notice.author_badge"
-                  :is-mine="notice.is_mine"
-                />
-                <span class="inline-flex items-center gap-1 font-mono text-on-surface-variant">
-                  <span class="material-symbols-outlined text-[14px]">chat_bubble</span>
-                  <span>{{ notice.comments_count ?? 0 }}</span>
-                </span>
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
+        :notices="pinnedNotices"
+        :collapsed="noticesCollapsed"
+        :selected-post-id="selectedPostDetail?.id || ''"
+        @toggle-collapse="toggleNoticesCollapsed"
+        @select="selectPost"
+        @open-detail="openPostDetail"
+      />
 
       <!-- 12-Col Split-View Reader: 5 Cols Compact Feed / 7 Cols Generous Reader Pane -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

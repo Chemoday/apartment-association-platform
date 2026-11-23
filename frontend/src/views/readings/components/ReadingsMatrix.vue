@@ -34,7 +34,11 @@ const searchQuery = ref('')
 const currentPage = ref(1)
 const pageSize = 12
 
-const editingApartment = ref(null)
+const editingApartmentId = ref(null)
+
+const editingApartment = computed(
+  () => props.apartments.find((a) => a.apartment_id === editingApartmentId.value) || null,
+)
 
 const myApartmentIds = computed(() =>
   new Set((session.me?.memberships || []).map((m) => m.apartment_id)),
@@ -55,7 +59,11 @@ const filteredApartments = computed(() => {
       return false
     }
     if (q) {
-      const matchNum = `apt ${apt.apartment_number}`.toLowerCase().includes(q)
+      const unitLabel = session.t('matrix.unitLabel', { number: apt.apartment_number }).toLowerCase()
+      const matchNum =
+        `apt ${apt.apartment_number}`.toLowerCase().includes(q) ||
+        unitLabel.includes(q) ||
+        String(apt.apartment_number).toLowerCase().includes(q)
       const matchStatus = apt.status.toLowerCase().includes(q)
       return matchNum || matchStatus
     }
@@ -90,7 +98,11 @@ const coldWaterSubtotal = computed(() => {
   const deltas = []
   for (const apt of props.apartments) {
     for (const m of apt.meters) {
-      if (m.resource_type === 'COLD_WATER' && m.reading?.consumption_delta) {
+      if (
+        m.resource_type === 'COLD_WATER' &&
+        m.reading?.consumption_delta &&
+        m.reading.previous_origin !== 'START'
+      ) {
         deltas.push(m.reading.consumption_delta)
       }
     }
@@ -102,7 +114,11 @@ const hotWaterSubtotal = computed(() => {
   const deltas = []
   for (const apt of props.apartments) {
     for (const m of apt.meters) {
-      if (m.resource_type === 'HOT_WATER' && m.reading?.consumption_delta) {
+      if (
+        m.resource_type === 'HOT_WATER' &&
+        m.reading?.consumption_delta &&
+        m.reading.previous_origin !== 'START'
+      ) {
         deltas.push(m.reading.consumption_delta)
       }
     }
@@ -116,7 +132,7 @@ function setEntrance(val) {
 }
 
 function handleOpenEdit(apt) {
-  editingApartment.value = apt
+  editingApartmentId.value = apt?.apartment_id || null
 }
 
 function handleSavedInModal(reading) {
@@ -221,7 +237,7 @@ function handleSavedInModal(reading) {
             {{ session.t('matrix.ledgerTitle') }}
           </span>
           <span class="text-on-surface-variant font-body-sm text-[12px]">
-            • {{ periodCode }} ({{ apartments.length }} units)
+            • {{ session.t('matrix.ledgerPeriodSummary', { period: periodCode, count: apartments.length }) }}
           </span>
         </div>
 
@@ -287,11 +303,13 @@ function handleSavedInModal(reading) {
           </span>
           <span class="text-on-surface-variant">•</span>
           <span class="text-on-surface-variant font-mono tabular-nums">
-            Cold Water Subtotal: <strong class="text-on-surface">{{ coldWaterSubtotal }} m³</strong>
+            {{ session.t('matrix.coldWaterSubtotal') }}:
+            <strong class="text-on-surface">{{ coldWaterSubtotal }} {{ session.t('units.m3') }}</strong>
           </span>
           <span class="text-on-surface-variant">•</span>
           <span class="text-on-surface-variant font-mono tabular-nums">
-            Hot Water Subtotal: <strong class="text-on-surface">{{ hotWaterSubtotal }} m³</strong>
+            {{ session.t('matrix.hotWaterSubtotal') }}:
+            <strong class="text-on-surface">{{ hotWaterSubtotal }} {{ session.t('units.m3') }}</strong>
           </span>
         </div>
 
@@ -340,21 +358,21 @@ function handleSavedInModal(reading) {
       "
       :subtitle="
         editingApartment
-          ? `Entrance ${editingApartment.entrance} • Floor ${editingApartment.floor} • Period ${periodCode}`
+          ? session.t('matrix.editModalSubtitle', {
+              entrance: editingApartment.entrance,
+              floor: editingApartment.floor,
+              period: periodCode,
+            })
           : ''
       "
       max-width="max-w-2xl"
-      @close="editingApartment = null"
+      @close="editingApartmentId = null"
     >
       <div v-if="editingApartment" class="grid grid-cols-1 gap-space-md">
         <MeterCard
           v-for="m in editingApartment.meters"
           :key="m.meter_id"
-          :meter="{
-            ...m,
-            serial_number: `APT${editingApartment.apartment_number}-${m.resource_type.slice(0, 2)}`,
-            previous_value: m.previous_value || '100.000',
-          }"
+          :meter="m"
           :period-code="periodCode"
           :period-status="periodStatus"
           :can-submit="canSubmitAnyMeter"

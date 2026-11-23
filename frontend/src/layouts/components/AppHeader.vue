@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import AppNavbar from './AppNavbar.vue'
 </script>
 

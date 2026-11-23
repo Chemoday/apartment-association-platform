@@ -1,39 +1,36 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
+import type { PostOrigin, PostType } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 
-const props = defineProps({
-  origin: {
-    type: String,
-    default: null,
+const props = withDefaults(
+  defineProps<{
+    origin?: PostOrigin | null
+    postType?: PostType | ''
+    isNotice?: boolean
+    tone?: 'default' | 'on-primary'
+  }>(),
+  {
+    origin: null,
+    postType: '',
+    isNotice: false,
+    tone: 'default',
   },
-  postType: {
-    type: String,
-    default: '',
-  },
-  isNotice: {
-    type: Boolean,
-    default: false,
-  },
-  tone: {
-    type: String,
-    default: 'default', // 'default' | 'on-primary'
-  },
-})
+)
 
 const session = useSessionStore()
 
-const isAutomaticNotice = computed(() => {
+const isAutomaticNotice = computed<boolean>(() => {
   return props.isNotice || props.postType === 'OFFICIAL_NOTICE'
 })
 
-const label = computed(() => {
+const label = computed<string>(() => {
   return isAutomaticNotice.value
     ? session.t('postOrigin.notice')
     : session.t('postOrigin.reminder')
 })
 
-const iconName = computed(() => {
+const iconName = computed<string>(() => {
   return isAutomaticNotice.value ? 'campaign' : 'event_repeat'
 })
 </script>

@@ -1,22 +1,22 @@
-<script setup>
+<script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 
 const route = useRoute()
 const session = useSessionStore()
-const dropdownOpen = ref(false)
-const rootRef = ref(null)
+const dropdownOpen = ref<boolean>(false)
+const rootRef = ref<HTMLElement | null>(null)
 
-async function handleSelectUser(userId) {
+async function handleSelectUser(userId: string): Promise<void> {
   dropdownOpen.value = false
   if (userId && userId !== session.actingUserId) {
     await session.switchUser(userId)
   }
 }
 
-function handleDocumentClick(e) {
-  if (dropdownOpen.value && rootRef.value && !rootRef.value.contains(e.target)) {
+function handleDocumentClick(e: MouseEvent): void {
+  if (dropdownOpen.value && rootRef.value && !rootRef.value.contains(e.target as Node | null)) {
     dropdownOpen.value = false
   }
 }

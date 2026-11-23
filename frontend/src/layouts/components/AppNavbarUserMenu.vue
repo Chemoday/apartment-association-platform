@@ -1,6 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import type { DisplayMode } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 
@@ -9,28 +10,28 @@ const route = useRoute()
 const session = useSessionStore()
 const { buildingRole } = useRole()
 
-const menuOpen = ref(false)
-const savingPrivacy = ref(false)
-const rootRef = ref(null)
+const menuOpen = ref<boolean>(false)
+const savingPrivacy = ref<boolean>(false)
+const rootRef = ref<HTMLElement | null>(null)
 
 const membership = computed(() => session.activeMembership)
-const privacyModes = ['APARTMENT_ONLY', 'INITIALS', 'FULL_NAME']
+const privacyModes: DisplayMode[] = ['APARTMENT_ONLY', 'INITIALS', 'FULL_NAME']
 
-const apartmentLabel = computed(() => {
+const apartmentLabel = computed<string>(() => {
   if (session.activeMembership?.apartment_number) {
     return `Apt ${session.activeMembership.apartment_number}`
   }
   return session.activeMembership?.preview_badge?.display_label || buildingRole.value
 })
 
-const roleChipLabel = computed(() => {
+const roleChipLabel = computed<string>(() => {
   if (session.activeMembership?.preview_badge?.role_badge) {
     return session.activeMembership.preview_badge.role_badge
   }
   return buildingRole.value
 })
 
-async function selectPrivacyMode(mode) {
+async function selectPrivacyMode(mode: DisplayMode): Promise<void> {
   if (!membership.value || savingPrivacy.value) return
   savingPrivacy.value = true
   try {
@@ -40,19 +41,19 @@ async function selectPrivacyMode(mode) {
   }
 }
 
-function navigateTo(routeName) {
+function navigateTo(routeName: string): void {
   menuOpen.value = false
   router.push({ name: routeName })
 }
 
-async function handleSignOut() {
+async function handleSignOut(): Promise<void> {
   menuOpen.value = false
   await session.signOut()
   router.push({ name: 'welcome' })
 }
 
-function handleDocumentClick(e) {
-  if (menuOpen.value && rootRef.value && !rootRef.value.contains(e.target)) {
+function handleDocumentClick(e: MouseEvent): void {
+  if (menuOpen.value && rootRef.value && !rootRef.value.contains(e.target as Node | null)) {
     menuOpen.value = false
   }
 }

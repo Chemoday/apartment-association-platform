@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useEmergencies } from '@/composables/useEmergencies.js'
@@ -10,11 +10,11 @@ const session = useSessionStore()
 const { canPublishOfficial } = useRole()
 const { unacknowledgedEmergencies, acknowledge, resolve } = useEmergencies()
 
-const busyId = ref('')
+const busyId = ref<string>('')
 
 const primaryEmergency = computed(() => unacknowledgedEmergencies.value[0] || null)
 
-const targetLabel = computed(() => {
+const targetLabel = computed<string>(() => {
   const item = primaryEmergency.value
   if (!item) return ''
   if (item.target_scope === 'ENTRANCE' && item.target_entrance) {
@@ -23,7 +23,7 @@ const targetLabel = computed(() => {
   return session.t('emergency.urgent')
 })
 
-async function handleAcknowledge(id) {
+async function handleAcknowledge(id: string): Promise<void> {
   if (busyId.value) return
   busyId.value = id
   try {
@@ -33,7 +33,7 @@ async function handleAcknowledge(id) {
   }
 }
 
-async function handleResolve(id) {
+async function handleResolve(id: string): Promise<void> {
   if (busyId.value) return
   busyId.value = id
   try {
@@ -43,7 +43,7 @@ async function handleResolve(id) {
   }
 }
 
-function viewDetails(id) {
+function viewDetails(id: string): void {
   router.push(`/forum/${id}`)
 }
 </script>

@@ -669,7 +669,8 @@ test('report and CSV edge cases: task rename, tie-breakers, 0.00 cost, malformed
   assert.equal(csvEmpty.csv, '\uFEFFclosed_on,task_title,kind,planned_date,cost,note,recorded_by\r\n')
 
   const csv2027 = buildMaintenanceYearCsv(renamedAndTiedLog, 2027)
-  const lines = csv2027.csv!.slice(1).trimEnd().split('\r\n')
+  assert.equal(csv2027.ok, true)
+  const lines = csv2027.csv.slice(1).trimEnd().split('\r\n')
   // Row 1 is 2027-01-10 (0.00 cost), Row 2 is log-a (08:00), Row 3 is log-b (12:00)
   assert.equal(lines[1].includes(',0.00,Zero euro check,'), true)
   assert.equal(lines[2].includes('Same day earlier record'), true)
@@ -685,7 +686,8 @@ test('report and CSV edge cases: task rename, tie-breakers, 0.00 cost, malformed
     ],
     2027,
   )
-  assert.equal(malformedCsv.csv!.includes(",'=1+1,"), true)
+  assert.equal(malformedCsv.ok, true)
+  assert.equal(malformedCsv.csv.includes(",'=1+1,"), true)
 
   // Multi-page log discovery beyond 100 entries
   const allRows = [

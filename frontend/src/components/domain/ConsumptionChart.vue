@@ -1,5 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref, useId, watch } from 'vue'
+import type { ApartmentConsumptionResponse } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 import { formatPeriodLabel } from '@/utils/dates.js'
 import {
@@ -9,48 +10,40 @@ import {
 } from '@/utils/consumption.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
-const props = defineProps({
-  periods: {
-    type: Array,
-    default: () => [],
-  },
-  series: {
-    type: Array,
-    default: () => [],
-  },
-  loading: {
-    type: Boolean,
-    default: false,
-  },
-  error: {
-    type: Object,
-    default: null,
-  },
-  title: {
-    type: String,
-    default: '',
-  },
-  subtitle: {
-    type: String,
-    default: '',
-  },
-  emptyText: {
-    type: String,
-    default: '',
-  },
-  months: {
-    type: Number,
-    default: 0,
-  },
-})
+type ConsumptionPeriodItem = ApartmentConsumptionResponse['periods'][number]
+type ConsumptionSeriesItem = ApartmentConsumptionResponse['resources'][number]
 
-const emit = defineEmits(['retry'])
+const props = withDefaults(
+  defineProps<{
+    periods?: ConsumptionPeriodItem[]
+    series?: ConsumptionSeriesItem[]
+    loading?: boolean
+    error?: unknown
+    title?: string
+    subtitle?: string
+    emptyText?: string
+    months?: number
+  }>(),
+  {
+    periods: () => [],
+    series: () => [],
+    loading: false,
+    title: '',
+    subtitle: '',
+    emptyText: '',
+    months: 0,
+  },
+)
+
+const emit = defineEmits<{
+  retry: []
+}>()
 
 const session = useSessionStore()
 const instanceId = useId().replace(/[^a-zA-Z0-9_-]/g, '')
 
-const activeBySeries = ref({}) // seriesKey -> periodCode
-const pinnedBySeries = ref({}) // seriesKey -> periodCode
+const activeBySeries = ref<Record<string, string>>({}) // seriesKey -> periodCode
+const pinnedBySeries = ref<Record<string, string>>({}) // seriesKey -> periodCode
 
 watch(
   () => [props.periods, props.series],
@@ -60,25 +53,25 @@ watch(
   },
 )
 
-function seriesKey(item) {
+function seriesKey(item: Pick<ConsumptionSeriesItem, 'resource_type' | 'unit'>): string {
   return `${item.resource_type}::${item.unit}`
 }
 
-function hatchPatternId(item) {
+function hatchPatternId(item: Pick<ConsumptionSeriesItem, 'resource_type' | 'unit'>): string {
   return `hatch-${instanceId}-${item.resource_type}-${item.unit}`.replace(/[^a-zA-Z0-9_-]/g, '')
 }
 
-function unitLabel(unit) {
+function unitLabel(unit: string): string {
   const translated = session.t(`units.${unit}`)
   return translated === `units.${unit}` ? unit : translated
 }
 
-function resourceLabel(resourceType) {
+function resourceLabel(resourceType: string): string {
   const translated = session.t(`resources.${resourceType}`)
   return translated === `resources.${resourceType}` ? resourceType : translated
 }
 
-const resolvedTitle = computed(() => {
+const resolvedTitle = computed<string>(() => {
   if (props.title) return props.title
   if (props.months && props.months !== 12) {
     return session.t('consumptionChart.sectionTitleMonths', { months: props.months })
@@ -86,7 +79,7 @@ const resolvedTitle = computed(() => {
   return session.t('consumptionChart.sectionTitle')
 })
 
-const chartWidth = computed(() => ((props.periods?.length || 0) > 14 ? 660 : 560))
+const chartWidth = computed<number>(() => ((props.periods?.length || 0) > 14 ? 660 : 560))
 const chartHeight = 218
 
 const charts = computed(() => {
@@ -129,21 +122,21 @@ const charts = computed(() => {
   })
 })
 
-function setHoveredBar(sKey, periodCode) {
+function setHoveredBar(sKey: string, periodCode: string): void {
   activeBySeries.value = {
     ...activeBySeries.value,
     [sKey]: periodCode,
   }
 }
 
-function clearHoveredBar(sKey) {
+function clearHoveredBar(sKey: string): void {
   if (!activeBySeries.value[sKey]) return
   const next = { ...activeBySeries.value }
   delete next[sKey]
   activeBySeries.value = next
 }
 
-function handleBarClick(sKey, periodCode) {
+function handleBarClick(sKey: string, periodCode: string): void {
   const wasPinned = pinnedBySeries.value[sKey] === periodCode
   if (wasPinned) {
     const nextPinned = { ...pinnedBySeries.value }
@@ -159,7 +152,9 @@ function handleBarClick(sKey, periodCode) {
   setHoveredBar(sKey, periodCode)
 }
 
-function barAccessibleLabel(bar, unit) {
+type ChartBar = ReturnType<typeof computeConsumptionChartGeometry>['bars'][number]
+
+function barAccessibleLabel(bar: ChartBar, unit: string): string {
   const periodText = `${formatPeriodLabel(bar.periodCode, session.lang)} (${bar.periodCode})`
   if (bar.isGap) {
     return session.t('consumptionChart.gapAriaLabel', { period: periodText })
