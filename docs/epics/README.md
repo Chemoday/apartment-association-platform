@@ -20,6 +20,7 @@ one pull request, with the contract and the code of each task in their own commi
 | E11 Shared file storage | 2 | [E11_FILE_STORAGE.md](E11_FILE_STORAGE.md) | designed (2026-11-12), done (#126, #128, #129); signed containers come with E3 part B, meter photos with E6. Foundation for photos (E9 I4, E6), documents and signed ballots (E3 part B) |
 | E12 External building data providers | 2-3 | [E12_EXTERNAL_BUILDING_DATA.md](E12_EXTERNAL_BUILDING_DATA.md) | designed (2026-11-14), X0 docs; an open umbrella: core phases X1-X5 once for every country, countries added over time (EE first); country pages in [docs/external_providers/](../external_providers/README.md) |
 | E13 Rollout of a new association | 2 | [E13_ROLLOUT.md](E13_ROLLOUT.md) | designed (2026-11-18), R0 docs; the simplest install on the association's own VPS, R1-R6 before the pilot (R4c may follow it), the setup wizard is R7; filling the building (R3) and connecting the residents (R4a-R4c) designed 2026-11-21 |
+| E14 Objects of several kinds | 2 | [E14_OBJECT_KINDS.md](E14_OBJECT_KINDS.md) | designed and reviewed by three CTO reviews (2026-11-25), K0 docs; parking spaces and garages as objects of their own, members reached by kind; five PRs: K1a refactoring; K1+K4 model; K2+K2b targets; K3+K5 forum and views; K6 demo |
 
 Background for these choices: [docs/cli_planning/2026-10-31-post-course-epics.md](../cli_planning/2026-10-31-post-course-epics.md)
 and [docs/cli_planning/2026-11-01-login-and-profiles.md](../cli_planning/2026-11-01-login-and-profiles.md) (E7, E8, N8),
@@ -27,4 +28,5 @@ and [docs/cli_planning/2026-11-01-login-and-profiles.md](../cli_planning/2026-11
 [docs/cli_planning/2026-11-08-maintenance-calendar.md](../cli_planning/2026-11-08-maintenance-calendar.md) (E10),
 [docs/cli_planning/2026-11-12-file-storage-and-backups.md](../cli_planning/2026-11-12-file-storage-and-backups.md) (E11),
 [docs/cli_planning/2026-11-14-external-building-data.md](../cli_planning/2026-11-14-external-building-data.md) (E12),
-[docs/cli_planning/2026-11-18-rollout.md](../cli_planning/2026-11-18-rollout.md) (E13).
+[docs/cli_planning/2026-11-18-rollout.md](../cli_planning/2026-11-18-rollout.md) (E13),
+[docs/cli_planning/2026-11-25-object-kinds.md](../cli_planning/2026-11-25-object-kinds.md) (E14).
