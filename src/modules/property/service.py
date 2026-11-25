@@ -75,6 +75,7 @@ from src.modules.property.schemas import (
     TargetScope,
     UserRefDTO,
     apartment_in_target,
+    object_sort_key,
     target_consistency_problem,
 )
 
@@ -105,8 +106,14 @@ UNKNOWN_AUTHOR_BADGE = AuthorBadgeDTO(display_label="Unknown author", role_badge
 
 type AuthorKey = tuple[uuid.UUID, uuid.UUID | None]
 
-# Entrance, then apartment number in natural order: "2" < "10" < "14" < "14A".
-_APARTMENT_ORDER = (Apartment.entrance, func.length(Apartment.number), Apartment.number)
+# The SQL form of `object_sort_key` (kept equal to it by a test): entrance (none last), then the
+# number in natural order by code point, "2" < "10" < "14" < "14A" < "14a", whatever the
+# database's collation.
+_APARTMENT_ORDER = (
+    Apartment.entrance.asc().nulls_last(),
+    func.length(Apartment.number),
+    Apartment.number.collate("C"),
+)
 # Ended memberships are history: every query that resolves people filters them
 # (docs/ARCHITECTURE.md 4.3).
 ACTIVE_MEMBERSHIP = ApartmentMembership.ended_at.is_(None)
@@ -1156,9 +1163,7 @@ class PropertyService:
         def membership_key(item: tuple[ApartmentMembership, Apartment]) -> tuple:
             membership, apartment = item
             return (
-                apartment.entrance,
-                len(apartment.number),
-                apartment.number,
+                *object_sort_key(ObjectKind.APARTMENT, apartment.entrance, apartment.number),
                 _RELATION_ORDER.index(membership.relation_type),
                 membership.started_at,
                 str(membership.user_id),

@@ -1,7 +1,8 @@
 """Objects of several kinds (epic E14, sections 2.2, 2.4 and 5): labels, references by kind and
-number, and the one order of objects (pure, no database)."""
+number, and the one order of objects (pure, and the SQL order kept equal to it)."""
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.property.schemas import (
     ObjectKind,
@@ -10,6 +11,8 @@ from src.modules.property.schemas import (
     object_sort_key,
     parse_object_ref,
 )
+from src.modules.property.service import PropertyService
+from tests.factories import create_apartment, create_building
 
 
 @pytest.mark.parametrize(
@@ -78,3 +81,33 @@ def test_objects_are_ordered_by_kind_entrance_and_natural_number() -> None:
         (ObjectKind.PARKING, None, "10"),
         (ObjectKind.GARAGE, None, "1"),
     ]
+
+
+# --- The SQL order and the database --------------------------------------------------------------
+
+
+async def test_the_sql_order_of_objects_equals_the_sort_key(db_session: AsyncSession) -> None:
+    building = await create_building(db_session)
+    # Created out of order; "14A" and "14a" differ only in case (code point order: upper first).
+    for number, entrance in [
+        ("14b", 2),
+        ("10", 1),
+        ("14a", 2),
+        ("2", 1),
+        ("14B", 2),
+        ("14", 2),
+        ("14A", 2),
+        ("3", 2),
+        ("1", 3),
+    ]:
+        await create_apartment(db_session, building, number, entrance=entrance)
+
+    listed = await PropertyService(db_session).list_apartments(building.id)
+
+    assert [a.number for a in listed] == [
+        a.number
+        for a in sorted(
+            listed, key=lambda a: object_sort_key(ObjectKind.APARTMENT, a.entrance, a.number)
+        )
+    ]
+    assert [a.number for a in listed] == ["2", "10", "3", "14", "14A", "14B", "14a", "14b", "1"]
