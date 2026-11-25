@@ -1,10 +1,13 @@
 """Objects of several kinds (epic E14, sections 2.2, 2.4 and 5): labels, references by kind and
 number, and the one order of objects (pure, and the SQL order kept equal to it)."""
 
+from decimal import Decimal
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.property.schemas import (
+    NewApartment,
     ObjectKind,
     ObjectRef,
     object_label,
@@ -111,3 +114,20 @@ async def test_the_sql_order_of_objects_equals_the_sort_key(db_session: AsyncSes
         )
     ]
     assert [a.number for a in listed] == ["2", "10", "3", "14", "14A", "14B", "14a", "14b", "1"]
+
+
+async def test_objects_are_created_and_found_by_kind_and_number(db_session: AsyncSession) -> None:
+    building = await create_building(db_session)
+    properties = PropertyService(db_session)
+
+    ids = await properties.create_apartments(
+        building.id,
+        [NewApartment(number="1", entrance=1, floor=1, area_m2=Decimal("40.10"))],
+    )
+    found = await properties.apartment_by_ref(building.id, ObjectKind.APARTMENT, "1")
+
+    assert list(ids) == [ObjectRef(ObjectKind.APARTMENT, "1")]
+    assert found is not None and found.apartment_id == ids[ObjectRef(ObjectKind.APARTMENT, "1")]
+    # Every object is an apartment until objects get their kind.
+    assert await properties.apartment_by_ref(building.id, ObjectKind.PARKING, "1") is None
+    assert await properties.apartment_by_ref(building.id, ObjectKind.APARTMENT, "2") is None

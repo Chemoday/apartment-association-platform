@@ -80,6 +80,7 @@ from src.modules.property.schemas import (
     CurrentUserDTO,
     DisplayMode,
     Locale,
+    ObjectKind,
     RelationType,
 )
 from src.modules.property.service import PropertyService
@@ -172,8 +173,8 @@ class InvitationService:
             if caller.building_role != BuildingRole.CHAIRMAN:
                 raise forbidden()
         if isinstance(body, OwnerInvitationCreate):
-            apartment = await self.properties.apartment_by_number(
-                caller.building_id, body.apartment_number
+            apartment = await self.properties.apartment_by_ref(
+                caller.building_id, ObjectKind.APARTMENT, body.apartment_number
             )
             if apartment is None:
                 raise apartment_not_found()

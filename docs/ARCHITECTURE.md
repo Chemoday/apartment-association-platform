@@ -194,7 +194,7 @@ Design: [docs/epics/E7_LOGIN.md](epics/E7_LOGIN.md). Tables: docs/SCHEMA.md sect
 | `close_account(user_id)` | Ends all memberships; `is_active = false`; e-mail and phone `NULL`, name `"Former resident"`; module `auth` deletes the `core_user_identities` rows (its own model since A5) in the same transaction. Refuses the last active chairman, under the same locks |
 | `active_users_by_emails(emails)` | `dict[str, UUID]`: which of these canonical e-mails (held by `auth` in invitations) belong to active users; no address leaves `property` (closing deletes the invitations to the person's e-mail) |
 | `building_ids()` | every building of the installation (the first-chairman command) |
-| `apartment_by_number(building_id, number)` / `apartment_ref(apartment_id)` | `ApartmentRefDTO(apartment_id, building_id, number)` or `None` |
+| `apartment_by_ref(building_id, kind, number)` / `apartment_ref(apartment_id)` | `ApartmentRefDTO(apartment_id, building_id, number)` or `None` |
 | `lock_people(building_id)` | The building's people lock (a transaction advisory lock, re-entrant). Module `auth` takes it before it locks invitation rows (create, resend, delete, accept), so every path locks in one order: this lock, an apartment, an invitation, then its tokens and other single rows |
 | `lock_apartment(apartment_id)` | `SELECT … FOR UPDATE` on the apartment row, held for the transaction, so the tenant limit cannot be exceeded by concurrent invitations |
 | `is_owner_of(user_id, apartment_id)` | active `OWNER` membership of an active user |

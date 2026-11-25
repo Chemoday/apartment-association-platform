@@ -64,6 +64,7 @@ from src.modules.property.schemas import (
     NewApartment,
     NewBuilding,
     ObjectKind,
+    ObjectRef,
     PersonDTO,
     PersonMembershipDTO,
     PrivacyUpdateResponse,
@@ -756,9 +757,10 @@ class PropertyService:
 
     async def create_apartments(
         self, building_id: uuid.UUID, apartments: Iterable[NewApartment]
-    ) -> dict[str, uuid.UUID]:
+    ) -> dict[ObjectRef, uuid.UUID]:
         """Apartments of a new building, checked by the filling core (src/core/filling, epic
-        E13 R3); returns their ids by number. The caller commits."""
+        E13 R3); returns their ids by kind and number (a number repeats across kinds). The
+        caller commits."""
         rows = [
             Apartment(
                 building_id=building_id,
@@ -771,7 +773,8 @@ class PropertyService:
         ]
         self.session.add_all(rows)
         await self.session.flush()
-        return {row.number: row.id for row in rows}
+        # Objects carry no kind yet: every object is an apartment.
+        return {ObjectRef(ObjectKind.APARTMENT, row.number): row.id for row in rows}
 
     async def building_ids(self) -> list[uuid.UUID]:
         """Every building of the installation (one per installation today; the operator
@@ -992,9 +995,13 @@ class PropertyService:
         await self.session.flush()
         return True
 
-    async def apartment_by_number(
-        self, building_id: uuid.UUID, number: str
+    async def apartment_by_ref(
+        self, building_id: uuid.UUID, kind: ObjectKind, number: str
     ) -> ApartmentRefDTO | None:
+        """The object of the building with this kind and number, or None (a number alone names
+        no object: it repeats across kinds)."""
+        if kind != ObjectKind.APARTMENT:
+            return None  # objects carry no kind yet: every object is an apartment
         apartment = await self.session.scalar(
             select(Apartment).where(
                 Apartment.building_id == building_id, Apartment.number == number
