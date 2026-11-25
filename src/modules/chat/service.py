@@ -32,7 +32,7 @@ from src.modules.chat.schemas import (
     ChatState,
 )
 from src.modules.chat.settings import CHAT_ENABLED
-from src.modules.property.schemas import CurrentUserDTO
+from src.modules.property.schemas import CurrentUserDTO, first_object_in
 from src.modules.property.service import PropertyService, get_property_service
 
 
@@ -188,7 +188,7 @@ class ChatService:
             if user.membership_for(requested) is None:
                 raise _invalid_author_apartment()
             return requested
-        return user.memberships[0].apartment_id if user.memberships else None
+        return first_object_in(user, None)
 
     async def _views(self, user: CurrentUserDTO, rows: list[ChatMessage]) -> list[ChatMessageView]:
         badges = await self.property_service.get_masked_author_badges(

@@ -5,9 +5,12 @@ A person with two apartments leaves the object out of a forum topic, a comment, 
 an issue report and a ballot. The badge of the first three is the person's first apartment in
 list order (entrance, then the number), never a 422; the issue report and the ballot ask to
 choose. The memberships are created in the other order, so the list order decides, not the order
-of creation. These tests pin today's behaviour before the defaults move into shared helpers.
+of creation. These tests pinned today's behaviour before the defaults moved into the shared
+helpers `first_object_in` and `chosen_object`, tested at the end.
 """
 
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -16,7 +19,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.security import DEMO_USER_HEADER
 from src.modules.property.models import User
-from src.modules.property.schemas import RelationType
+from src.modules.property.schemas import (
+    ApartmentMembershipDTO,
+    BuildingRole,
+    CurrentUserDTO,
+    DisplayMode,
+    ObjectNotChosen,
+    ObjectNotHeld,
+    RelationType,
+    TargetDTO,
+    TargetScope,
+    chosen_object,
+    first_object_in,
+)
 from tests.factories import create_membership, create_user
 from tests.issues.conftest import IssueWorld, build_issue_world
 
@@ -159,3 +174,56 @@ async def test_a_ballot_without_an_object_asks_to_choose_per_apartment(
     if status == 422:
         assert response.json()["error_code"] == "VALIDATION_ERROR"
         assert response.json()["errors"][0]["loc"] == ["body", "apartment_id"]
+
+
+# --- The shared helpers (pure) -------------------------------------------------------------------
+
+
+def _member(*homes: tuple[uuid.UUID, int]) -> CurrentUserDTO:
+    return CurrentUserDTO(
+        id=uuid.uuid4(),
+        building_id=uuid.uuid4(),
+        building_role=BuildingRole.USER,
+        privacy_display_mode=DisplayMode.APARTMENT_ONLY,
+        memberships=tuple(
+            ApartmentMembershipDTO(
+                membership_id=uuid.uuid4(),
+                apartment_id=apartment_id,
+                apartment_number="1",
+                entrance=entrance,
+                floor=1,
+                relation_type=RelationType.OWNER,
+                can_submit_readings=True,
+                can_view_bills=True,
+                can_vote=True,
+                privacy_display_mode=DisplayMode.APARTMENT_ONLY,
+                since=datetime.now(UTC),
+            )
+            for apartment_id, entrance in homes
+        ),
+    )
+
+
+def test_the_badge_object_is_the_first_membership_or_the_first_inside_a_target() -> None:
+    first, second = uuid.uuid4(), uuid.uuid4()
+    user = _member((first, 1), (second, 2))
+
+    assert first_object_in(user, None) == first
+    assert first_object_in(user, TargetDTO(scope=TargetScope.ALL_BUILDING)) == first
+    assert first_object_in(user, TargetDTO(scope=TargetScope.ENTRANCE, entrance=2)) == second
+    assert first_object_in(user, TargetDTO(scope=TargetScope.ENTRANCE, entrance=3)) is None
+    assert first_object_in(_member(), None) is None
+
+
+def test_the_chosen_object_is_the_requested_or_the_only_one() -> None:
+    first, second = uuid.uuid4(), uuid.uuid4()
+
+    assert chosen_object([first, second], second) == second
+    assert chosen_object([first], None) == first
+    assert chosen_object([], None) is None
+    with pytest.raises(ObjectNotHeld):
+        chosen_object([first], second)
+    with pytest.raises(ObjectNotHeld):
+        chosen_object([], first)
+    with pytest.raises(ObjectNotChosen):
+        chosen_object([first, second], None)

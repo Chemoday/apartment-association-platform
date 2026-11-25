@@ -60,9 +60,12 @@ from src.modules.governance.schemas import (
 )
 from src.modules.property.schemas import (
     CurrentUserDTO,
+    ObjectNotChosen,
+    ObjectNotHeld,
     RelationType,
     TargetDTO,
     TargetScope,
+    chosen_object,
 )
 from src.modules.property.service import PropertyService, get_property_service
 
@@ -584,14 +587,23 @@ class GovernanceService:
             if apartment_id is not None:
                 raise _validation_error("apartment_id", "a poll per person takes no apartment_id")
             chosen = units[0] if units else None
-        elif apartment_id is None:
-            if len(units) > 1:
+        else:
+            try:
+                chosen_id = chosen_object([unit.apartment_id for unit in units], apartment_id)
+            except ObjectNotHeld:
+                chosen_id = None  # not eligible
+            except ObjectNotChosen:
                 raise _validation_error(
                     "apartment_id", "choose the apartment you answer for (apartment_id)"
-                )
-            chosen = units[0] if units else None
-        else:
-            chosen = next((unit for unit in units if unit.apartment_id == apartment_id), None)
+                ) from None
+            chosen = next(
+                (
+                    unit
+                    for unit in units
+                    if chosen_id is not None and unit.apartment_id == chosen_id
+                ),
+                None,
+            )
         if chosen is None:
             raise _not_eligible()
         elector = await self.session.scalar(

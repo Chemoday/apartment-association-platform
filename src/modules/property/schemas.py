@@ -10,7 +10,7 @@ stores it.
 import re
 import unicodedata
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -243,6 +243,43 @@ def apartment_in_target(
     if target.scope == TargetScope.ENTRANCE:
         return target.entrance is not None and entrance == target.entrance
     return apartment_id in target.apartment_ids
+
+
+def first_object_in(user: CurrentUserDTO, target: TargetDTO | None) -> uuid.UUID | None:
+    """The object that signs a forum topic, a comment or a chat message when the author names
+    none: the author's first membership (in list order) inside `target`, or the first of all
+    without one; None without such a membership. Never an error."""
+    for membership in user.memberships:
+        # Memberships carry no kind yet: every object is an apartment.
+        if target is None or apartment_in_target(
+            target,
+            apartment_id=membership.apartment_id,
+            kind=ObjectKind.APARTMENT,
+            entrance=membership.entrance,
+        ):
+            return membership.apartment_id
+    return None
+
+
+class ObjectNotHeld(ValueError):
+    """The object named is not one of the candidates."""
+
+
+class ObjectNotChosen(ValueError):
+    """No object was named and there are several to choose from."""
+
+
+def chosen_object(candidates: Sequence[uuid.UUID], requested: uuid.UUID | None) -> uuid.UUID | None:
+    """The object an issue report or a ballot is made from: the requested one, which must be a
+    candidate (else ObjectNotHeld); without one the only candidate, None without candidates, and
+    ObjectNotChosen with several. Each caller answers the errors in its own words."""
+    if requested is not None:
+        if requested not in candidates:
+            raise ObjectNotHeld
+        return requested
+    if len(candidates) > 1:
+        raise ObjectNotChosen
+    return candidates[0] if candidates else None
 
 
 class MembershipView(ApartmentMembershipDTO):

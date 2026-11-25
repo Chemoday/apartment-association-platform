@@ -79,6 +79,7 @@ from src.modules.property.schemas import (
     AuthorBadgeDTO,
     CurrentUserDTO,
     TargetDTO,
+    first_object_in,
 )
 from src.modules.property.service import AuthorKey, PropertyService, get_property_service
 
@@ -805,9 +806,7 @@ class CommunicationService:
             if user.membership_for(requested) is None:
                 raise _invalid_author_apartment()
             return requested
-        if default_to_membership and user.memberships:
-            return user.memberships[0].apartment_id
-        return None
+        return first_object_in(user, None) if default_to_membership else None
 
     async def _check_new_thread(
         self, user: CurrentUserDTO, request: PostCreateRequest
