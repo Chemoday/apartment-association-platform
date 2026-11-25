@@ -23,7 +23,7 @@ from src.modules.communication.policies import (
     thread_author_apartment,
 )
 from src.modules.communication.schemas import PostType, TargetScope
-from src.modules.property.schemas import BuildingRole
+from src.modules.property.schemas import BuildingRole, TargetDTO
 
 APARTMENT = uuid.uuid4()
 
@@ -76,7 +76,7 @@ def test_only_the_board_sees_every_target() -> None:
     ],
 )
 def test_consistent_targets_pass(post_type, scope, entrance, apartments) -> None:
-    assert target_problem(post_type, scope, entrance, apartments) is None
+    assert target_problem(post_type, TargetDTO.of(scope, entrance, apartments)) is None
 
 
 @pytest.mark.parametrize(
@@ -105,7 +105,7 @@ def test_consistent_targets_pass(post_type, scope, entrance, apartments) -> None
     ],
 )
 def test_inconsistent_targets_are_explained(post_type, scope, entrance, apartments, fragment):
-    problem = target_problem(post_type, scope, entrance, apartments)
+    problem = target_problem(post_type, TargetDTO.of(scope, entrance, apartments))
 
     assert problem is not None
     assert fragment in problem

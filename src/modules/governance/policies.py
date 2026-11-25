@@ -27,7 +27,7 @@ from src.modules.governance.schemas import (
     ValueCountResult,
     ValueType,
 )
-from src.modules.property.schemas import BuildingRole, TargetScope
+from src.modules.property.schemas import BuildingRole
 
 if TYPE_CHECKING:
     from src.modules.governance.schemas import QuestionDraft
@@ -143,26 +143,6 @@ def check_question(question: "QuestionDraft") -> None:
         ):
             raise ValueError("min_value must not be greater than max_value")
         question.min_value, question.max_value = bounds
-
-
-def target_problem(
-    scope: TargetScope, entrance: int | None, apartment_ids: Sequence[uuid.UUID] | None
-) -> str | None:
-    """Why a poll's target is inconsistent, or None (the same rules as for posts); whether the
-    entrance or the apartments exist is checked by the service."""
-    if scope == TargetScope.ALL_BUILDING:
-        if entrance is not None or apartment_ids:
-            return "ALL_BUILDING takes neither target_entrance nor target_apartment_ids."
-    elif scope == TargetScope.ENTRANCE:
-        if entrance is None:
-            return "ENTRANCE needs target_entrance."
-        if apartment_ids:
-            return "ENTRANCE does not take target_apartment_ids."
-    elif not apartment_ids:
-        return "APARTMENT_LIST needs at least one apartment in target_apartment_ids."
-    elif entrance is not None:
-        return "APARTMENT_LIST does not take target_entrance."
-    return None
 
 
 # --- Lifecycle -----------------------------------------------------------------------------------

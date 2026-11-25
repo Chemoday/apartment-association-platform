@@ -85,6 +85,7 @@ from src.modules.property.schemas import (
     CurrentUserDTO,
     Locale,
     RecipientDTO,
+    TargetDTO,
     TargetScope,
 )
 from src.modules.property.service import PropertyService
@@ -458,7 +459,8 @@ class NotificationsSubscriber:
                 return
             # Targeting comes from the stored alert, the one source of truth.
             targeted = await properties.resolve_recipients(
-                ref.building_id, ref.target_scope, ref.target_entrance, ref.target_apartment_ids
+                ref.building_id,
+                TargetDTO.of(ref.target_scope, ref.target_entrance, ref.target_apartment_ids),
             )
             board = await properties.users_with_roles(ref.building_id, _EMERGENCY_ROLES)
             recipients = {r.user_id: r for r in (*targeted, *board)}
@@ -557,7 +559,8 @@ class NotificationsSubscriber:
             if apartment is None:
                 return
             members = await properties.resolve_recipients(
-                thread.building_id, TargetScope.APARTMENT_LIST, None, [thread.apartment_id]
+                thread.building_id,
+                TargetDTO.of(TargetScope.APARTMENT_LIST, None, [thread.apartment_id]),
             )
             board = await properties.users_with_roles(thread.building_id, _THREAD_BOARD_ROLES)
             candidates = {r.user_id: r for r in (*members, *board)}
@@ -782,9 +785,7 @@ class NotificationsSubscriber:
             properties = PropertyService(session)
             residents = await properties.resolve_recipients(
                 event.building_id,
-                event.target_scope,
-                event.target_entrance,
-                event.target_apartment_ids,
+                TargetDTO.of(event.target_scope, event.target_entrance, event.target_apartment_ids),
             )
             board = await properties.users_with_roles(event.building_id, _NOTICE_BOARD_ROLES)
             recipients = {r.user_id: r for r in (*residents, *board)}

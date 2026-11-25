@@ -17,10 +17,8 @@ from src.modules.governance.policies import (
     electorate_units,
     results_available,
     tally,
-    target_problem,
 )
 from src.modules.governance.schemas import AnswerMode, PollStatus, PollUnit, ValueType
-from src.modules.property.schemas import TargetScope
 
 
 @pytest.mark.parametrize(
@@ -77,18 +75,6 @@ def test_the_units_are_apartments_or_people_once_each() -> None:
     assert set(electorate_units(PollUnit.APARTMENT, pairs)) == {apt_14, apt_2}
     assert set(electorate_units(PollUnit.PERSON, pairs)) == {owner, family, tenant}
     assert len(electorate_units(PollUnit.PERSON, pairs)) == 3
-
-
-def test_targets_follow_the_rules_of_posts() -> None:
-    one = [uuid.uuid4()]
-    assert target_problem(TargetScope.ALL_BUILDING, None, None) is None
-    assert target_problem(TargetScope.ENTRANCE, 2, None) is None
-    assert target_problem(TargetScope.APARTMENT_LIST, None, one) is None
-    assert target_problem(TargetScope.ALL_BUILDING, 2, None)
-    assert target_problem(TargetScope.ENTRANCE, None, None)
-    assert target_problem(TargetScope.ENTRANCE, 2, one)
-    assert target_problem(TargetScope.APARTMENT_LIST, None, None)
-    assert target_problem(TargetScope.APARTMENT_LIST, 2, one)
 
 
 A, B, C = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()

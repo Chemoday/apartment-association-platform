@@ -37,6 +37,8 @@ src/
 
 **In-memory async event bus:** Side effects (e.g., sending notifications on emergency alerts, logging anomalies) are decoupled via domain events. Services add them to the request's `EventOutbox`; they are published on the event bus only after the request's transaction commits (see docs/BACKEND_CONVENTIONS.md, section 2.B). Events are also stored in `core_domain_events` in the same transaction (`src/core/domain_events.py`; docs/SCHEMA.md section 6), and a relay publishes any event that a crash or a failing handler left unpublished. Delivery is at least once and unordered, so every subscriber is idempotent and order-independent (details: docs/BACKEND_CONVENTIONS.md 2.B). The table doubles as the event history of the building.
 
+**Who a post, a poll or a notice reaches: one rule** (epic E14, section 3.1). Every target is a `TargetDTO(scope, entrance, apartment_ids)` (`property/schemas.py`), checked by `PropertyService.target_problem_in_building(building_id, target)` (the consistency of its fields, then whether its entrance or its apartments exist, with the messages of `INVALID_TARGET`). Who is reached is the pure rule `apartment_in_target(target, *, apartment_id, kind, entrance)`, used by the recipients and the electors; the SQL of visibility is `PropertyService.targeting_clause(user, *, scope, entrance, apartment_ids, member_only)` over the caller's own columns (`Post.target_*`, `Poll.target_*`), so property never imports another module's models. `member_only`: a whole-building poll is seen only through a membership, a whole-building post by everyone of the building (staff included). Tests keep the SQL equal to the rule (`tests/communication/test_targeting.py`, the poll test of `tests/governance/test_api.py`). The pure pieces other modules share live in `property/schemas.py`; `property/policies.py` is used inside property only.
+
 **Plugins** receive plain DTOs defined in `src/plugins/registry.py`, never ORM models, and have **no database access**. Which plugins run is configuration (`ENABLED_PLUGINS`), so a self-hosted instance enables its country adapters without code changes.
 
 ## 3. Module `notifications` (epic E1)
@@ -108,7 +110,7 @@ System-level methods (no request caller; `can_read_post` and `may_answer` take a
 
 | Module | Method | Returns |
 | :--- | :--- | :--- |
-| `property` | `resolve_recipients(building_id, scope, entrance, apartment_ids)` | `list[RecipientDTO(user_id, locale)]`: active users with a membership in a targeted apartment |
+| `property` | `resolve_recipients(building_id, target)` | `list[RecipientDTO(user_id, locale)]`: active users with a membership in a targeted apartment |
 | `property` | `users_with_roles(building_id, roles)` | `list[RecipientDTO]` |
 | `property` | `has_delivery_email(user_id)` | `bool`, for the channel list of the preferences (the address never leaves) |
 | `property` | `reading_submitters(apartment_ids)` | `list[RecipientDTO]`: active members with `can_submit_readings` |
@@ -318,8 +320,8 @@ section 8. API: docs/API.md section 8.
 
 | Method | Returns |
 | :--- | :--- |
-| `poll_electors(building_id, scope, entrance, apartment_ids, owners_only)` | `list[ElectorDTO(user_id, apartment_id)]`: active users with an active membership (an `OWNER` one when `owners_only`) in a targeted apartment of the building, under the shared targeting rule |
-| `list_apartments(building_id)` | the building's apartments (target checks) |
+| `poll_electors(building_id, target, owners_only)` | `list[ElectorDTO(user_id, apartment_id)]`: active users with an active membership (an `OWNER` one when `owners_only`) in a targeted apartment of the building, under the shared targeting rule |
+| `target_problem_in_building(building_id, target)` | why a poll's target cannot be used (`INVALID_TARGET`), or `None` (section 2) |
 
 - Who may answer for an apartment is checked from the caller's `CurrentUserDTO.memberships` at
   answer time; the snapshot fixes which units exist.

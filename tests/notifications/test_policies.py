@@ -31,8 +31,7 @@ from src.modules.notifications.policies import (
     unsubscribe_token,
 )
 from src.modules.notifications.schemas import Channel, NotificationEventType, UnavailableReason
-from src.modules.property.policies import apartment_in_target
-from src.modules.property.schemas import Locale, TargetScope
+from src.modules.property.schemas import Locale
 
 E, C = NotificationEventType, Channel
 
@@ -102,20 +101,6 @@ def test_channel_availability_first_match_wins(channel, kwargs, expected) -> Non
     arguments = {"has_email": False, "has_binding": False, **kwargs}
 
     assert channel_unavailable_reason(channel, **arguments) == expected
-
-
-def test_the_shared_targeting_rule() -> None:
-    apartment = uuid.uuid4()
-
-    def matches(scope: TargetScope, entrance: int | None, ids: set[uuid.UUID]) -> bool:
-        return apartment_in_target(scope, entrance, ids, apartment_id=apartment, entrance=2)
-
-    assert matches(TargetScope.ALL_BUILDING, None, set())
-    assert matches(TargetScope.ENTRANCE, 2, set())
-    assert not matches(TargetScope.ENTRANCE, 1, set())
-    assert not matches(TargetScope.ENTRANCE, None, set())
-    assert matches(TargetScope.APARTMENT_LIST, None, {apartment})
-    assert not matches(TargetScope.APARTMENT_LIST, None, {uuid.uuid4()})
 
 
 def test_the_default_locale_setting_offers_exactly_the_supported_languages() -> None:

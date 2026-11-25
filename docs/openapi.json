@@ -20510,7 +20510,7 @@
           "APARTMENT_LIST"
         ],
         "title": "TargetScope",
-        "description": "Who an alert or notice is meant for. Communication posts and notification recipients\nshare this enum and the matching rule `property.policies.apartment_in_target`."
+        "description": "Who an alert, a notice or a poll is meant for."
       },
       "TaskCreate": {
         "properties": {

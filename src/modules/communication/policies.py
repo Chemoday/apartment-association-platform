@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from src.modules.communication.schemas import PostType, TargetScope
-from src.modules.property.schemas import BuildingRole
+from src.modules.property.schemas import BuildingRole, TargetDTO, target_consistency_problem
 
 # Publish emergencies and official notices, resolve emergencies, and see every targeted post.
 PUBLISHER_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
@@ -41,38 +41,21 @@ def sees_all_targets(building_role: BuildingRole) -> bool:
     return building_role in PUBLISHER_ROLES
 
 
-def target_problem(
-    post_type: PostType,
-    target_scope: TargetScope,
-    target_entrance: int | None,
-    target_apartment_ids: Collection[UUID] | None,
-) -> str | None:
-    """Why the target of a new post is inconsistent, or None when it is fine.
+def target_problem(post_type: PostType, target: TargetDTO) -> str | None:
+    """Why the target of a new post is inconsistent, or None when it is fine: the rules of the
+    post type, then the shared consistency of a target.
 
     Whether the entrance or the apartments exist in the building is checked by the service.
     """
-    if post_type == PostType.FORUM_TOPIC and target_scope != TargetScope.ALL_BUILDING:
+    if post_type == PostType.FORUM_TOPIC and target.scope != TargetScope.ALL_BUILDING:
         return "Forum topics are always visible to the whole building."
-    if post_type == PostType.BOARD_TOPIC and target_scope != TargetScope.ALL_BUILDING:
+    if post_type == PostType.BOARD_TOPIC and target.scope != TargetScope.ALL_BUILDING:
         return "Board topics take no target: the board sees them (ALL_BUILDING)."
     if post_type == PostType.APARTMENT_THREAD and (
-        target_scope != TargetScope.APARTMENT_LIST or len(target_apartment_ids or ()) != 1
+        target.scope != TargetScope.APARTMENT_LIST or len(target.apartment_ids) != 1
     ):
         return "A thread with the board targets exactly one apartment (APARTMENT_LIST)."
-    if target_scope == TargetScope.ALL_BUILDING:
-        if target_entrance is not None or target_apartment_ids:
-            return "ALL_BUILDING takes neither target_entrance nor target_apartment_ids."
-    elif target_scope == TargetScope.ENTRANCE:
-        if target_entrance is None:
-            return "ENTRANCE needs target_entrance."
-        if target_apartment_ids:
-            return "ENTRANCE does not take target_apartment_ids."
-    elif target_scope == TargetScope.APARTMENT_LIST:
-        if not target_apartment_ids:
-            return "APARTMENT_LIST needs at least one apartment in target_apartment_ids."
-        if target_entrance is not None:
-            return "APARTMENT_LIST does not take target_entrance."
-    return None
+    return target_consistency_problem(target)
 
 
 def is_deletable(post_type: PostType) -> bool:

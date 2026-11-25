@@ -9,8 +9,7 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
 from fastapi import Depends
-from sqlalchemy import ColumnElement, Text, and_, case, delete, func, literal, or_, select
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import DbSession, get_event_outbox
@@ -39,7 +38,6 @@ from src.modules.governance.policies import (
     is_board,
     results_available,
     tally,
-    target_problem,
 )
 from src.modules.governance.schemas import (
     AnswerView,
@@ -60,7 +58,12 @@ from src.modules.governance.schemas import (
     PollView,
     QuestionView,
 )
-from src.modules.property.schemas import CurrentUserDTO, RelationType, TargetScope
+from src.modules.property.schemas import (
+    CurrentUserDTO,
+    RelationType,
+    TargetDTO,
+    TargetScope,
+)
 from src.modules.property.service import PropertyService, get_property_service
 
 # Polls whose answers are never shown and which nobody answers.
@@ -207,9 +210,7 @@ class GovernanceService:
             ]
             electors = await self.property_service.poll_electors(
                 poll.building_id,
-                TargetScope.APARTMENT_LIST,
-                None,
-                apartments,
+                TargetDTO.of(TargetScope.APARTMENT_LIST, None, apartments),
                 owners_only=poll.eligibility == Eligibility.OWNERS,
             )
             user_ids = sorted({elector.user_id for elector in electors}, key=str)
@@ -273,9 +274,7 @@ class GovernanceService:
             raise _invalid_deadline("A poll stays open for at most a year.")
         electors = await self.property_service.poll_electors(
             poll.building_id,
-            poll.target_scope,
-            poll.target_entrance,
-            [uuid.UUID(value) for value in poll.target_apartment_ids or ()],
+            TargetDTO.of(poll.target_scope, poll.target_entrance, poll.target_apartment_ids),
             owners_only=poll.eligibility == Eligibility.OWNERS,
         )
         units = electorate_units(
@@ -479,21 +478,15 @@ class GovernanceService:
         in_building = Poll.building_id == user.building_id
         if is_board(user.building_role):
             return in_building
-        if not user.memberships:
-            return literal(False)
-        targeted: list[ColumnElement[bool]] = [Poll.target_scope == TargetScope.ALL_BUILDING]
-        entrances = sorted({membership.entrance for membership in user.memberships})
-        targeted.append(
-            and_(Poll.target_scope == TargetScope.ENTRANCE, Poll.target_entrance.in_(entrances))
+        # A poll is seen only through a membership, also a whole-building one.
+        targeted = PropertyService.targeting_clause(
+            user,
+            scope=Poll.target_scope,
+            entrance=Poll.target_entrance,
+            apartment_ids=Poll.target_apartment_ids,
+            member_only=True,
         )
-        apartment_ids = sorted(str(apartment_id) for apartment_id in user.apartment_ids)
-        targeted.append(
-            and_(
-                Poll.target_scope == TargetScope.APARTMENT_LIST,
-                Poll.target_apartment_ids.has_any(literal(apartment_ids, ARRAY(Text))),
-            )
-        )
-        return and_(in_building, Poll.status != PollStatus.DRAFT, or_(*targeted))
+        return and_(in_building, Poll.status != PollStatus.DRAFT, targeted)
 
     async def _visible_poll(
         self, user: CurrentUserDTO, poll_id: uuid.UUID, *, lock_for_share: bool = False
@@ -538,23 +531,14 @@ class GovernanceService:
                 status_code=422, error_code="INVALID_TARGET", message=message, extra=extra
             )
 
-        if problem := target_problem(
-            request.target_scope, request.target_entrance, request.target_apartment_ids
+        if problem := await self.property_service.target_problem_in_building(
+            user.building_id,
+            TargetDTO.of(
+                request.target_scope, request.target_entrance, request.target_apartment_ids
+            ),
         ):
-            raise invalid(problem)
-        if request.target_scope == TargetScope.ALL_BUILDING:
-            return
-        apartments = await self.property_service.list_apartments(user.building_id)
-        if request.target_scope == TargetScope.ENTRANCE:
-            if request.target_entrance not in {apartment.entrance for apartment in apartments}:
-                raise invalid(
-                    f"The building has no apartments in entrance {request.target_entrance}."
-                )
-        elif unknown := set(request.target_apartment_ids or ()) - {a.id for a in apartments}:
-            raise invalid(
-                "Some target apartments are not in this building.",
-                unknown_apartment_ids=sorted(str(apartment_id) for apartment_id in unknown),
-            )
+            message, extra = problem
+            raise invalid(message, **extra)
 
     async def _caller_units(
         self, user: CurrentUserDTO, polls: Sequence[Poll]
