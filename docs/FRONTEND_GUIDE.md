@@ -262,6 +262,14 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   `"<display_label> • <role_badge>"` (`"Apt. 14 • OWNER"`). `display_label` is English text that
   may contain a name the author chose to show; display it as is, do not parse or translate it.
   `role_badge` (`OWNER`, `RESIDENT`, `BOARD`, `ACCOUNTANT`) can be localized.
+- **Objects of several kinds** (epic E14, docs/API.md section 0): an "apartment" may be a
+  parking space or a garage. Every view that shows an object by number has `apartment_kind`
+  (`APARTMENT`, `PARKING`, `GARAGE`); name it by kind in the screens ("apartment 14", "parking
+  space 1", "garage 12", translated from the kind), never "apartment G12", and tell two objects
+  with the number `1` apart. `entrance`, `floor` and `area_m2` may be `null`: show nothing
+  instead of "entrance 0" or "NaN m2"; a floor may be negative. Badge labels (`P1`, `G12`) are
+  text from the backend. Notification `params` of `APARTMENT_MESSAGE*` and
+  `JOIN_REQUEST_SUBMITTED` have `apartment_kind` (absent in old rows: an apartment).
 - **Privacy mode selector:** `PATCH /property/memberships/{membership_id}/privacy` per apartment;
   the response's `preview_badge` is exactly what neighbours will see. Badges are resolved on every
   read, so old posts change too after the switch: reload the feed.

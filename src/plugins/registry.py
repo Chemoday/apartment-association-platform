@@ -29,7 +29,7 @@ class ReadingExportRow:
     """One meter reading of a period, as exporters see it (no personal data)."""
 
     period_code: str
-    entrance: int | None  # None for a Building Master Meter
+    entrance: int | None  # None for a Building Master Meter, a parking space or a garage
     apartment_number: str | None  # None for a Building Master Meter
     meter_id: uuid.UUID
     resource_type: str

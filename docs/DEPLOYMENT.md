@@ -254,6 +254,17 @@ association stores files.
   expects both. Before such an import, its readings simply count as `HISTORY` (the column's
   default).
 
+- **Rolling back past epic E14 K1** (migration 037, objects of several kinds): an older release
+  does not know `property_apartments.kind`. Once a parking space or a garage exists, it picks the
+  wrong object by number and fails on a `NULL` entrance (for example every request of a garage
+  owner and the board's people list). This includes the **automatic** rollback of `deploy.sh`
+  after a failed health check: once such objects exist (on dev and the public demo after the demo
+  gets them, epic E14 PR 5), an automatic rollback to a release before E14 breaks those screens,
+  so a failed deploy after that point is fixed forward. No backup is taken before an update, and
+  deploys never run a downgrade; the downgrade of 037 refuses while objects of another kind exist,
+  which protects a manual `alembic downgrade` only. Until then an automatic rollback stays safe:
+  no object of another kind exists.
+
 ## Host configuration as code
 
 A VPS is set up and changed only from the repository, so that a new one can be built without

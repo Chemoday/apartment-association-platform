@@ -45,17 +45,23 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `reading_deadline_day` | `INTEGER` | `NOT NULL, DEFAULT 4` | Day of next month until readings are open (e.g., `4`) |
 
 ### Table: `property_apartments`
+*(An "apartment" is an object of ownership of any kind: an apartment, a parking space or a garage, epic E14. Each is an apartment ownership of its own, with its own share and vote.)*
+
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `UUID` | `PK` | Apartment ID |
 | `building_id` | `UUID` | `FK(property_buildings.id)` | Parent building |
-| `number` | `VARCHAR(32)` | `NOT NULL` | Apartment number (e.g., `"14"`, `"14A"`) |
-| `entrance` | `INTEGER` | `NOT NULL, DEFAULT 1` | Entrance / Stairwell number (for targeted emergency alerts) |
-| `floor` | `INTEGER` | `NOT NULL, DEFAULT 1` | Floor number |
+| `kind` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'APARTMENT'`, `CHECK ck_property_apartments_kind` | `APARTMENT`, `PARKING` or `GARAGE` (migration 037) |
+| `number` | `VARCHAR(32)` | `NOT NULL` | The number as the chairman typed it (e.g., `"14"`, `"14A"`, `"P-2"`) |
+| `entrance` | `INTEGER` | `NULLABLE`, no default | Entrance / stairwell number (for targeted emergency alerts); always `NULL` for another kind than `APARTMENT` |
+| `floor` | `INTEGER` | `NULLABLE`, no default | Floor number; may be negative for another kind (an underground parking is floor -1) |
 | `riser_group` | `VARCHAR(50)` | `NULLABLE` | Plumbing riser identifier |
-| `area_m2` | `NUMERIC(8, 2)` | `NOT NULL` | Heated area in m² (prepared for Phase 2 Billing) |
+| `area_m2` | `NUMERIC(8, 2)` | `NULLABLE` | Heated area in m² (prepared for Phase 2 Billing); optional for another kind |
 | `on_paper` | `BOOLEAN` | `NOT NULL, DEFAULT false` | Marked by the chairman as worked on paper (epic E13 R4b, migration 033); shown in the connection overview (docs/API.md 7) and set through `PropertyService.set_on_paper` |
-| `UNIQUE` | `(building_id, number)` | | Unique apartment number per building |
+| `CHECK` | `ck_property_apartments_kind_fields` | | An `APARTMENT` has an entrance, a floor and an area; another kind has no entrance |
+| `UNIQUE` | `(building_id, kind, number)` | | `uq_property_apartments_building_kind_number`: the number is unique per building and kind, so "Apartment 1" and "Garage 1" both exist |
+
+Migration 037 (epic E14 K1) added `kind` (existing rows became `APARTMENT`), made `entrance`, `floor` and `area_m2` nullable without the default of 1 (an object written without them never becomes "entrance 1, floor 1"), added the check of the fields by kind and replaced `UNIQUE (building_id, number)`. Its downgrade refuses while an object of another kind exists.
 
 ### Table: `property_memberships`
 *(Models hierarchy inside an apartment: Owner vs. Tenant/Resident + Privacy Display Settings)*
@@ -64,7 +70,7 @@ All tables use `UUID` primary keys (`uuid4`), UTC timestamps (`TIMESTAMPTZ`), an
 | `id` | `UUID` | `PK` | Membership ID |
 | `apartment_id` | `UUID` | `FK(property_apartments.id), INDEX` | Target apartment |
 | `user_id` | `UUID` | `FK(core_users.id), INDEX` | Linked user |
-| `relation_type` | `VARCHAR(32)` | `NOT NULL` | Enum: `OWNER` (Apartment Admin), `TENANT`, `RESIDENT` |
+| `relation_type` | `VARCHAR(32)` | `NOT NULL` | Enum: `OWNER` (Apartment Admin), `TENANT`, `RESIDENT`. `OWNER` and `TENANT` exist for every kind of object; `RESIDENT` for apartments only (`PropertyService.open_membership` refuses another kind) |
 | `can_submit_readings`| `BOOLEAN` | `NOT NULL, DEFAULT TRUE` | Allowed to submit water/utility readings |
 | `can_view_bills` | `BOOLEAN` | `NOT NULL, DEFAULT TRUE` | Allowed to see apartment invoices |
 | `can_vote` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | `TRUE` only for `OWNER` |
