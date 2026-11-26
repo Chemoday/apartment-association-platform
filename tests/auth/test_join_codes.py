@@ -238,7 +238,8 @@ async def test_a_person_joins_and_the_chairman_confirms(
         )
     )
     assert {d.user_id for d in notified} == {world.chairman.id}
-    assert all(d.params == {"apartment_number": "2"} for d in notified)
+    params = {"apartment_number": "2", "apartment_kind": "APARTMENT"}
+    assert all(d.params == params for d in notified)
 
     confirmed = await client.post(
         f"{API}/join-requests/{request['request_id']}/confirm",

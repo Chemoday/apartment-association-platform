@@ -883,7 +883,8 @@ async def test_every_chairman_is_notified_once_and_the_board_is_not(
     pairs = [(d.user_id, d.channel) for d in rows]
     assert len(pairs) == len(set(pairs))  # once per channel
     assert {d.channel for d in rows if d.user_id == other.id} >= {"in_app", "email"}
-    assert all(d.params == {"apartment_number": "21"} for d in rows)
+    params = {"apartment_number": "21", "apartment_kind": "APARTMENT"}
+    assert all(d.params == params for d in rows)
     assert board.id not in {d.user_id for d in rows}
 
 

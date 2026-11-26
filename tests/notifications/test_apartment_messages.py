@@ -76,6 +76,7 @@ async def test_the_board_writes_and_the_apartment_is_told(
     assert item["params"] == {
         "apartment_id": str(world.apt_14.id),
         "apartment_number": "14",
+        "apartment_kind": "APARTMENT",
         "from_board": True,
     }
     # Never the author, no other board member, nobody outside the apartment.

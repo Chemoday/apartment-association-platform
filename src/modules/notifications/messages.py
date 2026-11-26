@@ -90,6 +90,13 @@ def compose(
     catalog = catalog or default_catalog()
     E = NotificationEventType
     subject_key = f"subject.{event_type.value}"
+    # A sentence that names an object has a variant per kind; params stored before epic E14
+    # carry no kind and mean an apartment.
+    kind = params.get("apartment_kind")
+
+    def of_kind(key: str) -> str:
+        return catalog.key_for_kind(key, kind)
+
     if event_type == E.EMERGENCY_PUBLISHED:
         subject = catalog.render(subject_key, locale, title=title)
         affected = catalog.render("line.affected", locale, target=_target(catalog, locale, params))
@@ -114,12 +121,14 @@ def compose(
     elif event_type == E.APARTMENT_MESSAGE:
         # Who wrote decides the wording; the message itself never leaves the app.
         key = "FROM_BOARD" if params.get("from_board") else "FROM_RESIDENT"
-        subject = catalog.render(f"subject.APARTMENT_MESSAGE.{key}", locale)
-        text = catalog.render(f"text.APARTMENT_MESSAGE.{key}", locale)
+        subject = catalog.render(of_kind(f"subject.APARTMENT_MESSAGE.{key}"), locale)
+        text = catalog.render(of_kind(f"text.APARTMENT_MESSAGE.{key}"), locale)
     elif event_type == E.APARTMENT_MESSAGE_TO_BOARD:
         number = params["apartment_number"]
-        subject = catalog.render(subject_key, locale, apartment_number=number)
-        text = catalog.render("text.APARTMENT_MESSAGE_TO_BOARD", locale, apartment_number=number)
+        subject = catalog.render(of_kind(subject_key), locale, apartment_number=number)
+        text = catalog.render(
+            of_kind("text.APARTMENT_MESSAGE_TO_BOARD"), locale, apartment_number=number
+        )
     elif event_type == E.POLL_OPENED:  # no title and no questions, only the local deadline
         subject = catalog.render(subject_key, locale)
         text = catalog.render(
@@ -156,8 +165,8 @@ def compose(
             )
     elif event_type == E.JOIN_REQUEST_SUBMITTED:  # the apartment only, never who asked
         values = {"apartment": str(params["apartment_number"])}
-        subject = catalog.render(subject_key, locale, **values)
-        text = catalog.render("text.JOIN_REQUEST_SUBMITTED", locale, **values)
+        subject = catalog.render(of_kind(subject_key), locale, **values)
+        text = catalog.render(of_kind("text.JOIN_REQUEST_SUBMITTED"), locale, **values)
     elif event_type == E.NOTICE_PUBLISHED:  # only that there is a notice, never its text
         subject = catalog.render(subject_key, locale)
         text = catalog.render("text.NOTICE_PUBLISHED", locale)
