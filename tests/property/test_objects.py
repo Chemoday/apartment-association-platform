@@ -4,8 +4,10 @@ number, and the one order of objects (pure, and the SQL order kept equal to it).
 from decimal import Decimal
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.security import DEMO_USER_HEADER
 from src.modules.property.schemas import (
     NewApartment,
     ObjectKind,
@@ -15,7 +17,7 @@ from src.modules.property.schemas import (
     parse_object_ref,
 )
 from src.modules.property.service import PropertyService
-from tests.factories import create_apartment, create_building
+from tests.factories import create_apartment, create_building, create_object, create_user
 
 
 @pytest.mark.parametrize(
@@ -104,16 +106,26 @@ async def test_the_sql_order_of_objects_equals_the_sort_key(db_session: AsyncSes
         ("1", 3),
     ]:
         await create_apartment(db_session, building, number, entrance=entrance)
+    for kind, number, floor in [
+        (ObjectKind.GARAGE, "2", None),
+        (ObjectKind.PARKING, "10", -1),
+        (ObjectKind.GARAGE, "1", None),
+        (ObjectKind.PARKING, "P-2", -1),
+        (ObjectKind.PARKING, "2", None),
+    ]:
+        await create_object(db_session, building, kind, number, floor=floor)
 
     listed = await PropertyService(db_session).list_apartments(building.id)
 
-    assert [a.number for a in listed] == [
-        a.number
-        for a in sorted(
-            listed, key=lambda a: object_sort_key(ObjectKind.APARTMENT, a.entrance, a.number)
-        )
+    assert listed == sorted(listed, key=lambda a: object_sort_key(a.kind, a.entrance, a.number))
+    assert [(a.kind.value[0], a.number) for a in listed] == [
+        *(("A", n) for n in ["2", "10", "3", "14", "14A", "14B", "14a", "14b", "1"]),
+        ("P", "2"),
+        ("P", "10"),
+        ("P", "P-2"),
+        ("G", "1"),
+        ("G", "2"),
     ]
-    assert [a.number for a in listed] == ["2", "10", "3", "14", "14A", "14B", "14a", "14b", "1"]
 
 
 async def test_objects_are_created_and_found_by_kind_and_number(db_session: AsyncSession) -> None:
@@ -128,6 +140,33 @@ async def test_objects_are_created_and_found_by_kind_and_number(db_session: Asyn
 
     assert list(ids) == [ObjectRef(ObjectKind.APARTMENT, "1")]
     assert found is not None and found.apartment_id == ids[ObjectRef(ObjectKind.APARTMENT, "1")]
-    # Every object is an apartment until objects get their kind.
+    garage = await create_object(db_session, building, ObjectKind.GARAGE, "1")
+    found_garage = await properties.apartment_by_ref(building.id, ObjectKind.GARAGE, "1")
+    assert found_garage is not None and found_garage.apartment_id == garage.id
     assert await properties.apartment_by_ref(building.id, ObjectKind.PARKING, "1") is None
     assert await properties.apartment_by_ref(building.id, ObjectKind.APARTMENT, "2") is None
+
+
+async def test_the_building_counts_and_sums_its_apartments_only(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    building = await create_building(db_session)
+    await create_apartment(db_session, building, "1", entrance=1)
+    await create_apartment(db_session, building, "2", entrance=2)
+    await create_object(db_session, building, ObjectKind.GARAGE, "1", area=Decimal("18.50"))
+    await create_object(db_session, building, ObjectKind.PARKING, "1")
+    await create_object(db_session, building, ObjectKind.PARKING, "P-2", floor=-1)
+    user = await create_user(db_session, building, "Viewer")
+
+    response = await api_client.get(
+        "/api/v1/property/building", headers={DEMO_USER_HEADER: str(user.id)}
+    )
+
+    assert response.status_code == 200, response.text
+    view = response.json()
+    assert (view["apartment_count"], view["entrance_count"], view["heated_area_m2"]) == (
+        2,
+        2,
+        "108.60",
+    )
+    assert view["object_counts"] == {"APARTMENT": 2, "PARKING": 2, "GARAGE": 1}

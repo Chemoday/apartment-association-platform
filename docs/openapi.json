@@ -13558,6 +13558,16 @@
               "329.20"
             ]
           },
+          "object_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/ObjectKind"
+            },
+            "type": "object",
+            "title": "Object Counts"
+          },
           "registry_facts": {
             "anyOf": [
               {
@@ -13579,7 +13589,8 @@
           "reading_deadline_day",
           "apartment_count",
           "entrance_count",
-          "heated_area_m2"
+          "heated_area_m2",
+          "object_counts"
         ],
         "title": "BuildingResponse",
         "description": "The association and its building; public within the building (no people in it)."
@@ -17705,6 +17716,16 @@
           "average"
         ],
         "title": "NumberResult"
+      },
+      "ObjectKind": {
+        "type": "string",
+        "enum": [
+          "APARTMENT",
+          "PARKING",
+          "GARAGE"
+        ],
+        "title": "ObjectKind",
+        "description": "The kind of an object of ownership (epic E14): an \"apartment\" in the code, the tables and\nthe API is an object of any kind. Listed in the order objects are shown."
       },
       "OccurrenceState": {
         "type": "string",

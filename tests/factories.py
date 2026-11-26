@@ -11,7 +11,7 @@ from src.modules.meters.models import MeterDevice, MeterReading, ReadingPeriod
 from src.modules.meters.policies import period_due_date
 from src.modules.meters.schemas import PeriodStatus, PreviousOrigin, ReadingSource, ResourceType
 from src.modules.property.models import Apartment, ApartmentMembership, Building, User
-from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType
+from src.modules.property.schemas import BuildingRole, DisplayMode, ObjectKind, RelationType
 
 
 async def create_building(session: AsyncSession, name: str = "KÜ Sõpruse 12") -> Building:
@@ -21,19 +21,42 @@ async def create_building(session: AsyncSession, name: str = "KÜ Sõpruse 12") 
     return building
 
 
-async def create_apartment(
-    session: AsyncSession, building: Building, number: str, entrance: int = 1, floor: int = 1
+async def create_object(
+    session: AsyncSession,
+    building: Building,
+    kind: ObjectKind,
+    number: str,
+    *,
+    entrance: int | None = None,
+    floor: int | None = None,
+    area: Decimal | None = None,
 ) -> Apartment:
+    """An object of any kind (epic E14); a parking space or a garage has no entrance."""
     apartment = Apartment(
         building_id=building.id,
+        kind=kind,
         number=number,
         entrance=entrance,
         floor=floor,
-        area_m2=Decimal("54.30"),
+        area_m2=area,
     )
     session.add(apartment)
     await session.flush()
     return apartment
+
+
+async def create_apartment(
+    session: AsyncSession, building: Building, number: str, entrance: int = 1, floor: int = 1
+) -> Apartment:
+    return await create_object(
+        session,
+        building,
+        ObjectKind.APARTMENT,
+        number,
+        entrance=entrance,
+        floor=floor,
+        area=Decimal("54.30"),
+    )
 
 
 async def create_user(

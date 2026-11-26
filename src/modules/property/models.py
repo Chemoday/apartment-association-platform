@@ -25,7 +25,19 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base, uuid_pk, varchar_enum
-from src.modules.property.schemas import BuildingRole, DisplayMode, Locale, RelationType
+from src.modules.property.schemas import (
+    BuildingRole,
+    DisplayMode,
+    Locale,
+    ObjectKind,
+    RelationType,
+)
+
+# An apartment has an entrance, a floor and an area; another kind has no entrance (epic E14).
+KIND_FIELDS_CHECK = (
+    "(kind = 'APARTMENT' AND entrance IS NOT NULL AND floor IS NOT NULL "
+    "AND area_m2 IS NOT NULL) OR (kind <> 'APARTMENT' AND entrance IS NULL)"
+)
 
 
 class Building(Base):
@@ -78,7 +90,11 @@ class User(Base):
 class Apartment(Base):
     __tablename__ = "property_apartments"
     __table_args__ = (
-        UniqueConstraint("building_id", "number", name="uq_property_apartments_building_number"),
+        # A number repeats across kinds: "Apartment 1" and "Garage 1" (epic E14).
+        UniqueConstraint(
+            "building_id", "kind", "number", name="uq_property_apartments_building_kind_number"
+        ),
+        CheckConstraint(KIND_FIELDS_CHECK, name="ck_property_apartments_kind_fields"),
         # Lets other tables prove an apartment is in their building with a composite FK.
         UniqueConstraint("id", "building_id", name="uq_property_apartments_id_building"),
     )
@@ -87,13 +103,19 @@ class Apartment(Base):
     building_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("property_buildings.id"), nullable=False
     )
-    number: Mapped[str] = mapped_column(String(32), nullable=False)
-    entrance: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default=text("1")
+    # An object of ownership of any kind (the glossary of docs/ARCHITECTURE.md section 2).
+    kind: Mapped[ObjectKind] = mapped_column(
+        varchar_enum(ObjectKind, "ck_property_apartments_kind"),
+        nullable=False,
+        default=ObjectKind.APARTMENT,
+        server_default=ObjectKind.APARTMENT.value,
     )
-    floor: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    number: Mapped[str] = mapped_column(String(32), nullable=False)
+    # No default: an object written without them never becomes "entrance 1, floor 1".
+    entrance: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    floor: Mapped[int | None] = mapped_column(Integer, nullable=True)
     riser_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    area_m2: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+    area_m2: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
     # The chairman's mark "worked on paper" (epic E13 R4b; the connection overview).
     on_paper: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")

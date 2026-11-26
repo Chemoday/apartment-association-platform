@@ -130,6 +130,7 @@ class ApartmentDTO(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: uuid.UUID
+    kind: ObjectKind
     number: str
     # None for an object without an entrance or a floor (a parking space, a garage).
     entrance: int | None
@@ -141,6 +142,7 @@ class NewApartment(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    kind: ObjectKind = ObjectKind.APARTMENT
     number: str
     entrance: int | None
     floor: int | None
@@ -423,9 +425,12 @@ class BuildingResponse(BaseModel):
     address: str
     country_code: str
     reading_deadline_day: int
+    # Of the apartments only (epic E14): parking spaces and garages are not heated area.
     apartment_count: int
     entrance_count: int
     heated_area_m2: AreaAmount
+    # The number of objects of every kind (0 for a kind the building has none of).
+    object_counts: dict[ObjectKind, int]
     # The building passport the chairman accepted (epic E12); null without one.
     registry_facts: RegistryFacts | None = None
 
