@@ -286,6 +286,31 @@ async def test_an_alert_resolved_before_sending_is_skipped(
     )
 
 
+async def test_an_alert_is_not_sent_to_someone_who_left_its_target(
+    api_client: AsyncClient,
+    world: NotifWorld,
+    mailboxes: dict[str, str],
+    email_settings: Settings,
+    dispatcher: Dispatcher,
+    db_session: AsyncSession,
+    smtp_server: SmtpServer,
+) -> None:
+    # The alert's own text goes out, so the target is checked again when it is sent (epic E14).
+    await publish(api_client, world.chairman, email_settings)
+    await db_session.execute(
+        update(ApartmentMembership)
+        .where(ApartmentMembership.user_id == world.owner_14.id)
+        .values(ended_at=datetime.now(UTC))
+    )
+
+    await dispatcher.tick()
+
+    rows = {row.user_id: row for row in await email_rows(db_session)}
+    gone = rows[world.owner_14.id]
+    assert (gone.status, gone.error_code) == ("SKIPPED", "SUBJECT_NOT_FOUND")
+    assert mailboxes["owner_14"] not in {m["To"] for m in smtp_server.messages}
+
+
 async def test_an_alert_processed_more_than_an_hour_late_stays_in_the_app(
     db_app: FastAPI, world: NotifWorld, mailboxes: dict[str, str], db_session: AsyncSession
 ) -> None:
