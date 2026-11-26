@@ -703,7 +703,9 @@ Who may submit, and in which period status:
 ### `GET /api/v1/meters/periods/{period_code}/matrix`
 (Requires role: `CHAIRMAN`, `BOARD` or `ACCOUNTANT`)
 
-Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum_m3` and `unallocated_loss_m3`) and the list of all apartments with their submission status (`SUBMITTED`, `MISSING`, `AUTO_ESTIMATED`, `ANOMALY_CONFIRMED`).
+Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum_m3` and `unallocated_loss_m3`) and the list of all objects with meters and their submission status (`SUBMITTED`, `MISSING`, `AUTO_ESTIMATED`, `ANOMALY_CONFIRMED`).
+
+Optional `?kind=APARTMENT|PARKING|GARAGE` (epic E14) lists the objects of that kind only (an empty list for a kind the building lacks); the balances and the master meters stay those of the whole building, since the master meter measures every object. Errors: `403 FORBIDDEN`, `404 PERIOD_NOT_FOUND`, `422 VALIDATION_ERROR` (a period code of the wrong form, an unknown kind).
 ```json
 {
   "period": { "period_code": "2026-10", "status": "REVIEW_BY_BOARD", "due_date": "2026-11-04T21:59:59Z" },
@@ -908,7 +910,7 @@ The building's consumption per month and the average per apartment and per m², 
 ### `GET /api/v1/meters/periods/{period_code}/export-csv`
 Executes plugins/common/csv_export and streams a CSV file of the period's readings.
 - Requires role `CHAIRMAN`, `BOARD` or `ACCOUNTANT`. Served as `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="readings-2026-10.csv"`.
-- Columns: `period_code, entrance, apartment_number, meter_id, resource_type, serial_number, location_label, unit, previous_value, value, consumption_delta, source, is_anomaly_confirmed, recorded_at, previous_origin` (`serial_number` empty when it is not set; `previous_origin` as in section 2).
+- Columns: `period_code, entrance, apartment_number, meter_id, resource_type, serial_number, location_label, unit, previous_value, value, consumption_delta, source, is_anomaly_confirmed, recorded_at, previous_origin, apartment_kind` (`serial_number` empty when it is not set; `previous_origin` as in section 2). `apartment_kind` (epic E14) is the last column, so existing imports of the accountant keep working: `APARTMENT`, `PARKING` or `GARAGE`, empty for a master meter. A parking space or a garage has an empty `entrance` too: the master meter is the row with `MASTER` in `apartment_number`.
 - Master meters have an empty apartment, and `MASTER` in `apartment_number`.
 - Text cells that would start a spreadsheet formula are prefixed with `'` (CSV-injection guard). That covers `= + - @`, also after leading whitespace or line breaks and in full-width forms (NFKC), and a leading tab, CR or LF. No names.
 - If the CSV plugin is not enabled (`ENABLED_PLUGINS`), the response is `404 EXPORTER_NOT_ENABLED`.
@@ -2150,7 +2152,7 @@ no e-mails: only counts, statuses and dates.
 Response `200 ConnectionOverview`:
 ```json
 {
-  "summary": { "apartments": 60, "connected": 34, "by_status": { "CONNECTED": 34, "INVITED": 12, "NOT_INVITED": 14 } },
+  "summary": { "apartments": 60, "connected": 34, "by_status": { "CONNECTED": 34, "INVITED": 12, "NOT_INVITED": 14 }, "by_kind": { "APARTMENT": { "objects": 48, "connected": 30 }, "PARKING": { "objects": 12, "connected": 4 }, "GARAGE": { "objects": 0, "connected": 0 } } },
   "matching": 14,
   "items": [
     { "apartment_id": "uuid", "apartment_number": "14", "apartment_kind": "APARTMENT", "entrance": 2, "status": "NOT_INVITED", "owners": 0, "tenants": 0, "on_paper": false, "last_invited_at": null, "invitation_delivery": null }
@@ -2179,8 +2181,10 @@ Response `200 ConnectionOverview`:
   invitations that could not be sent yet are visible.
 - **`on_paper`:** the chairman's mark; it stays when the apartment connects later, but
   `CONNECTED`, `INVITED` and `TENANT_ONLY` come first.
-- **`summary`** counts every apartment of the building, whatever the filter: `apartments`, the
-  number `connected`, and `by_status` with each status that occurs. **`matching`** is the number of
+- **`summary`** counts every object of the building, whatever the filter: `apartments` (objects
+  of every kind), the number `connected`, `by_status` with each status that occurs, and
+  `by_kind` (epic E14) with `objects` and `connected` for every kind (zeros for a kind the
+  building has none of). **`matching`** is the number of
   items the filter selects, for paging.
 - **Filters:** `status` (optional; one status). `limit` 1..500 (default 50), `offset` 0..100000.
 - Errors: `403 FORBIDDEN`, `422 VALIDATION_ERROR`.
@@ -2226,7 +2230,8 @@ Response `201` with `Cache-Control: no-store`:
   and issuing a new one.
 - **The printed sheet** is made by the client from this answer, never by the server or a
   third-party service (the QR code too): the association's name, the site's address, the
-  apartment number, the code, a QR code of `<join_url>#code=<join_code>` (after `#`, so the code
+  object named by its kind and number (`apartment_kind`: "garage 12", never "apartment 12" for a
+  garage), the code, a QR code of `<join_url>#code=<join_code>` (after `#`, so the code
   never reaches a server log) and short instructions in the default language, English optional.
 - Errors: `403 FORBIDDEN`, `404 APARTMENT_NOT_FOUND` (an id not in the building; nothing is
   issued), `422 VALIDATION_ERROR` (an empty list, more ids than apartments, a repeated id).
@@ -2244,11 +2249,12 @@ What the join page links to before it asks for personal data. Response
   `auth.privacy_notice_url` (section 9); the page then links there and `text` is `null`.
 - Otherwise `text` is the platform's **template** notice (Markdown) in `locale` (`et` or `en`;
   any other value gets `en`), with the association's name filled in. It is a template that the
-  association reviews before it uses it, not legal advice.
+  association reviews before it uses it, not legal advice. It names the object of the code as an
+  apartment, a parking space or a garage (epic E14), for every kind alike.
 
 #### `POST /api/v1/auth/join/lookup` (no sign-in)
 Step 1 of the join page. Request `{"join_code": "K7QF-M3TX-9R"}`. Response
-`200 {"association_name": "KÜ Sõpruse 12", "apartment_number": "14", "country_code": "EE"}`, for
+`200 {"association_name": "KÜ Sõpruse 12", "apartment_number": "14", "apartment_kind": "APARTMENT", "country_code": "EE"}`, for
 the person to confirm; `country_code` (the building's, ISO 3166-1 alpha-2) is the default country
 of the phone field in step 2. A wrong, used, expired or cancelled code: `400 INVALID_JOIN_CODE`, one answer for all of
 them. Nothing is changed.

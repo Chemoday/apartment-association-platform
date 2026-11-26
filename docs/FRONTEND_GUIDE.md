@@ -288,6 +288,9 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   `ACCOUNTANT` (the chairman and the board see it by their role); handle `403` anyway. The
   chat is for the people of the apartments and the board: hide it for a person with no
   membership of `apartment_kind` `APARTMENT` and no board role.
+- **The chairman's screens per kind** (epic E14 K5): the connection overview's `summary.by_kind`,
+  the matrix filter `?kind=` (the balances stay of the whole building), the join code sheet
+  names the object by its kind and number, and the CSV export ends with `apartment_kind`.
 - **Privacy mode selector:** `PATCH /property/memberships/{membership_id}/privacy` per apartment;
   the response's `preview_badge` is exactly what neighbours will see. Badges are resolved on every
   read, so old posts change too after the switch: reload the feed.

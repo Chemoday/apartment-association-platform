@@ -808,8 +808,8 @@ this list is the reminder, the contract is the source.
   "Forum topics are always `ALL_BUILDING`" is replaced.
 - **The chairman:** summaries per kind (`ConnectionSummary`, `GET /property/building`), the
   matrix filter by kind (a `kind` query parameter), the join code sheet and the privacy notice
-  of the join page; the CSV export has a `kind` column at the end, documented for the
-  accountant's import.
+  of the join page; the CSV export has an `apartment_kind` column at the end, documented for
+  the accountant's import.
 
 ### 10.5 After PR 5 (K6): the demo
 - **The demo user switcher:** `DemoUserView.objects` (`kind`, `number`, `relation`) shows what each
