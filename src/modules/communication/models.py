@@ -102,7 +102,8 @@ class Post(Base):
         ),
         CheckConstraint(TARGET_CONSISTENT_CHECK, name="ck_comm_posts_target_consistent"),
         CheckConstraint("target_entrance > 0", name="ck_comm_posts_target_entrance_positive"),
-        # The service keeps forum topics ALL_BUILDING until epic E14 K3 (forum topics by kind).
+        # A forum topic goes to the whole building, everything or kinds (epic E14 K3); the name
+        # of the check stays from the time it meant the whole building only.
         CheckConstraint(
             "post_type <> 'FORUM_TOPIC'"
             " OR target_scope IN ('ALL_BUILDING', 'ALL_OBJECTS', 'KINDS')",

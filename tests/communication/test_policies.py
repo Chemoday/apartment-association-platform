@@ -186,3 +186,34 @@ def test_the_last_moment_of_the_window_still_counts() -> None:
     assert not edit_window_closed(until, until)
     assert edit_window_closed(until, until + timedelta(microseconds=1))
     assert not edit_window_closed(None, until + timedelta(days=365))  # board topics
+
+
+@pytest.mark.parametrize(
+    ("role", "held", "target", "allowed"),
+    [
+        (BuildingRole.USER, {"APARTMENT"}, TargetDTO(scope=TargetScope.ALL_BUILDING), True),
+        (BuildingRole.USER, {"GARAGE"}, TargetDTO(scope=TargetScope.ALL_BUILDING), False),
+        (BuildingRole.USER, set(), TargetDTO(scope=TargetScope.ALL_BUILDING), False),
+        (BuildingRole.ACCOUNTANT, set(), TargetDTO(scope=TargetScope.ALL_BUILDING), False),
+        (BuildingRole.USER, {"APARTMENT"}, TargetDTO(scope=TargetScope.ALL_OBJECTS), False),
+        (BuildingRole.BOARD, set(), TargetDTO(scope=TargetScope.ALL_OBJECTS), True),
+        (BuildingRole.USER, {"GARAGE"}, TargetDTO.of("KINDS", None, None, ["GARAGE"]), True),
+        (
+            BuildingRole.USER,
+            {"GARAGE"},
+            TargetDTO.of("KINDS", None, None, ["GARAGE", "PARKING"]),
+            False,
+        ),
+        (BuildingRole.CHAIRMAN, set(), TargetDTO.of("KINDS", None, None, ["PARKING"]), True),
+        # No kinds: allowed here, so the target check answers 422.
+        (BuildingRole.USER, set(), TargetDTO(scope=TargetScope.KINDS), True),
+    ],
+)
+def test_who_may_address_a_forum_topic(role, held, target, allowed) -> None:
+    from src.modules.communication.policies import may_address
+    from src.modules.property.schemas import ObjectKind
+
+    kinds = frozenset(ObjectKind(kind) for kind in held)
+    assert may_address(PostType.FORUM_TOPIC, target, role, kinds) is allowed
+    # Other post types have their own rules.
+    assert may_address(PostType.EMERGENCY, target, role, kinds) is True

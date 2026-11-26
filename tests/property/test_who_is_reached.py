@@ -225,11 +225,18 @@ async def test_a_target_by_a_kind_the_building_lacks_is_refused(
         ("B", {}, 403),  # a garage only
         ("C", {}, 403),  # a tenant of a parking space only
         ("A", {"target_scope": "ALL_OBJECTS"}, 403),  # everything is for the board
-        ("board member", {"target_scope": "ALL_OBJECTS"}, 422),  # forum: whole building (K3)
+        ("board member", {"target_scope": "ALL_OBJECTS"}, 201),
         # Kinds the author does not hold: 403 before the target is checked at all.
         ("A", {"target_scope": "KINDS", "target_kinds": ["GARAGE"]}, 403),
+        ("A", {"target_scope": "KINDS", "target_kinds": ["PARKING", "GARAGE"]}, 403),
         ("B", {"target_scope": "KINDS", "target_kinds": ["CELLAR"]}, 422),  # not a kind
-        ("B", {"target_scope": "KINDS", "target_kinds": ["GARAGE"]}, 422),  # forum: K3
+        ("B", {"target_scope": "KINDS", "target_kinds": ["GARAGE"]}, 201),
+        ("C", {"target_scope": "KINDS", "target_kinds": ["PARKING"]}, 201),  # a tenant too
+        ("A", {"target_scope": "KINDS", "target_kinds": ["APARTMENT", "PARKING"]}, 201),
+        ("board member", {"target_scope": "KINDS", "target_kinds": ["PARKING"]}, 201),
+        # A forum topic never goes to an entrance or a list, also for the board.
+        ("board member", {"target_scope": "ENTRANCE", "target_entrance": 1}, 422),
+        ("A", {"target_scope": "ENTRANCE", "target_entrance": 2}, 422),
     ],
 )
 async def test_who_may_address_a_forum_topic(
@@ -363,3 +370,89 @@ async def test_a_resolved_emergency_by_kind_keeps_its_kinds(
         "EMERGENCY_PUBLISHED": ["PARKING", "GARAGE"],
         "EMERGENCY_RESOLVED": ["PARKING", "GARAGE"],
     }
+
+
+# --- Forum topics by kind (task K3) --------------------------------------------------------------
+
+
+async def topic(client: AsyncClient, author: User, **target) -> str:
+    published = await client.post(
+        POSTS,
+        json={"post_type": "FORUM_TOPIC", "title": "The gate", "body": "It squeaks.", **target},
+        headers=as_user(author),
+    )
+    assert published.status_code == 201, published.text
+    return published.json()["id"]
+
+
+async def test_a_topic_for_the_garages_is_seen_by_the_garages_only(
+    api_client: AsyncClient, mixed: MixedBuilding
+) -> None:
+    post_id = await topic(api_client, mixed.b, target_scope="KINDS", target_kinds=["GARAGE"])
+
+    seen = {
+        name
+        for name in (*PEOPLE, "board member", "accountant")
+        if post_id
+        in {
+            p["id"]
+            for p in (await api_client.get(POSTS, headers=as_user(mixed.people[name]))).json()
+        }
+    }
+
+    # The accountant sees by the role only what reaches at least the apartments.
+    assert seen == {"B", "board member"}
+
+
+async def test_the_badges_of_topics_and_comments_by_kind(
+    api_client: AsyncClient, db_session: AsyncSession, mixed: MixedBuilding
+) -> None:
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    from src.modules.property.models import ApartmentMembership
+
+    spaces = await topic(
+        api_client, mixed.board_member, target_scope="KINDS", target_kinds=["PARKING", "GARAGE"]
+    )
+    building = await topic(api_client, mixed.a)
+    garages = await topic(api_client, mixed.b, target_scope="KINDS", target_kinds=["GARAGE"])
+
+    on_spaces = await comment(api_client, mixed.a, spaces)
+    on_building = await comment(api_client, mixed.a, building)
+    outside = await comment(api_client, mixed.a, spaces, author_apartment_id=str(mixed.apt_14.id))
+    await db_session.execute(
+        update(ApartmentMembership)
+        .where(ApartmentMembership.user_id == mixed.b.id)
+        .values(ended_at=datetime.now(UTC))
+    )
+    orphan = await api_client.get(f"{POSTS}/{garages}", headers=as_user(mixed.chairman))
+
+    assert on_spaces.json()["author_badge"]["display_label"] == "P1"
+    assert on_building.json()["author_badge"]["display_label"] == "Apt. 14"
+    assert (outside.status_code, outside.json()["error_code"]) == (422, "INVALID_AUTHOR_APARTMENT")
+    # Nobody consented to show the name there any more: the object alone, with its kind.
+    assert orphan.json()["author_badge"]["display_label"] == "G12"
+
+
+async def test_a_topic_cannot_be_signed_by_an_object_outside_its_target(
+    api_client: AsyncClient, mixed: MixedBuilding
+) -> None:
+    response = await api_client.post(
+        POSTS,
+        json={
+            "post_type": "FORUM_TOPIC",
+            "title": "Lines",
+            "body": "Repaint them?",
+            "target_scope": "KINDS",
+            "target_kinds": ["PARKING"],
+            "author_apartment_id": str(mixed.apt_14.id),
+        },
+        headers=as_user(mixed.a),
+    )
+
+    assert (response.status_code, response.json()["error_code"]) == (
+        422,
+        "INVALID_AUTHOR_APARTMENT",
+    )

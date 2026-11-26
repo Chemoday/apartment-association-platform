@@ -18,6 +18,10 @@ PUBLISHER_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
 
 _BOARD_ONLY_TYPES = frozenset({PostType.EMERGENCY, PostType.OFFICIAL_NOTICE, PostType.BOARD_TOPIC})
 
+# A forum topic goes to the whole building, everything or kinds (epic E14 K3), never to an
+# entrance or a list.
+_FORUM_SCOPES = frozenset({TargetScope.ALL_BUILDING, TargetScope.ALL_OBJECTS, TargetScope.KINDS})
+
 # Private types: listed only when asked for by post_type, never in the forum feed.
 FEED_HIDDEN_TYPES = frozenset({PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC})
 
@@ -77,8 +81,8 @@ def target_problem(post_type: PostType, target: TargetDTO) -> str | None:
 
     Whether the entrance or the apartments exist in the building is checked by the service.
     """
-    if post_type == PostType.FORUM_TOPIC and target.scope != TargetScope.ALL_BUILDING:
-        return "Forum topics are always visible to the whole building."
+    if post_type == PostType.FORUM_TOPIC and target.scope not in _FORUM_SCOPES:
+        return "A forum topic goes to the whole building, to everything or to kinds."
     if post_type == PostType.BOARD_TOPIC and target.scope != TargetScope.ALL_BUILDING:
         return "Board topics take no target: the board sees them (ALL_BUILDING)."
     if post_type == PostType.APARTMENT_THREAD and (
