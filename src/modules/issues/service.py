@@ -83,7 +83,12 @@ from src.modules.issues.settings import (
     URGENT_ENABLED,
     URGENT_PER_APARTMENT_PER_DAY,
 )
-from src.modules.property.schemas import CurrentUserDTO
+from src.modules.property.schemas import (
+    CurrentUserDTO,
+    ObjectNotChosen,
+    ObjectNotHeld,
+    chosen_object,
+)
 from src.modules.property.service import PropertyService, get_property_service
 
 
@@ -755,21 +760,24 @@ class IssuesService:
     ) -> uuid.UUID | None:
         """The apartment a report comes from. An explicit null is "no apartment", for the board
         only; residents who leave the field out report from their one apartment."""
-        mine = [membership.apartment_id for membership in user.memberships]
         if board and apartment_id_given and apartment_id is None:
             return None
-        if apartment_id is not None:
-            if apartment_id not in mine:
-                raise DomainError(
-                    status_code=422,
-                    error_code="INVALID_AUTHOR_APARTMENT",
-                    message="You can report only from your own apartment.",
-                )
-            return apartment_id
-        if len(mine) == 1:
-            return mine[0]
-        if len(mine) > 1:
-            raise _validation_error("apartment_id", "choose the apartment you report from")
+        try:
+            chosen = chosen_object(
+                [membership.apartment_id for membership in user.memberships], apartment_id
+            )
+        except ObjectNotHeld:
+            raise DomainError(
+                status_code=422,
+                error_code="INVALID_AUTHOR_APARTMENT",
+                message="You can report only from your own apartment.",
+            ) from None
+        except ObjectNotChosen:
+            raise _validation_error(
+                "apartment_id", "choose the apartment you report from"
+            ) from None
+        if chosen is not None:
+            return chosen
         if board:
             return None
         raise _forbidden()  # pragma: no cover - _require_access already refused

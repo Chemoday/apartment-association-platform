@@ -66,7 +66,7 @@ from src.modules.maintenance.schemas import (
     YearReport,
 )
 from src.modules.maintenance.settings import OVERDUE_REMINDER_DAYS
-from src.modules.property.schemas import BuildingRole, CurrentUserDTO, TargetScope
+from src.modules.property.schemas import BuildingRole, CurrentUserDTO, TargetDTO, TargetScope
 from src.modules.property.service import PropertyService, get_property_service
 
 
@@ -623,7 +623,7 @@ class MaintenanceService:
             scope = TargetScope(task.notice_target_scope)
             apartments = self._notice_apartments(task)
             problem = await communication.notice_target_problem(
-                task.building_id, scope, task.notice_target_entrance, apartments
+                task.building_id, TargetDTO.of(scope, task.notice_target_entrance, apartments)
             )
             if problem is None:
                 planned = render(
@@ -772,9 +772,7 @@ class MaintenanceService:
         communication = CommunicationService(self.session, self.property_service)
         if problem := await communication.notice_target_problem(
             user.building_id,
-            notice.target_scope,
-            notice.target_entrance,
-            notice.target_apartment_ids,
+            TargetDTO.of(notice.target_scope, notice.target_entrance, notice.target_apartment_ids),
         ):
             message, extra = problem
             raise DomainError(

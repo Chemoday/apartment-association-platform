@@ -1,23 +1,21 @@
 """Pure rules of the property module (no database access; unit-tested directly): privacy
-masking and the targeting rule shared with communication and notifications.
+masking. The rules other modules share (labels, targets, the default object) are in schemas.py.
 
 Badge texts are English, like everything the backend returns (see docs/API.md,
 "Author badge rules").
 """
 
-import uuid
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable
 
 from src.modules.property.schemas import (
     AuthorBadgeDTO,
     BuildingRole,
     DisplayMode,
+    ObjectKind,
     RelationType,
     RoleBadge,
-    TargetScope,
+    object_label,
 )
-
-APARTMENT_LABEL = "Apt."
 
 # Shown instead of a name when there is no apartment context and the user keeps the default mode.
 BUILDING_ROLE_LABELS: dict[BuildingRole, str] = {
@@ -77,7 +75,7 @@ def format_author_badge(
     FULL_NAME      -> "Ivan Petrov (Apt. 14)"
     Without an apartment the name stands alone, or the building role label is used.
     """
-    apartment = f"{APARTMENT_LABEL} {apt_number}" if apt_number else None
+    apartment = object_label(ObjectKind.APARTMENT, apt_number) if apt_number else None
 
     name: str | None = None
     if display_mode == DisplayMode.INITIALS:
@@ -107,23 +105,3 @@ def format_named_badge(full_name: str, building_role: BuildingRole) -> AuthorBad
         display_label=" ".join(full_name.split()) or BUILDING_ROLE_LABELS[building_role],
         role_badge=resolve_role_badge(None, building_role),
     )
-
-
-def apartment_in_target(
-    scope: TargetScope,
-    target_entrance: int | None,
-    target_apartment_ids: Collection[uuid.UUID],
-    *,
-    apartment_id: uuid.UUID,
-    entrance: int,
-) -> bool:
-    """Whether an apartment is in the target of an alert or notice.
-
-    The one rule for who is targeted: notification recipients use it directly, and the SQL filter
-    of communication's post visibility is kept equal to it by tests.
-    """
-    if scope == TargetScope.ALL_BUILDING:
-        return True
-    if scope == TargetScope.ENTRANCE:
-        return target_entrance is not None and entrance == target_entrance
-    return apartment_id in target_apartment_ids

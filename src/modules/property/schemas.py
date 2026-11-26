@@ -10,10 +10,11 @@ stores it.
 import re
 import unicodedata
 import uuid
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 from pydantic import (
     AfterValidator,
@@ -58,13 +59,55 @@ class Locale(StrEnum):
     EN = "en"
 
 
+# Every module shares this enum, `TargetDTO` and the one rule `apartment_in_target` below.
 class TargetScope(StrEnum):
-    """Who an alert or notice is meant for. Communication posts and notification recipients
-    share this enum and the matching rule `property.policies.apartment_in_target`."""
+    """Who an alert, a notice or a poll is meant for."""
 
     ALL_BUILDING = "ALL_BUILDING"
     ENTRANCE = "ENTRANCE"
     APARTMENT_LIST = "APARTMENT_LIST"
+
+
+class ObjectKind(StrEnum):
+    """The kind of an object of ownership (epic E14): an "apartment" in the code, the tables and
+    the API is an object of any kind. Listed in the order objects are shown."""
+
+    APARTMENT = "APARTMENT"
+    PARKING = "PARKING"
+    GARAGE = "GARAGE"
+
+
+class TargetDTO(BaseModel):
+    """The target of a post, a poll or a maintenance notice: the one shape every check and every
+    targeting rule takes. `apartment_ids` is empty unless the scope is APARTMENT_LIST."""
+
+    model_config = ConfigDict(frozen=True)
+
+    scope: TargetScope
+    entrance: int | None = None
+    apartment_ids: frozenset[uuid.UUID] = frozenset()
+
+    @classmethod
+    def of(
+        cls,
+        scope: TargetScope,
+        entrance: int | None,
+        apartment_ids: Iterable[uuid.UUID | str] | None,
+    ) -> "TargetDTO":
+        """From the target fields of a request or a stored row (ids as UUIDs or JSON strings)."""
+        return cls(
+            scope=scope,
+            entrance=entrance,
+            apartment_ids=frozenset(uuid.UUID(str(value)) for value in apartment_ids or ()),
+        )
+
+
+class ObjectRef(NamedTuple):
+    """An object named by its kind and number, as people write it (numbers repeat across
+    kinds, so a number alone names no object)."""
+
+    kind: ObjectKind
+    number: str
 
 
 class RoleBadge(StrEnum):
@@ -138,6 +181,105 @@ class CurrentUserDTO(BaseModel):
     @property
     def apartment_ids(self) -> frozenset[uuid.UUID]:
         return frozenset(m.apartment_id for m in self.memberships)
+
+
+# --- Objects and targets: pure rules every module shares (epic E14, section 2.5) ---------------
+
+_KIND_ORDER = tuple(ObjectKind)
+APARTMENT_LABEL = "Apt."
+_KIND_LETTERS = {ObjectKind.PARKING: "P", ObjectKind.GARAGE: "G"}
+
+
+def object_label(kind: ObjectKind, number: str) -> str:
+    """The short name of an object in badges, the same in every language: "Apt. 14", "P14",
+    "G12". A number that already starts with the kind's letter, in any case, stays as it is
+    ("G12", "g12", "P-012"), since the number is stored as the chairman typed it."""
+    letter = _KIND_LETTERS.get(kind)
+    if letter is None:
+        return f"{APARTMENT_LABEL} {number}"
+    return number if number[:1].casefold() == letter.casefold() else f"{letter}{number}"
+
+
+def parse_object_ref(kind: str | None, number: str) -> ObjectRef:
+    """An object named in a file or a request; a missing kind means an apartment, so old files
+    and requests keep working. Raises ValueError for a kind that is not known."""
+    cleaned = (kind or "").strip().upper()
+    return ObjectRef(ObjectKind(cleaned) if cleaned else ObjectKind.APARTMENT, number.strip())
+
+
+def object_sort_key(kind: ObjectKind, entrance: int | None, number: str) -> tuple:
+    """The order of objects everywhere: by kind, then entrance (none last), then the number in
+    natural order ("2" < "10" < "14" < "14A" < "14a", by code point). The SQL order of the
+    property service is kept equal to it by a test."""
+    return (_KIND_ORDER.index(kind), entrance is None, entrance or 0, len(number), number)
+
+
+def target_consistency_problem(target: TargetDTO) -> str | None:
+    """Why the fields of a target do not fit its scope, or None when they do. Whether the
+    entrance or the apartments exist is `PropertyService.target_problem_in_building`."""
+    if target.scope == TargetScope.ALL_BUILDING:
+        if target.entrance is not None or target.apartment_ids:
+            return "ALL_BUILDING takes neither target_entrance nor target_apartment_ids."
+    elif target.scope == TargetScope.ENTRANCE:
+        if target.entrance is None:
+            return "ENTRANCE needs target_entrance."
+        if target.apartment_ids:
+            return "ENTRANCE does not take target_apartment_ids."
+    elif not target.apartment_ids:
+        return "APARTMENT_LIST needs at least one apartment in target_apartment_ids."
+    elif target.entrance is not None:
+        return "APARTMENT_LIST does not take target_entrance."
+    return None
+
+
+def apartment_in_target(
+    target: TargetDTO, *, apartment_id: uuid.UUID, kind: ObjectKind, entrance: int | None
+) -> bool:
+    """Whether an object is in a target: the one rule of who is reached. Recipients and
+    electors use it directly; the SQL of `PropertyService.targeting_clause` is kept equal to it
+    by tests. `kind` takes part once targets by kind exist; today every scope ignores it."""
+    if target.scope == TargetScope.ALL_BUILDING:
+        return True
+    if target.scope == TargetScope.ENTRANCE:
+        return target.entrance is not None and entrance == target.entrance
+    return apartment_id in target.apartment_ids
+
+
+def first_object_in(user: CurrentUserDTO, target: TargetDTO | None) -> uuid.UUID | None:
+    """The object that signs a forum topic, a comment or a chat message when the author names
+    none: the author's first membership (in list order) inside `target`, or the first of all
+    without one; None without such a membership. Never an error."""
+    for membership in user.memberships:
+        # Memberships carry no kind yet: every object is an apartment.
+        if target is None or apartment_in_target(
+            target,
+            apartment_id=membership.apartment_id,
+            kind=ObjectKind.APARTMENT,
+            entrance=membership.entrance,
+        ):
+            return membership.apartment_id
+    return None
+
+
+class ObjectNotHeld(ValueError):
+    """The object named is not one of the candidates."""
+
+
+class ObjectNotChosen(ValueError):
+    """No object was named and there are several to choose from."""
+
+
+def chosen_object(candidates: Sequence[uuid.UUID], requested: uuid.UUID | None) -> uuid.UUID | None:
+    """The object an issue report or a ballot is made from: the requested one, which must be a
+    candidate (else ObjectNotHeld); without one the only candidate, None without candidates, and
+    ObjectNotChosen with several. Each caller answers the errors in its own words."""
+    if requested is not None:
+        if requested not in candidates:
+            raise ObjectNotHeld
+        return requested
+    if len(candidates) > 1:
+        raise ObjectNotChosen
+    return candidates[0] if candidates else None
 
 
 class MembershipView(ApartmentMembershipDTO):

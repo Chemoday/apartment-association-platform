@@ -594,8 +594,7 @@ async def test_who_sees_a_poll_follows_the_shared_targeting_rule(
     api_client: AsyncClient, db_session: AsyncSession, world: PollWorld, target: dict
 ) -> None:
     # The SQL filter of visibility and apartment_in_target (used for the electorate) agree.
-    from src.modules.property.policies import apartment_in_target
-    from src.modules.property.schemas import TargetScope
+    from src.modules.property.schemas import ObjectKind, TargetDTO, apartment_in_target
 
     two_homes = await create_user(db_session, world.building, "Two Homes")
     await create_membership(db_session, two_homes, world.apt_2)
@@ -614,16 +613,23 @@ async def test_who_sees_a_poll_follows_the_shared_targeting_rule(
     ):
         expected = any(
             apartment_in_target(
-                TargetScope(target["target_scope"]),
-                target.get("target_entrance"),
-                targeted,
+                TargetDTO.of(target["target_scope"], target.get("target_entrance"), targeted),
                 apartment_id=home.id,
+                kind=ObjectKind.APARTMENT,
                 entrance=home.entrance,
             )
             for home in homes
         )
         seen = (await get(api_client, user, poll["id"])).status_code == 200
+        listed = await api_client.get(API, headers=as_user(user))
         assert seen is expected, (user.full_name, target)
+        assert (poll["id"] in {p["id"] for p in listed.json()}) is expected, user.full_name
+
+    # A poll is seen only through a membership (member_only): staff without an apartment see
+    # none, also a whole-building one, unlike posts.
+    assert (await get(api_client, world.accountant, poll["id"])).status_code == 404
+    listed = await api_client.get(API, headers=as_user(world.accountant))
+    assert poll["id"] not in {p["id"] for p in listed.json()}
 
 
 async def test_the_list_says_who_can_answer(api_client: AsyncClient, world: PollWorld) -> None:

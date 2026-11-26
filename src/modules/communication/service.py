@@ -6,24 +6,21 @@ badges come from PropertyService; property models are never imported or joined.
 """
 
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import Depends
 from sqlalchemy import (
     ColumnElement,
-    Text,
     and_,
     exists,
     false,
     func,
-    literal,
     or_,
     select,
     update,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,10 +73,14 @@ from src.modules.communication.schemas import (
     PostType,
     PostView,
     ResolveResponse,
-    TargetScope,
     ThreadRefDTO,
 )
-from src.modules.property.schemas import AuthorBadgeDTO, CurrentUserDTO
+from src.modules.property.schemas import (
+    AuthorBadgeDTO,
+    CurrentUserDTO,
+    TargetDTO,
+    first_object_in,
+)
 from src.modules.property.service import AuthorKey, PropertyService, get_property_service
 
 
@@ -145,18 +146,14 @@ class CommunicationService:
     # --- System-level reads (no caller; used by the notifications module) -----------------------
 
     async def notice_target_problem(
-        self,
-        building_id: uuid.UUID,
-        scope: TargetScope,
-        entrance: int | None,
-        apartment_ids: Sequence[uuid.UUID] | None,
+        self, building_id: uuid.UUID, target: TargetDTO
     ) -> tuple[str, dict[str, object]] | None:
         """Why an official notice with this target cannot be published in the building, as the
         message and the extra fields of INVALID_TARGET, or None (the rules of POST /posts; used by
         the maintenance calendar, epic E10)."""
-        if problem := target_problem(PostType.OFFICIAL_NOTICE, scope, entrance, apartment_ids):
+        if problem := target_problem(PostType.OFFICIAL_NOTICE, target):
             return problem, {}
-        return await self._missing_target(building_id, scope, entrance, apartment_ids)
+        return await self.property_service.target_problem_in_building(building_id, target)
 
     async def get_emergency_ref(
         self, post_id: uuid.UUID, *, lock_for_share: bool = False
@@ -370,14 +367,16 @@ class CommunicationService:
                 error_code="FORBIDDEN",
                 message="Only the board publishes emergencies, official notices and board topics.",
             )
-        if problem := target_problem(
-            request.post_type,
-            request.target_scope,
-            request.target_entrance,
-            request.target_apartment_ids,
-        ):
+        target = TargetDTO.of(
+            request.target_scope, request.target_entrance, request.target_apartment_ids
+        )
+        if problem := target_problem(request.post_type, target):
             raise _invalid_target(problem)
-        await self._check_target_exists(user, request)
+        if missing := await self.property_service.target_problem_in_building(
+            user.building_id, target
+        ):
+            message, extra = missing
+            raise _invalid_target(message, **extra)
         if request.post_type == PostType.APARTMENT_THREAD:
             author_apartment_id = await self._check_new_thread(user, request)
         elif request.post_type == PostType.BOARD_TOPIC:
@@ -724,35 +723,20 @@ class CommunicationService:
         )
         targeted = and_(
             Post.post_type.not_in([PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC]),
-            CommunicationService._targeting(user),
+            # A whole-building post is for everyone of the building, staff included.
+            PropertyService.targeting_clause(
+                user,
+                scope=Post.target_scope,
+                entrance=Post.target_entrance,
+                apartment_ids=Post.target_apartment_ids,
+                member_only=False,
+            ),
         )
         threads = and_(
             Post.post_type == PostType.APARTMENT_THREAD,
             CommunicationService._visible_threads(user),
         )
         return and_(in_building, or_(targeted, threads))
-
-    @staticmethod
-    def _targeting(user: CurrentUserDTO) -> ColumnElement[bool]:
-        """The posts whose target includes the caller.
-
-        ENTRANCE matches any entrance of the caller's apartments, APARTMENT_LIST any of the
-        caller's apartments, so a user with two apartments sees the alerts of both.
-        """
-        targeted: list[ColumnElement[bool]] = [Post.target_scope == TargetScope.ALL_BUILDING]
-        if entrances := sorted({membership.entrance for membership in user.memberships}):
-            targeted.append(
-                and_(Post.target_scope == TargetScope.ENTRANCE, Post.target_entrance.in_(entrances))
-            )
-        if apartment_ids := sorted(str(apartment_id) for apartment_id in user.apartment_ids):
-            targeted.append(
-                and_(
-                    Post.target_scope == TargetScope.APARTMENT_LIST,
-                    # JSONB ?| : the list holds at least one of the caller's apartment ids.
-                    Post.target_apartment_ids.has_any(literal(apartment_ids, ARRAY(Text))),
-                )
-            )
-        return or_(*targeted)
 
     @staticmethod
     def _visible_threads(user: CurrentUserDTO) -> ColumnElement[bool]:
@@ -808,37 +792,6 @@ class CommunicationService:
             raise _post_not_found()
         return post
 
-    async def _check_target_exists(self, user: CurrentUserDTO, request: PostCreateRequest) -> None:
-        if problem := await self._missing_target(
-            user.building_id,
-            request.target_scope,
-            request.target_entrance,
-            request.target_apartment_ids,
-        ):
-            message, extra = problem
-            raise _invalid_target(message, **extra)
-
-    async def _missing_target(
-        self,
-        building_id: uuid.UUID,
-        scope: TargetScope,
-        entrance: int | None,
-        apartment_ids: Sequence[uuid.UUID] | None,
-    ) -> tuple[str, dict[str, object]] | None:
-        """Why the target does not exist in the building (message, extra), or None."""
-        if scope == TargetScope.ALL_BUILDING:
-            return None
-        apartments = await self.property_service.list_apartments(building_id)
-        if scope == TargetScope.ENTRANCE:
-            if entrance not in {apartment.entrance for apartment in apartments}:
-                return f"The building has no apartments in entrance {entrance}.", {}
-        elif unknown := set(apartment_ids or ()) - {a.id for a in apartments}:
-            return (
-                "Some target apartments are not in this building.",
-                {"unknown_apartment_ids": sorted(str(apartment_id) for apartment_id in unknown)},
-            )
-        return None
-
     @staticmethod
     def _author_apartment(
         user: CurrentUserDTO, requested: uuid.UUID | None, default_to_membership: bool
@@ -853,9 +806,7 @@ class CommunicationService:
             if user.membership_for(requested) is None:
                 raise _invalid_author_apartment()
             return requested
-        if default_to_membership and user.memberships:
-            return user.memberships[0].apartment_id
-        return None
+        return first_object_in(user, None) if default_to_membership else None
 
     async def _check_new_thread(
         self, user: CurrentUserDTO, request: PostCreateRequest

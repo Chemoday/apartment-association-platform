@@ -6,7 +6,20 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, func, select, text, true, update
+from sqlalchemy import (
+    ColumnElement,
+    Text,
+    and_,
+    false,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    true,
+    update,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +35,6 @@ from src.modules.property.models import (
     User,
 )
 from src.modules.property.policies import (
-    apartment_in_target,
     format_author_badge,
     format_named_badge,
     most_private_display_mode,
@@ -51,6 +63,8 @@ from src.modules.property.schemas import (
     MeResponse,
     NewApartment,
     NewBuilding,
+    ObjectKind,
+    ObjectRef,
     PersonDTO,
     PersonMembershipDTO,
     PrivacyUpdateResponse,
@@ -58,8 +72,12 @@ from src.modules.property.schemas import (
     RelationType,
     ResidentDTO,
     RoleBadge,
+    TargetDTO,
     TargetScope,
     UserRefDTO,
+    apartment_in_target,
+    object_sort_key,
+    target_consistency_problem,
 )
 
 # The name of a closed account (its personal data is removed, docs/API.md 7).
@@ -89,8 +107,14 @@ UNKNOWN_AUTHOR_BADGE = AuthorBadgeDTO(display_label="Unknown author", role_badge
 
 type AuthorKey = tuple[uuid.UUID, uuid.UUID | None]
 
-# Entrance, then apartment number in natural order: "2" < "10" < "14" < "14A".
-_APARTMENT_ORDER = (Apartment.entrance, func.length(Apartment.number), Apartment.number)
+# The SQL form of `object_sort_key` (kept equal to it by a test): entrance (none last), then the
+# number in natural order by code point, "2" < "10" < "14" < "14A" < "14a", whatever the
+# database's collation.
+_APARTMENT_ORDER = (
+    Apartment.entrance.asc().nulls_last(),
+    func.length(Apartment.number),
+    Apartment.number.collate("C"),
+)
 # Ended memberships are history: every query that resolves people filters them
 # (docs/ARCHITECTURE.md 4.3).
 ACTIVE_MEMBERSHIP = ApartmentMembership.ended_at.is_(None)
@@ -223,18 +247,13 @@ class PropertyService:
     # --- Notification recipients (system-level, used by the notifications module) ---------------
 
     async def resolve_recipients(
-        self,
-        building_id: uuid.UUID,
-        scope: TargetScope,
-        entrance: int | None,
-        apartment_ids: Iterable[uuid.UUID],
+        self, building_id: uuid.UUID, target: TargetDTO
     ) -> list[RecipientDTO]:
         """Active users with a membership in a targeted apartment of the building, once each.
 
         Staff without an apartment are not reached through targeting (docs/ARCHITECTURE.md 3.4);
         the caller adds them by role (`users_with_roles`).
         """
-        targeted = frozenset(apartment_ids)
         rows = await self.session.execute(
             select(User.id, User.locale, Apartment.id, Apartment.entrance)
             .join(ApartmentMembership, ApartmentMembership.user_id == User.id)
@@ -248,27 +267,24 @@ class PropertyService:
         )
         recipients: dict[uuid.UUID, RecipientDTO] = {}
         for user_id, locale, apartment_id, apartment_entrance in rows.all():
+            # Objects carry no kind yet: every object is an apartment.
             if user_id not in recipients and apartment_in_target(
-                scope, entrance, targeted, apartment_id=apartment_id, entrance=apartment_entrance
+                target,
+                apartment_id=apartment_id,
+                kind=ObjectKind.APARTMENT,
+                entrance=apartment_entrance,
             ):
                 recipients[user_id] = RecipientDTO(user_id=user_id, locale=locale)
         return sorted(recipients.values(), key=lambda r: str(r.user_id))
 
     async def poll_electors(
-        self,
-        building_id: uuid.UUID,
-        scope: TargetScope,
-        entrance: int | None,
-        apartment_ids: Iterable[uuid.UUID],
-        *,
-        owners_only: bool,
+        self, building_id: uuid.UUID, target: TargetDTO, *, owners_only: bool
     ) -> list[ElectorDTO]:
         """Active users with an active membership (an OWNER one when `owners_only`) in a
         targeted apartment of the building: one row per user and apartment (epic E3).
 
         The shared targeting rule decides which apartments are targeted, as for alerts.
         """
-        targeted = frozenset(apartment_ids)
         statement = (
             select(User.id, Apartment.id, Apartment.entrance)
             .join(ApartmentMembership, ApartmentMembership.user_id == User.id)
@@ -285,8 +301,12 @@ class PropertyService:
         electors = {
             (user_id, apartment_id)
             for user_id, apartment_id, apartment_entrance in (await self.session.execute(statement))
+            # Objects carry no kind yet: every object is an apartment.
             if apartment_in_target(
-                scope, entrance, targeted, apartment_id=apartment_id, entrance=apartment_entrance
+                target,
+                apartment_id=apartment_id,
+                kind=ObjectKind.APARTMENT,
+                entrance=apartment_entrance,
             )
         }
         return [
@@ -521,6 +541,59 @@ class PropertyService:
             for a in apartments
         ]
 
+    async def target_problem_in_building(
+        self, building_id: uuid.UUID, target: TargetDTO
+    ) -> tuple[str, dict[str, object]] | None:
+        """Why a target cannot be used in the building, as the message and the extra fields of
+        INVALID_TARGET, or None: the consistency of its fields, then whether its entrance or its
+        apartments exist. The one check of posts, polls and maintenance notices."""
+        if problem := target_consistency_problem(target):
+            return problem, {}
+        if target.scope == TargetScope.ALL_BUILDING:
+            return None
+        apartments = await self.list_apartments(building_id)
+        if target.scope == TargetScope.ENTRANCE:
+            if target.entrance not in {apartment.entrance for apartment in apartments}:
+                return f"The building has no apartments in entrance {target.entrance}.", {}
+        elif unknown := target.apartment_ids - {apartment.id for apartment in apartments}:
+            return (
+                "Some target apartments are not in this building.",
+                {"unknown_apartment_ids": sorted(str(apartment_id) for apartment_id in unknown)},
+            )
+        return None
+
+    @staticmethod
+    def targeting_clause(
+        user: CurrentUserDTO,
+        *,
+        scope: ColumnElement[Any],
+        entrance: ColumnElement[Any],
+        apartment_ids: ColumnElement[Any],
+        member_only: bool,
+    ) -> ColumnElement[bool]:
+        """The rows whose target includes one of the caller's objects, as a SQL condition over
+        the caller's own target columns (property never imports another module's models).
+        `apartment_ids` is a JSONB array of id strings. Kept equal to `apartment_in_target` by
+        tests.
+
+        `member_only`: a whole-building target counts only through a membership (polls); without
+        it a whole-building row is for everyone of the building, staff included (posts).
+        """
+        if member_only and not user.memberships:
+            return false()
+        targeted: list[ColumnElement[bool]] = [scope == TargetScope.ALL_BUILDING]
+        if entrances := sorted({membership.entrance for membership in user.memberships}):
+            targeted.append(and_(scope == TargetScope.ENTRANCE, entrance.in_(entrances)))
+        if ids := sorted(str(apartment_id) for apartment_id in user.apartment_ids):
+            targeted.append(
+                and_(
+                    scope == TargetScope.APARTMENT_LIST,
+                    # JSONB ?| : the list holds at least one of the caller's apartment ids.
+                    apartment_ids.has_any(literal(ids, ARRAY(Text))),
+                )
+            )
+        return or_(*targeted)
+
     async def apartment_areas(self, building_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
         """The recorded area (m2) of each apartment of a building, for consumption per m2."""
         rows = await self.session.execute(
@@ -684,9 +757,10 @@ class PropertyService:
 
     async def create_apartments(
         self, building_id: uuid.UUID, apartments: Iterable[NewApartment]
-    ) -> dict[str, uuid.UUID]:
+    ) -> dict[ObjectRef, uuid.UUID]:
         """Apartments of a new building, checked by the filling core (src/core/filling, epic
-        E13 R3); returns their ids by number. The caller commits."""
+        E13 R3); returns their ids by kind and number (a number repeats across kinds). The
+        caller commits."""
         rows = [
             Apartment(
                 building_id=building_id,
@@ -699,7 +773,8 @@ class PropertyService:
         ]
         self.session.add_all(rows)
         await self.session.flush()
-        return {row.number: row.id for row in rows}
+        # Objects carry no kind yet: every object is an apartment.
+        return {ObjectRef(ObjectKind.APARTMENT, row.number): row.id for row in rows}
 
     async def building_ids(self) -> list[uuid.UUID]:
         """Every building of the installation (one per installation today; the operator
@@ -920,9 +995,13 @@ class PropertyService:
         await self.session.flush()
         return True
 
-    async def apartment_by_number(
-        self, building_id: uuid.UUID, number: str
+    async def apartment_by_ref(
+        self, building_id: uuid.UUID, kind: ObjectKind, number: str
     ) -> ApartmentRefDTO | None:
+        """The object of the building with this kind and number, or None (a number alone names
+        no object: it repeats across kinds)."""
+        if kind != ObjectKind.APARTMENT:
+            return None  # objects carry no kind yet: every object is an apartment
         apartment = await self.session.scalar(
             select(Apartment).where(
                 Apartment.building_id == building_id, Apartment.number == number
@@ -1091,9 +1170,7 @@ class PropertyService:
         def membership_key(item: tuple[ApartmentMembership, Apartment]) -> tuple:
             membership, apartment = item
             return (
-                apartment.entrance,
-                len(apartment.number),
-                apartment.number,
+                *object_sort_key(ObjectKind.APARTMENT, apartment.entrance, apartment.number),
                 _RELATION_ORDER.index(membership.relation_type),
                 membership.started_at,
                 str(membership.user_id),

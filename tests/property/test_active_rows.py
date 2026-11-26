@@ -8,7 +8,13 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import DomainError
-from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType, TargetScope
+from src.modules.property.schemas import (
+    BuildingRole,
+    DisplayMode,
+    RelationType,
+    TargetDTO,
+    TargetScope,
+)
 from src.modules.property.service import PropertyService
 from tests.factories import DemoBuilding, create_demo_building, create_membership, create_user
 
@@ -49,7 +55,7 @@ async def test_recipients_and_submitters_skip_ended_memberships(
     properties = PropertyService(db_session)
     await end(db_session, demo.tenant_2_membership)
     everyone = await properties.resolve_recipients(
-        demo.building.id, TargetScope.ALL_BUILDING, None, ()
+        demo.building.id, TargetDTO(scope=TargetScope.ALL_BUILDING)
     )
     assert {r.user_id for r in everyone} == {demo.owner_14.id}
     submitters = await properties.reading_submitters([demo.apt_2.id, demo.apt_14.id])
@@ -114,17 +120,19 @@ async def test_poll_electors_are_active_rows_only(
     await end(db_session, demo.tenant_2_membership)
 
     residents = await properties.poll_electors(
-        demo.building.id, TargetScope.ALL_BUILDING, None, [], owners_only=False
+        demo.building.id, TargetDTO(scope=TargetScope.ALL_BUILDING), owners_only=False
     )
     owners = await properties.poll_electors(
-        demo.building.id, TargetScope.ENTRANCE, 2, [], owners_only=True
+        demo.building.id, TargetDTO(scope=TargetScope.ENTRANCE, entrance=2), owners_only=True
     )
 
     assert {(e.user_id, e.apartment_id) for e in residents} == {(demo.owner_14.id, demo.apt_14.id)}
     assert {(e.user_id, e.apartment_id) for e in owners} == {(demo.owner_14.id, demo.apt_14.id)}
     assert (
         await properties.poll_electors(
-            demo.building.id, TargetScope.ENTRANCE, 1, [], owners_only=False
+            demo.building.id,
+            TargetDTO(scope=TargetScope.ENTRANCE, entrance=1),
+            owners_only=False,
         )
         == []
     )
