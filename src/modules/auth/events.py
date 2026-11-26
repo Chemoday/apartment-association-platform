@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 
 from src.core.event_bus import DomainEvent
+from src.modules.property.schemas import ObjectKind
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -21,9 +22,12 @@ class UserAccountClosed(DomainEvent):
 @dataclass(frozen=True, kw_only=True)
 class JoinRequestSubmitted(DomainEvent):
     """Someone used a join code on paper (E13 R4c); notifications tells the chairmen
-    (JOIN_REQUEST_SUBMITTED). Ids and the apartment number only, never what the person typed."""
+    (JOIN_REQUEST_SUBMITTED). Ids and the object's number and kind only, never what the person
+    typed."""
 
     building_id: uuid.UUID
     request_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    # Absent in events stored before epic E14: an apartment.
+    apartment_kind: ObjectKind = ObjectKind.APARTMENT

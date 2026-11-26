@@ -589,7 +589,16 @@ class GovernanceService:
             chosen = units[0] if units else None
         else:
             try:
-                chosen_id = chosen_object([unit.apartment_id for unit in units], apartment_id)
+                # The caller's units are their own memberships, which carry the kind.
+                kinds = {m.apartment_id: m.apartment_kind for m in user.memberships}
+                chosen_id = chosen_object(
+                    [
+                        (unit.apartment_id, kinds[unit.apartment_id])
+                        for unit in units
+                        if unit.apartment_id is not None
+                    ],
+                    apartment_id,
+                )
             except ObjectNotHeld:
                 chosen_id = None  # not eligible
             except ObjectNotChosen:

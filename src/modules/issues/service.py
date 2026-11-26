@@ -764,7 +764,7 @@ class IssuesService:
             return None
         try:
             chosen = chosen_object(
-                [membership.apartment_id for membership in user.memberships], apartment_id
+                [(m.apartment_id, m.apartment_kind) for m in user.memberships], apartment_id
             )
         except ObjectNotHeld:
             raise DomainError(
@@ -784,7 +784,7 @@ class IssuesService:
 
     async def _entrances(self, building_id: uuid.UUID) -> list[int]:
         apartments = await self.property_service.list_apartments(building_id)
-        return sorted({apartment.entrance for apartment in apartments})
+        return sorted({a.entrance for a in apartments if a.entrance is not None})
 
     async def _check_entrance(self, building_id: uuid.UUID, entrance: int | None) -> None:
         if entrance is not None and entrance not in await self._entrances(building_id):

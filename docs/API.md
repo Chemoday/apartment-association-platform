@@ -76,6 +76,16 @@ Section 1 ("Building register facts", epic E12) adds `REGISTRY_NOT_ENABLED`, `RE
 
 `role_badge`: `BOARD` for `CHAIRMAN` / `BOARD` building roles (this takes precedence, so neighbours know they are talking to the board), `ACCOUNTANT` for accountants, otherwise `OWNER` for owners and `RESIDENT` for tenants and residents.
 
+The object in a badge is named by its kind, short and the same in every language: `Apt. 14`, `P14` for a parking space, `G12` for a garage (`I. P. (G12)`, `Ivan Petrov (G12)`). The letter and the number are written without a space; a number that already starts with the letter, in any case, is shown as it is (`G12`, `g12`, `P-012`); `1G` is `G1G`.
+
+### Objects of several kinds (epic E14)
+An "apartment" of the API is an object of ownership of any kind: `APARTMENT`, `PARKING` (a parking space) or `GARAGE`. Each is an apartment ownership of its own, with its own share and vote; one person may hold several, and an owner of a parking space or a garage may have no apartment. The names of the API stay (`apartment_id`, `apartment_number`).
+- **`apartment_kind`** (`APARTMENT`, `PARKING`, `GARAGE`) stands next to `apartment_number` in every view that names an object by number, so two objects with the number `1` can be told apart: the memberships of `GET /property/me`, the apartment list and card of the board, the people list (`GET /auth/users`), the connection overview, invitations (the preview, the list, the bulk result), join codes (issued, listed, the public join page), join requests and decisions, the meters dashboard, the readings and the consumption of one object, and the matrix. Notification `params` carry it too (section 6).
+- **`entrance`, `floor` and `area_m2` may be `null`** wherever an object is returned. An `APARTMENT` always has all three; another kind never has an entrance, and its floor (may be negative: an underground parking is floor -1) and its area are optional.
+- **Order:** apartments, parking spaces, garages; then entrance (none last) and the number in natural order by code point (`2`, `10`, `14`, `14A`, `14a`).
+- **Texts** of notifications and e-mails name the object by kind in the recipient's language ("garage 12"), never "apartment G12".
+- No parking space or garage exists before the frontend handles the kinds: the demo gets them last (epic E14, PR 5). Until then the demo user switcher (`GET /demo/users`, section 5) keeps `apartment_number` alone; it gains the objects of each user with their kinds in PR 5.
+
 ---
 
 ## 1. Profile & Privacy Settings (`property`)
@@ -96,6 +106,7 @@ The payload never contains the raw `full_name`, `email` or `phone`, not even the
       "membership_id": "uuid",
       "apartment_id": "uuid",
       "apartment_number": "14",
+      "apartment_kind": "APARTMENT",
       "entrance": 2,
       "floor": 4,
       "relation_type": "OWNER",
@@ -113,7 +124,7 @@ The payload never contains the raw `full_name`, `email` or `phone`, not even the
 
 The payload also has `"locale": "et" | "ru" | "en" | null`: the language of notifications sent outside the app (`null` = the instance default). It is not personal data.
 
-Ended memberships are not listed. Memberships are ordered by entrance, then apartment number in natural order (`2`, `10`, `14`, `14A`). The top-level `privacy_display_mode` is the most private mode across the memberships (`APARTMENT_ONLY` when there are none); it is the mode used when the user acts without an apartment context. Only memberships of apartments in the user's own building are returned.
+Ended memberships are not listed. Memberships are in the order of objects (section 0, "Objects of several kinds": apartments first, then entrance and the number in natural order: `2`, `10`, `14`, `14A`); `entrance` and `floor` are `null` where the object has none. The top-level `privacy_display_mode` is the most private mode across the memberships (`APARTMENT_ONLY` when there are none); it is the mode used when the user acts without an apartment context. Only memberships of apartments in the user's own building are returned.
 
 ### `GET /api/v1/property/building`
 The association and its building, for the app header and the dashboard. Any user of the building.
@@ -128,11 +139,12 @@ The association and its building, for the app header and the dashboard. Any user
   "apartment_count": 6,
   "entrance_count": 2,
   "heated_area_m2": "329.20",
+  "object_counts": { "APARTMENT": 6, "PARKING": 0, "GARAGE": 0 },
   "registry_facts": null
 }
 ```
 - `registry_code` is the association's code in the commercial register, `null` until it is entered.
-- `apartment_count`, `entrance_count` and `heated_area_m2` are computed from the apartments. `heated_area_m2` is the sum of the apartments' `area_m2`, a decimal string with 2 places (`"0.00"` without apartments); common areas are not included.
+- `apartment_count`, `entrance_count` and `heated_area_m2` are computed from the objects of kind `APARTMENT` only. `heated_area_m2` is the sum of their `area_m2`, a decimal string with 2 places (`"0.00"` without apartments); common areas, parking spaces and garages are not included. `object_counts` has the number of objects of every kind (0 for a kind the building has none of).
 - No people in the payload: no chairman name, no contact details.
 - `registry_facts`: the building passport from a public register, as the chairman accepted it
   (see "Building register facts" below); `null` while there is none or no register provider is
@@ -352,9 +364,19 @@ fill the building once (an advisory lock).
   column given twice is refused. Header names are printed printable only, at most 32 characters
   and 10 names.
 - **A row** is one of:
-  - an apartment meter: `apartment` and `resource` filled;
-  - an apartment without meters: `apartment` filled, every meter column empty;
-  - a building meter: `apartment`, `entrance`, `floor` and `area_m2` empty, `resource` filled.
+  - an object's meter: `apartment` and `resource` filled;
+  - an object without meters: `apartment` filled, every meter column empty;
+  - a building meter: `apartment`, `entrance`, `floor`, `area_m2` and `kind` empty, `resource`
+    filled.
+- **The kind of an object** (epic E14): the optional column `kind`, after the meter columns, is
+  `APARTMENT`, `PARKING` or `GARAGE` (case ignored); empty means an apartment, so a file without
+  the column keeps working. A number names an object only together with its kind: `1` and `1`
+  of kind `PARKING` are two objects, and the meters of a row belong to the object of its kind and
+  number. A parking space or a garage has no entrance (an `entrance` on it is a problem of the
+  row), its `floor` is optional and stays empty without one (never 1), and its `area_m2` is
+  optional. Two numbers of one kind whose labels collide are refused, compared without case
+  (`PARKING` `1` and `P1` are both `P1`; `P1` and `p1`). The register check compares the
+  apartments only, and the default limit of a building meter grows with every object.
 - **Apartment columns:**
   - `apartment`: 1 to 32 characters of one line of visible text (the rule of `create-building`);
     every row of one apartment repeats the same `entrance`, `floor` and `area_m2`; two numbers
@@ -362,9 +384,9 @@ fill the building once (an advisory lock).
     and `1`; a zero after a digit or after `.`, `,`, `/` or `-` counts: `1.05` and `1.5` are two
     numbers) are
     an error of the later row, never two apartments;
-  - `entrance`: a whole number from 1 to 99, required;
-  - `floor`: a whole number from -5 to 200, empty means 1;
-  - `area_m2`: required, greater than 0, a decimal point or comma, rounded half up to 2 decimal
+  - `entrance`: a whole number from 1 to 99, required for an apartment;
+  - `floor`: a whole number from -5 to 200, empty means 1 for an apartment;
+  - `area_m2`: required for an apartment, greater than 0, a decimal point or comma, rounded half up to 2 decimal
     places (the output counts how many were rounded), at most 999999.99.
 - **Numbers** (`area_m2`, `initial_value`, `max_monthly_delta`) may group their thousands with
   spaces, as a spreadsheet shows them (`12 345,5`, also with a no-break space); any other
@@ -398,8 +420,9 @@ fill the building once (an advisory lock).
 - **Output and exit codes** (standard output, row numbers and counts only, never cell values
   other than the column name): every problem as `row <n>: <column>: <what is wrong>` (row 1 is
   the header), then `error: <count> problems, nothing written` and 2; refusals as above and 1;
-  success: `checked: <A> apartments, <M> apartment meters, <B> building meters, <R> areas
-  rounded` with `--dry-run`, else `imported: ...` with the same counts, and 0. Before that line,
+  success: `checked: <A> apartments, <P> parking spaces, <G> garages, <M> apartment meters, <B>
+  building meters, <R> areas rounded` with `--dry-run` (the apartment meters are the meters of
+  every object), else `imported: ...` with the same counts, and 0. Before that line,
   warnings that never stop the import: `warning: column(s) ignored: <names>`, and, when the
   building has a register passport block and its provider is enabled, a check against the
   register (owner, 2026-11-21): `warning: the register lists apartments the file does not have:
@@ -407,7 +430,7 @@ fill the building once (an advisory lock).
   added by hand), and `warning: apartment <number>: area <file> m2, the register says
   <register> m2` when they differ by more than 1 m2 and 2 %. At most 10 numbers per line (`and
   <n> more`), at most 20 area lines. A file without
-  any apartment and without other problems is `error: the layout has no apartments`. The command
+  any object and without other problems is `error: the layout has no apartments`. The command
   publishes no events; the period opener has already opened the current month for the building
   (section 2, "Monthly periods"), and its new meters are due a reading in it.
 
@@ -418,12 +441,13 @@ e-mail, phone or badge, so a card never depends on a resident's privacy choice. 
 cards; the meter history is in `GET /api/v1/meters/apartments/{apartment_id}/readings`.
 
 #### `GET /api/v1/property/apartments`
-Every apartment of the caller's building, by entrance, then apartment number in natural order.
+Every object of the caller's building, in the order of objects (section 0, "Objects of several
+kinds": apartments, parking spaces, garages; then entrance and the number in natural order).
 ```json
 {
   "apartments": [
     {
-      "apartment_id": "uuid", "apartment_number": "2", "entrance": 1, "floor": 1, "area_m2": "54.30",
+      "apartment_id": "uuid", "apartment_number": "2", "apartment_kind": "APARTMENT", "entrance": 1, "floor": 1, "area_m2": "54.30",
       "owner_count": 0, "tenant_count": 1, "resident_count": 0
     }
   ]
@@ -437,7 +461,7 @@ Every apartment of the caller's building, by entrance, then apartment number in 
 One card: the fields of the list plus the residents.
 ```json
 {
-  "apartment_id": "uuid", "apartment_number": "14", "entrance": 2, "floor": 4, "area_m2": "54.30",
+  "apartment_id": "uuid", "apartment_number": "14", "apartment_kind": "APARTMENT", "entrance": 2, "floor": 4, "area_m2": "54.30",
   "owner_count": 1, "tenant_count": 1, "resident_count": 0,
   "residents": [
     { "relation_type": "OWNER", "since": "2026-10-01T09:00:00Z" },
@@ -691,7 +715,7 @@ Returns the Building Master Meters summary (`master_total_m3` vs `apartments_sum
   ],
   "apartments": [
     {
-      "apartment_id": "uuid", "apartment_number": "14", "entrance": 2, "floor": 4, "status": "ANOMALY_CONFIRMED",
+      "apartment_id": "uuid", "apartment_number": "14", "apartment_kind": "APARTMENT", "entrance": 2, "floor": 4, "status": "ANOMALY_CONFIRMED",
       "meters": [
         { "meter_id": "uuid", "resource_type": "COLD_WATER", "location_label": "Bathroom", "unit": "m3",
           "previous_value": "124.000", "needs_start": false, "status": "ANOMALY_CONFIRMED",
@@ -851,8 +875,11 @@ The building's consumption per month and the average per apartment and per m², 
     apartment counts once, with its whole area, even if only one of its meters has a reading).
   - `average_per_apartment`: `total / apartments_counted`, 3 decimals, rounded half up; `null`
     when no apartment has a reading.
-  - `average_per_m2`: `total` divided by the summed area of the counted apartments, 4 decimals,
-    rounded half up; `null` when no apartment has a reading or their recorded area is 0.
+  - `average_per_m2`: the consumption of the counted objects that have an area, divided by
+    their summed area, 4 decimals, rounded half up; `null` when no object has a reading or the
+    counted objects have no recorded area (a garage meter without an area does not inflate it).
+  - `apartments_counted` and `average_per_apartment` mean objects of any kind with this meter
+    (an electricity meter of a garage counts).
   - `estimated_readings`: how many of those readings are estimates (`AUTO_ESTIMATED`).
   An apartment without a reading is not counted as 0, so a month that is still open shows the
   total and the average of the apartments that have submitted so far.
@@ -1300,8 +1327,8 @@ reports, but not for urgent ones (epic E9).
   waiting join requests (`GET /api/v1/auth/join-requests`; the request may be decided already).
 - `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
-  `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number` and
-  `from_board` (`true`: the board wrote; `false`: a resident of the apartment wrote). The subject
+  `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number`,
+  `apartment_kind` (absent in rows stored before epic E14: an apartment) and `from_board` (`true`: the board wrote; `false`: a resident of the apartment wrote). The subject
   is the thread (`subject_type` `post`), also for a reply; `POLL_OPENED` `closes_at` (the
   deadline when the poll opened, UTC; the board may extend it later, the poll has the current one);
   `ISSUE_REPORTED` and `ISSUE_URGENT` `category`, `entrance` (or `null`);
@@ -1312,8 +1339,8 @@ reports, but not for urgent ones (epic E9).
   `threshold` (70 or 90, percent of the room for files), `used_percent` (an integer, percent of
   the whole quota, as `GET /api/v1/files/usage` shows it); `ENERGY_CERTIFICATE_EXPIRING`
   `valid_until` (a date), `days_left` (an integer, 0 or less when it has expired) and `threshold`
-  (180, 30 or 0); `JOIN_REQUEST_SUBMITTED` `apartment_number` (never the name, phone or e-mail
-  of the person).
+  (180, 30 or 0); `JOIN_REQUEST_SUBMITTED` `apartment_number` and `apartment_kind` (absent
+  before epic E14: an apartment; never the name, phone or e-mail of the person).
 - Contains no names, titles or bodies; the frontend loads the post if it needs the title.
 
 ### `GET /api/v1/notifications/feed?unread_only=false&limit=50&offset=0`
@@ -1779,11 +1806,11 @@ or a staff role. Who invites whom:
 
 | Inviter | `kind` | Body | Effect when accepted |
 | :--- | :--- | :--- | :--- |
-| Chairman | `OWNER` | `{"kind": "OWNER", "email", "apartment_number": "14"}` | an `OWNER` membership in that apartment |
+| Chairman | `OWNER` | `{"kind": "OWNER", "email", "apartment_number": "14", "apartment_kind": "GARAGE"}` | an `OWNER` membership in that object; `apartment_kind` is optional (`APARTMENT` by default), since a number repeats across kinds; no object of that kind and number is `404 APARTMENT_NOT_FOUND` |
 | Chairman | `STAFF` | `{"kind": "STAFF", "email", "building_role": "BOARD"}` (`BOARD`, `ACCOUNTANT`, `CHAIRMAN`) | the building role, if the account has none yet |
 | Owner of the apartment | `TENANT` | `{"kind": "TENANT", "email", "apartment_id": "uuid"}` | a `TENANT` membership (`can_vote = false`) |
 
-Board members do not invite. Family members (`RESIDENT`) are not invited (owner decision).
+Board members do not invite. Family members (`RESIDENT`) are not invited (owner decision); a `RESIDENT` membership exists for apartments only. Owners and tenants exist for every kind: the owner of a parking space or a garage invites its tenant as for an apartment.
 
 **Invitation object (`InvitationView`):**
 ```json
@@ -1877,14 +1904,22 @@ request and answer with the same report; the preview changes nothing.
 
 Request `{"text": "..."}`: the list the chairman pasted, or the text of a file the client read.
 It is parsed in memory and never stored, neither in the database nor in the file storage.
-- **One row per line:** `apartment number; e-mail; language`. The separator is `;` when the line
-  has one, else a tab, else `,`. The language may be left out or empty, and its case is
+- **One row per line:** `apartment number; e-mail; language; kind`. The separator is `;` when the
+  line has one, else a tab, else `,`. The language may be left out or empty, and its case is
   ignored (`EN` is `en`); empty cells at the end of a line (a spreadsheet export) are ignored.
+  The kind (epic E14) is `APARTMENT`, `PARKING` or `GARAGE`, its case ignored, and may be left
+  out or empty: an apartment, so a list without it keeps working (`1; a@example.org; ; PARKING`
+  invites the owner of parking space `1`, `1; b@example.org` the owner of Apt. 1). The list stays
+  positional, and a prefix in the number cell is never read as a kind, because a number may itself
+  be `P-2`.
 - Leading and trailing spaces of each cell are ignored, and so are empty lines, lines starting
   with `#`, a byte order mark and a first line that names the columns (its second cell is not an
-  e-mail and contains `mail`). The apartment number must match the number of an apartment
-  exactly, as in `POST` (`14` is not `014`).
-- **Size:** at most 1 MB of UTF-8 and at most twice as many rows as the building has apartments;
+  e-mail and contains `mail`). The number must match the number of an object of the row's kind
+  exactly, as in `POST` (`14` is not `014`); one number under two kinds is two objects, not a
+  duplicate. Each row of the report has `apartment_kind`, the kind it was looked up as (`null`
+  for a row whose kind is not known).
+- **Size:** at most 1 MB of UTF-8 and at most twice as many rows as the building has objects of
+  every kind;
   otherwise `422 BULK_LIST_TOO_LONG` and nothing is read. A `text` of more than 4 194 304
   characters is refused earlier, as `422 VALIDATION_ERROR`, and so is a control character.
 
@@ -1904,11 +1939,13 @@ Response `200 BulkInvitationReport`:
   when it is valid, the language in lower case); the chairman typed them, so they are shown in
   full.
 - **`outcome`,** the first that applies:
-  - `INVALID_ROW`: not two or three cells;
+  - `INVALID_ROW`: not two to four cells;
   - `INVALID_EMAIL`: not the basic shape of an address (below);
-  - `INVALID_LOCALE`: a language that is not offered (see "The language of an invitation");
-  - `APARTMENT_NOT_FOUND`;
-  - `DUPLICATE_IN_LIST`: the same e-mail and apartment on an earlier line (that one counts);
+  - `INVALID_LOCALE`: a language that is not offered (see "The language of an invitation"),
+    also a kind written in the third cell;
+  - `INVALID_KIND`: a fourth cell that is not a kind (epic E14);
+  - `APARTMENT_NOT_FOUND`: no object of that kind and number;
+  - `DUPLICATE_IN_LIST`: the same e-mail and object on an earlier line (that one counts);
   - `ALREADY_PENDING`: an `OWNER` invitation of this e-mail and apartment is already pending,
     from anyone (as `409 INVITATION_ALREADY_PENDING`; an expired one is replaced);
   - `READY` in the preview, `INVITED` in the send.
@@ -1923,7 +1960,7 @@ Response `200 BulkInvitationReport`:
   `429 RATE_LIMITED` with `Retry-After`.
 - **The building limit:** the rows of bulk sends and the invitations of "resend expired" (and,
   with task R4c, confirmed join requests) count against one limit per building in any 24 hours,
-  twice the number of apartments. Single invitations and resends keep their own limit of 10 per
+  twice the number of objects of every kind (apartments, parking spaces and garages). Single invitations and resends keep their own limit of 10 per
   inviter per hour and do not count here.
 - Errors: `403 FORBIDDEN`, `422 BULK_LIST_TOO_LONG`, `422 VALIDATION_ERROR`, `429 RATE_LIMITED`
   (the send only).
@@ -2102,7 +2139,7 @@ Response `200 ConnectionOverview`:
   "summary": { "apartments": 60, "connected": 34, "by_status": { "CONNECTED": 34, "INVITED": 12, "NOT_INVITED": 14 } },
   "matching": 14,
   "items": [
-    { "apartment_id": "uuid", "apartment_number": "14", "entrance": 2, "status": "NOT_INVITED", "owners": 0, "tenants": 0, "on_paper": false, "last_invited_at": null, "invitation_delivery": null }
+    { "apartment_id": "uuid", "apartment_number": "14", "apartment_kind": "APARTMENT", "entrance": 2, "status": "NOT_INVITED", "owners": 0, "tenants": 0, "on_paper": false, "last_invited_at": null, "invitation_delivery": null }
   ]
 }
 ```
@@ -2437,8 +2474,9 @@ Answers, or replaces the caller's unit's answer; the last answer counts. Respons
   ]
 }
 ```
-- `apartment_id`: for unit `APARTMENT`, the apartment answered for; may be omitted when
-  `answerable_apartment_ids` has exactly one. Not taken for unit `PERSON`.
+- `apartment_id`: for unit `APARTMENT`, the object answered for; may be omitted when
+  `answerable_apartment_ids` has exactly one, or several of which exactly one is of kind
+  `APARTMENT` (then that one); otherwise `422 VALIDATION_ERROR`. Not taken for unit `PERSON`.
 - Every required question is answered; optional ones may be left out. Choices give `option_ids`
   (exactly one for `SINGLE_CHOICE`, between `min_choices` and `max_choices` for
   `MULTIPLE_CHOICE`); `OWN_VALUE` gives `value` (text 1..2000 characters, a number or a date
@@ -2662,8 +2700,8 @@ Every endpoint needs a signed-in user.
 ### `GET /api/v1/issues/form`
 What the report form needs: `{"urgent_enabled": false, "apartment_ids": ["uuid"], "entrances": [1, 2]}`.
 `urgent_enabled` is the chairman's setting `issues.urgent_enabled` (section 9); `apartment_ids`
-the caller's apartments in the building (choose one when there are several); `entrances` the
-building's entrances.
+the caller's objects in the building (choose one when there are several); `entrances` the
+building's entrances (parking spaces and garages have none).
 
 ### `POST /api/v1/issues`
 Reports an issue; `201` with the `IssueView`. The reporter follows it from the start.
@@ -2681,9 +2719,10 @@ Reports an issue; `201` with the `IssueView`. The reporter follows it from the s
 - `title` 1..120, `description` 0..2000 (optional), `place` 1..200 characters; free-text rules of
   section 4. `urgent` (default `false`) only while `issues.urgent_enabled` is on, else
   `422 VALIDATION_ERROR` (`loc` `["body", "urgent"]`).
-- `apartment_id`: the apartment the report comes from. May be omitted (or `null`) when the caller
-  has exactly one apartment; required with several (`422 VALIDATION_ERROR`); must be the caller's
-  own, else `422 INVALID_AUTHOR_APARTMENT`. The chairman and the board report without an
+- `apartment_id`: the object the report comes from. May be omitted (or `null`) when the caller
+  has exactly one object, or several of which exactly one is of kind `APARTMENT` (then that one);
+  required otherwise (`422 VALIDATION_ERROR`); must be the caller's own, else
+  `422 INVALID_AUTHOR_APARTMENT`. The chairman and the board report without an
   apartment when they send `"apartment_id": null` explicitly (or have none); then the report
   counts for no apartment.
 - `entrance`: one of `GET /issues/form` `entrances`, or `null`. Another number from 1 up:

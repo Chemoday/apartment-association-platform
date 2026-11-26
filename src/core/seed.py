@@ -64,7 +64,13 @@ from src.modules.meters.schemas import (
     ResourceType,
 )
 from src.modules.property.models import Apartment, ApartmentMembership, Building, User
-from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType
+from src.modules.property.schemas import (
+    BuildingRole,
+    DisplayMode,
+    ObjectKind,
+    ObjectRef,
+    RelationType,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -73,6 +79,11 @@ _NAMESPACE = uuid.UUID("5b0d6f3c-9a3e-4f1e-8d2a-1c7e0b6a4f12")
 SEED_LOCK_KEY = 7_202_610_001
 D = Decimal
 _PRECISION = D("0.001")
+
+
+def _apt(number: str) -> ObjectRef:
+    """A demo apartment by its number: a number names an object only with its kind."""
+    return ObjectRef(ObjectKind.APARTMENT, number)
 
 
 def demo_id(name: str) -> uuid.UUID:
@@ -231,7 +242,7 @@ class _Builder:
         self.session = session
         self.rows: list[object] = []
         self.users: dict[DemoUserKey, User] = {}
-        self.apartments: dict[str, Apartment] = {}
+        self.apartments: dict[ObjectRef, Apartment] = {}  # a number names an object with its kind
         self.periods: dict[str, ReadingPeriod] = {}
         self.last_value: dict[uuid.UUID, Decimal] = {}
         self.has_reading: set[uuid.UUID] = set()  # meters whose next reading follows another
@@ -270,7 +281,7 @@ class _Builder:
                 floor=spec.floor,
                 area_m2=D(spec.area_m2),
             )
-            self.apartments[spec.number] = apartment
+            self.apartments[_apt(spec.number)] = apartment
             self.add(apartment)
         for index, demo in enumerate(DEMO_USERS, start=1):
             user = User(
@@ -288,7 +299,7 @@ class _Builder:
                 self.add(
                     ApartmentMembership(
                         id=demo_id(f"membership:{demo.key.value}"),
-                        apartment_id=self.apartments[demo.apartment_number].id,
+                        apartment_id=self.apartments[_apt(demo.apartment_number)].id,
                         user_id=user.id,
                         relation_type=demo.relation_type,
                         can_submit_readings=True,
@@ -314,7 +325,7 @@ class _Builder:
                 meter = MeterDevice(
                     id=demo_id(f"meter:{spec.number}:{resource.value}"),
                     building_id=building.id,
-                    apartment_id=self.apartments[spec.number].id,
+                    apartment_id=self.apartments[_apt(spec.number)].id,
                     resource_type=resource,
                     serial_number=f"SN-{spec.number}-{resource.value[:1]}W",
                     location_label="Bathroom",
@@ -446,7 +457,7 @@ class _Builder:
             id=demo_id("post:bike-rack"),
             building_id=building.id,
             author_user_id=users[DemoUserKey.OWNER_14].id,
-            author_apartment_id=apartments["14"].id,
+            author_apartment_id=apartments[_apt("14")].id,
             post_type=PostType.FORUM_TOPIC,
             category=PostCategory.GENERAL,
             title="Shall we put a bike rack in the yard?",
@@ -458,7 +469,7 @@ class _Builder:
             id=demo_id("post:give-away"),
             building_id=building.id,
             author_user_id=users[DemoUserKey.OWNER_1].id,
-            author_apartment_id=apartments["1"].id,
+            author_apartment_id=apartments[_apt("1")].id,
             post_type=PostType.FORUM_TOPIC,
             category=PostCategory.MARKETPLACE,
             title="Giving away a children's bike",
@@ -477,7 +488,7 @@ class _Builder:
             body="Hello! The September cold water reading was corrected after submission. Could "
             "you double-check the meter when you submit the October reading?",
             target_scope=TargetScope.APARTMENT_LIST,
-            target_apartment_ids=[str(apartments["14"].id)],
+            target_apartment_ids=[str(apartments[_apt("14")].id)],
             created_at=now - timedelta(hours=30),
         )
         # The board's micro-forum (E8/P4): only the chairman and the board see it, by name.
@@ -509,7 +520,7 @@ class _Builder:
                     post_id=post.id,
                     building_id=building.id,
                     author_user_id=users[author].id,
-                    author_apartment_id=apartments[number].id if number else None,
+                    author_apartment_id=apartments[_apt(number)].id if number else None,
                     body=body,
                     created_at=created_at,
                 )
@@ -583,7 +594,7 @@ class _Builder:
                 id=demo_id(f"poll:clean-up:elector:{number}"),
                 poll_id=poll.id,
                 building_id=building.id,
-                apartment_id=apartments[number].id,
+                apartment_id=apartments[_apt(number)].id,
             )
             for number in lived_in
         }
@@ -773,7 +784,7 @@ class _Builder:
             id=demo_id("issue:stair-light"),
             building_id=building.id,
             reporter_user_id=owner_14.id,
-            reporter_apartment_id=apartments["14"].id,
+            reporter_apartment_id=apartments[_apt("14")].id,
             category=IssueCategory.LIGHTING,
             entrance=2,
             place="3rd floor landing",
@@ -787,7 +798,7 @@ class _Builder:
             id=demo_id("issue:door-closer"),
             building_id=building.id,
             reporter_user_id=tenant_2.id,
-            reporter_apartment_id=apartments["2"].id,
+            reporter_apartment_id=apartments[_apt("2")].id,
             category=IssueCategory.DOORS_AND_LOCKS,
             entrance=1,
             place="Front door",
@@ -864,7 +875,9 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
         totals = dict.fromkeys(_MASTER_LOSS, D("0"))
         for meter, monthly in apartment_meters:
             delta = _q(monthly * _MONTH_FACTOR[code])
-            number = next(n for n, a in builder.apartments.items() if a.id == meter.apartment_id)
+            number = next(
+                r.number for r, a in builder.apartments.items() if a.id == meter.apartment_id
+            )
             resident = resident_of.get(number)
             typo = None
             cold = meter.resource_type == ResourceType.COLD_WATER
@@ -886,7 +899,7 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
     # October is open: some residents already submitted, Apt 14 is left for the demo.
     october = builder.period(building, OPEN_PERIOD, PeriodStatus.OPEN_FOR_RESIDENTS)
     for meter, monthly in apartment_meters:
-        number = next(n for n, a in builder.apartments.items() if a.id == meter.apartment_id)
+        number = next(r.number for r, a in builder.apartments.items() if a.id == meter.apartment_id)
         hot = meter.resource_type == ResourceType.HOT_WATER
         if number == "1" or (number == "2" and not hot):
             builder.reading(meter, october, monthly, ReadingSource.RESIDENT, resident_of[number])

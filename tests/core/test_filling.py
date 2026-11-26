@@ -30,7 +30,8 @@ from src.core.filling.draft import (
     parse_meters,
     template_rows,
 )
-from src.core.filling.layout import COLUMNS, RowInput, check_layout, unguard
+from src.core.filling.layout import COLUMNS as ALL_COLUMNS
+from src.core.filling.layout import RowInput, check_layout, unguard
 from src.core.filling.template import TemplateError, TemplateRow, read_template, write_template
 from src.core.instance import InstanceRecord
 from src.core.telemetry import configure_logging
@@ -44,6 +45,9 @@ from src.plugins.registry import ApartmentDraft, DraftApartment, LeftOutPart
 from tests.factories import create_apartment, create_building
 
 D = Decimal
+
+# The columns of a template before epic E14, without `kind`: such files keep working.
+COLUMNS = ALL_COLUMNS[:10]
 
 
 def rows(*cells: dict[str, str]) -> list[RowInput]:
@@ -75,7 +79,14 @@ def test_a_layout_takes_defaults_for_every_optional_meter_column() -> None:
     ]
     assert layout.rounded_areas == 1
     assert [
-        (m.apartment, m.resource, m.unit, m.location, m.serial_number, m.initial_value)
+        (
+            m.apartment.number if m.apartment else None,
+            m.resource,
+            m.unit,
+            m.location,
+            m.serial_number,
+            m.initial_value,
+        )
         for m in layout.meters
     ] == [
         ("1", ResourceType.COLD_WATER, MeterUnit.M3, "Main", None, None),
@@ -355,7 +366,8 @@ async def test_a_counted_building_is_drafted_filled_in_and_imported(
     checked = await importing(db_session, path, dry_run=True)
     assert checked == (
         0,
-        "checked: 3 apartments, 6 apartment meters, 2 building meters, 0 areas rounded\n",
+        "checked: 3 apartments, 0 parking spaces, 0 garages, "
+        "6 apartment meters, 2 building meters, 0 areas rounded\n",
     )
     assert await db_session.scalar(select(Apartment.id)) is None  # a dry run writes nothing
 
@@ -402,7 +414,8 @@ async def test_the_register_draft_comes_from_the_stored_block(
     assert printed.splitlines()[1:] == ["left out: part 1 (NON_RESIDENTIAL)"]
     lines = path.read_text(encoding="utf-8-sig").splitlines()
     # Without --entrances the entrances stay empty: the chairman must fill them in.
-    assert lines[1:] == ["2;;1;48,46;COLD_WATER;m3;;;;", "14A;;4;33,10;COLD_WATER;m3;;;;"]
+    # The template ends with the empty kind column (epic E14): every row is an apartment.
+    assert lines[1:] == ["2;;1;48,46;COLD_WATER;m3;;;;;", "14A;;4;33,10;COLD_WATER;m3;;;;;"]
 
 
 async def test_without_a_block_the_register_needs_a_building_code(
@@ -522,7 +535,8 @@ async def test_the_template_can_go_through_standard_output_and_input(
     )  # fmt: skip
     assert (code, printed.getvalue()) == (
         0,
-        "checked: 1 apartments, 1 apartment meters, 0 building meters, 0 areas rounded\n",
+        "checked: 1 apartments, 0 parking spaces, 0 garages, "
+        "1 apartment meters, 0 building meters, 0 areas rounded\n",
     )
 
 
@@ -724,7 +738,8 @@ async def test_the_import_warns_where_the_file_differs_from_the_register(
         "warning: the register lists apartments the file does not have: 3",
         "warning: the file has apartments the register does not list: K1",
         "warning: apartment 1: area 4536.00 m2, the register says 45.36 m2",
-        "checked: 3 apartments, 3 apartment meters, 0 building meters, 0 areas rounded",
+        "checked: 3 apartments, 0 parking spaces, 0 garages, "
+        "3 apartment meters, 0 building meters, 0 areas rounded",
     ]
 
 

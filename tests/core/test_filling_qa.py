@@ -27,7 +27,8 @@ from src.core.filling.__main__ import (
     import_building,
     main,
 )
-from src.core.filling.layout import COLUMNS, RowInput, check_layout
+from src.core.filling.layout import COLUMNS as ALL_COLUMNS
+from src.core.filling.layout import RowInput, check_layout
 from src.core.filling.service import filling_target, lay_out
 from src.core.filling.template import (
     MAX_FILE_BYTES,
@@ -57,6 +58,8 @@ from tests.db_utils import scratch_database
 from tests.factories import create_building, create_meter
 
 D = Decimal
+# The columns of a template before epic E14, without `kind`: such files keep working.
+COLUMNS = ALL_COLUMNS[:10]
 HEADER = ";".join(COLUMNS)
 FILLED = pytest.mark.usefixtures("real_installation")
 
@@ -389,7 +392,7 @@ def test_ten_thousand_rows_are_read_and_one_more_is_refused() -> None:
             [
                 "error: row 1: the header needs the columns apartment, entrance, area_m2, "
                 "resource and may have floor, unit, serial_number, location, initial_value, "
-                "max_monthly_delta"
+                "max_monthly_delta, kind"
             ],
         ),
         (
@@ -825,7 +828,10 @@ async def test_a_dry_run_then_the_same_file_imports_the_same_counts_and_only_onc
         "2;2;3;50;;;;;;",
         ";;;;COLD_WATER;;;Basement;1000;",
     )
-    counts = "2 apartments, 2 apartment meters, 1 building meters, 1 areas rounded"
+    counts = (
+        "2 apartments, 0 parking spaces, 0 garages, "
+        "2 apartment meters, 1 building meters, 1 areas rounded"
+    )
 
     assert await import_bytes(db_session, tmp_path, data, dry_run=True) == (
         0,
@@ -935,7 +941,8 @@ async def test_ten_thousand_rows_are_imported_in_one_go(
 
     assert (code, printed) == (
         0,
-        "imported: 1250 apartments, 10000 apartment meters, 0 building meters, 0 areas rounded\n",
+        "imported: 1250 apartments, 0 parking spaces, 0 garages, "
+        "10000 apartment meters, 0 building meters, 0 areas rounded\n",
     )
     assert await db_session.scalar(select(func.count()).select_from(MeterDevice)) == MAX_ROWS
     assert elapsed < 60, f"10,000 rows took {elapsed:.1f} s"
@@ -1214,16 +1221,17 @@ async def test_an_unedited_register_template_imports_as_it_is(
     assert code == 0, printed
     lines = path.read_bytes().decode("utf-8-sig").split("\r\n")
     assert lines[1:4] == [
-        "1;1;'-1;48,45;COLD_WATER;m3;;;;",
-        "2;1;1;40,40;COLD_WATER;m3;;;;",
-        "10;1;2;33,00;COLD_WATER;m3;;;;",
+        "1;1;'-1;48,45;COLD_WATER;m3;;;;;",
+        "2;1;1;40,40;COLD_WATER;m3;;;;;",
+        "10;1;2;33,00;COLD_WATER;m3;;;;;",
     ]
 
     code, printed = await importing(db_session, path)
 
     assert (code, printed) == (
         0,
-        "imported: 5 apartments, 5 apartment meters, 1 building meters, 0 areas rounded\n",
+        "imported: 5 apartments, 0 parking spaces, 0 garages, "
+        "5 apartment meters, 1 building meters, 0 areas rounded\n",
     )
     stored = {
         a.number: (a.entrance, a.floor, a.area_m2)
@@ -1281,7 +1289,8 @@ async def test_two_meters_of_a_type_in_the_template_get_locations_1_and_2(
     assert ";COLD_WATER;m3;;1;" in text and ";COLD_WATER;m3;;2;" in text
     assert (code, printed) == (
         0,
-        "checked: 1 apartments, 2 apartment meters, 0 building meters, 0 areas rounded\n",
+        "checked: 1 apartments, 0 parking spaces, 0 garages, "
+        "2 apartment meters, 0 building meters, 0 areas rounded\n",
     )
 
 
@@ -1329,8 +1338,8 @@ async def test_the_largest_counted_template_and_its_options(db_session: AsyncSes
     )
     lines = text.lstrip("\ufeff").split("\r\n")[1:-1]
     assert len(lines) == 1000
-    assert lines[0] == "1;1;;;ELECTRICITY;kWh;;;;"
-    assert lines[-1] == "1000;2;;;ELECTRICITY;kWh;;;;"
+    assert lines[0] == "1;1;;;ELECTRICITY;kWh;;;;;"
+    assert lines[-1] == "1000;2;;;ELECTRICITY;kWh;;;;;"
     assert all(not line.startswith(";") for line in lines)  # --no-building-meters
 
 

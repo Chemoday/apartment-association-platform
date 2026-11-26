@@ -62,11 +62,19 @@ from tests.smtp_server import SmtpServer
 
 SETTINGS = "/api/v1/settings"
 NOTICE_KEY = "auth.privacy_notice_url"
-CODE_FIELDS = {"code_id", "apartment_id", "apartment_number", "created_at", "expires_at"}
+CODE_FIELDS = {
+    "code_id",
+    "apartment_id",
+    "apartment_number",
+    "apartment_kind",
+    "created_at",
+    "expires_at",
+}
 REQUEST_FIELDS = {
     "request_id",
     "apartment_id",
     "apartment_number",
+    "apartment_kind",
     "full_name",
     "phone",
     "email",
@@ -76,6 +84,7 @@ REQUEST_FIELDS = {
 DECISION_FIELDS = {
     "apartment_id",
     "apartment_number",
+    "apartment_kind",
     "outcome",
     "decided_by_user_id",
     "decided_at",
@@ -874,7 +883,8 @@ async def test_every_chairman_is_notified_once_and_the_board_is_not(
     pairs = [(d.user_id, d.channel) for d in rows]
     assert len(pairs) == len(set(pairs))  # once per channel
     assert {d.channel for d in rows if d.user_id == other.id} >= {"in_app", "email"}
-    assert all(d.params == {"apartment_number": "21"} for d in rows)
+    params = {"apartment_number": "21", "apartment_kind": "APARTMENT"}
+    assert all(d.params == params for d in rows)
     assert board.id not in {d.user_id for d in rows}
 
 

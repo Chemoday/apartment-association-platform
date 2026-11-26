@@ -90,3 +90,54 @@ def test_the_shared_targeting_rule() -> None:
     assert not matches(TargetScope.ENTRANCE, None, set())
     assert matches(TargetScope.APARTMENT_LIST, None, {APARTMENT})
     assert not matches(TargetScope.APARTMENT_LIST, None, {uuid.uuid4()})
+
+
+def test_the_targeting_clause_takes_objects_without_an_entrance() -> None:
+    from datetime import UTC, datetime
+
+    from sqlalchemy import column
+    from sqlalchemy.dialects import postgresql
+
+    from src.modules.property.schemas import (
+        ApartmentMembershipDTO,
+        BuildingRole,
+        CurrentUserDTO,
+        DisplayMode,
+        RelationType,
+    )
+    from src.modules.property.service import PropertyService
+
+    def membership(entrance: int | None) -> ApartmentMembershipDTO:
+        return ApartmentMembershipDTO(
+            membership_id=uuid.uuid4(),
+            apartment_id=uuid.uuid4(),
+            apartment_number="1",
+            apartment_kind=ObjectKind.APARTMENT if entrance else ObjectKind.PARKING,
+            entrance=entrance,
+            floor=None,
+            relation_type=RelationType.OWNER,
+            can_submit_readings=True,
+            can_view_bills=True,
+            can_vote=True,
+            privacy_display_mode=DisplayMode.APARTMENT_ONLY,
+            since=datetime.now(UTC),
+        )
+
+    user = CurrentUserDTO(
+        id=uuid.uuid4(),
+        building_id=uuid.uuid4(),
+        building_role=BuildingRole.USER,
+        privacy_display_mode=DisplayMode.APARTMENT_ONLY,
+        memberships=(membership(None), membership(2)),
+    )
+    clause = PropertyService.targeting_clause(
+        user,
+        scope=column("target_scope"),
+        entrance=column("target_entrance"),
+        apartment_ids=column("target_apartment_ids", postgresql.JSONB),
+        member_only=True,
+    )
+
+    compiled = clause.compile(dialect=postgresql.dialect())
+    assert "target_entrance IN" in str(compiled)
+    assert [2] in compiled.params.values()  # the entrance of the parking space is left out

@@ -16,7 +16,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.filling.layout import COLUMNS
+from src.core.filling.layout import COLUMNS as ALL_COLUMNS
 from src.modules.meters.models import MeterDevice, MeterReading, ReadingPeriod
 from src.modules.meters.schemas import PeriodStatus, ResourceType
 from src.modules.property.models import Apartment, Building, User
@@ -30,9 +30,10 @@ API = "/api/v1/meters"
 COLD, HOT = ResourceType.COLD_WATER, ResourceType.HOT_WATER
 PRIVATE = ("Kadri Mets", "kadri.mets@example.ee", "+372 5000 0001", "Jaan Tamm", "jaan@example.ee")
 
+COLUMNS = ALL_COLUMNS[:10]
 FILLED_BUILDING = "\r\n".join(
     [
-        ";".join(COLUMNS),
+        ";".join(COLUMNS),  # a template before epic E14, without the kind column
         "1;1;2;48,445;COLD_WATER;;;Kitchen;;",
         "1;1;2;48,445;HOT_WATER;;;;;",
         "2;2;3;50,10;COLD_WATER;;;;0;",

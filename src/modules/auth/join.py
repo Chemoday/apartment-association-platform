@@ -51,7 +51,7 @@ from src.modules.auth.schemas import (
     PrivacyNotice,
 )
 from src.modules.auth.settings import PRIVACY_NOTICE_URL
-from src.modules.property.schemas import BuildingRole, CurrentUserDTO, Locale
+from src.modules.property.schemas import BuildingRole, CurrentUserDTO, Locale, ObjectKind, ObjectRef
 from src.modules.property.service import PropertyService
 
 logger = structlog.get_logger(__name__)
@@ -70,6 +70,8 @@ _NOTHING_PENDING = frozenset(
     }
 )
 _DECISION_READERS = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
+# Objects are never deleted; a row naming an unknown one shows an empty apartment number.
+_GONE = ObjectRef(ObjectKind.APARTMENT, "")
 
 
 def _now() -> datetime:
@@ -113,8 +115,12 @@ class JoinService:
         if caller.building_role != BuildingRole.CHAIRMAN:
             raise forbidden()
 
-    async def _numbers(self, building_id: uuid.UUID) -> dict[uuid.UUID, str]:
-        return {a.id: a.number for a in await self.properties.list_apartments(building_id)}
+    async def _objects(self, building_id: uuid.UUID) -> dict[uuid.UUID, ObjectRef]:
+        """Every object of the building by id, with its kind (numbers repeat across kinds)."""
+        return {
+            a.id: ObjectRef(a.kind, a.number)
+            for a in await self.properties.list_apartments(building_id)
+        }
 
     # --- The chairman: codes ------------------------------------------------------------------
 
@@ -124,12 +130,12 @@ class JoinService:
         self._chairman(caller)
         now = _now()
         await self.properties.lock_people(caller.building_id)
-        numbers = await self._numbers(caller.building_id)
+        objects = await self._objects(caller.building_id)
         if apartment_ids is None:
             items = await ConnectionService(self.session).items(caller.building_id)
             chosen = [item.apartment_id for item in items if item.status in _NOTHING_PENDING]
         else:
-            if len(set(apartment_ids)) != len(apartment_ids) or len(apartment_ids) > len(numbers):
+            if len(set(apartment_ids)) != len(apartment_ids) or len(apartment_ids) > len(objects):
                 raise DomainError(
                     status_code=422,
                     error_code="VALIDATION_ERROR",
@@ -144,7 +150,7 @@ class JoinService:
                         ]
                     },
                 )
-            if any(apartment_id not in numbers for apartment_id in apartment_ids):
+            if any(apartment_id not in objects for apartment_id in apartment_ids):
                 raise apartment_not_found()
             chosen = apartment_ids
         expires_at = now + timedelta(days=self.settings.AUTH_JOIN_CODE_DAYS)
@@ -165,7 +171,8 @@ class JoinService:
                 IssuedJoinCode(
                     code_id=row.id,
                     apartment_id=apartment_id,
-                    apartment_number=numbers[apartment_id],
+                    apartment_number=objects[apartment_id].number,
+                    apartment_kind=objects[apartment_id].kind,
                     join_code=format_join_code(code),
                     expires_at=expires_at,
                 )
@@ -179,7 +186,7 @@ class JoinService:
 
     async def codes(self, caller: CurrentUserDTO) -> list[JoinCodeView]:
         self._chairman(caller)
-        numbers = await self._numbers(caller.building_id)
+        objects = await self._objects(caller.building_id)
         rows = await self.session.scalars(
             select(AuthJoinCode)
             .where(AuthJoinCode.building_id == caller.building_id, *self._usable(_now()))
@@ -189,7 +196,8 @@ class JoinService:
             JoinCodeView(
                 code_id=row.id,
                 apartment_id=row.apartment_id,
-                apartment_number=numbers.get(row.apartment_id, ""),
+                apartment_number=objects.get(row.apartment_id, _GONE).number,
+                apartment_kind=objects.get(row.apartment_id, _GONE).kind,
                 created_at=row.created_at,
                 expires_at=row.expires_at,
             )
@@ -284,10 +292,11 @@ class JoinService:
         if row is None:
             await self.session.commit()  # the failed attempt counts
             raise invalid_join_code()
-        numbers = await self._numbers(row.building_id)
+        objects = await self._objects(row.building_id)
         return JoinTarget(
             association_name=await self.properties.building_name(row.building_id) or "",
-            apartment_number=numbers.get(row.apartment_id, ""),
+            apartment_number=objects.get(row.apartment_id, _GONE).number,
+            apartment_kind=objects.get(row.apartment_id, _GONE).kind,
             country_code=await self.properties.building_country(row.building_id),
         )
 
@@ -322,14 +331,15 @@ class JoinService:
         )
         self.session.add(request)
         await self.session.flush()
-        numbers = await self._numbers(building_id)
+        objects = await self._objects(building_id)
         if self.outbox is not None:
             self.outbox.add(
                 JoinRequestSubmitted(
                     building_id=building_id,
                     request_id=request.id,
                     apartment_id=apartment_id,
-                    apartment_number=numbers.get(apartment_id, ""),
+                    apartment_number=objects.get(apartment_id, _GONE).number,
+                    apartment_kind=objects.get(apartment_id, _GONE).kind,
                 )
             )
         logger.info(
@@ -340,7 +350,7 @@ class JoinService:
         waiting = await self.session.scalar(
             select(func.count(AuthJoinRequest.id)).where(AuthJoinRequest.building_id == building_id)
         )
-        if int(waiting or 0) > len(numbers):
+        if int(waiting or 0) > len(objects):
             logger.warning(
                 "auth_join_requests_many", building_id=str(building_id), waiting=int(waiting or 0)
             )
@@ -349,7 +359,7 @@ class JoinService:
 
     async def requests(self, caller: CurrentUserDTO) -> list[JoinRequestView]:
         self._chairman(caller)
-        numbers = await self._numbers(caller.building_id)
+        objects = await self._objects(caller.building_id)
         rows = await self.session.scalars(
             select(AuthJoinRequest)
             .where(AuthJoinRequest.building_id == caller.building_id)
@@ -359,7 +369,8 @@ class JoinService:
             JoinRequestView(
                 request_id=row.id,
                 apartment_id=row.apartment_id,
-                apartment_number=numbers.get(row.apartment_id, ""),
+                apartment_number=objects.get(row.apartment_id, _GONE).number,
+                apartment_kind=objects.get(row.apartment_id, _GONE).kind,
                 full_name=row.full_name,
                 phone=row.phone,
                 email=row.email,
@@ -424,7 +435,7 @@ class JoinService:
     ) -> list[JoinDecisionView]:
         if caller.building_role not in _DECISION_READERS:
             raise forbidden()
-        numbers = await self._numbers(caller.building_id)
+        objects = await self._objects(caller.building_id)
         rows = await self.session.scalars(
             select(AuthJoinDecision)
             .where(AuthJoinDecision.building_id == caller.building_id)
@@ -435,7 +446,12 @@ class JoinService:
         return [
             JoinDecisionView(
                 apartment_id=row.apartment_id,
-                apartment_number=numbers.get(row.apartment_id) if row.apartment_id else None,
+                apartment_number=objects.get(row.apartment_id, _GONE).number
+                if row.apartment_id
+                else None,
+                apartment_kind=objects.get(row.apartment_id, _GONE).kind
+                if row.apartment_id
+                else None,
                 outcome=row.outcome,
                 decided_by_user_id=row.decided_by_user_id,
                 decided_at=row.decided_at,

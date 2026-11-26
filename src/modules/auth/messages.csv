@@ -28,7 +28,11 @@ Kutse vastuvõtmiseks avage see link. Link kehtib 7 päeva alates kutse saatmise
 
 Kui te seda kutset ei oodanud, eirake seda kirja: ilma lingita ei juhtu midagi."
 invitation.target.owner,as the owner of apartment {apartment},как владельца квартиры {apartment},korteri {apartment} omanikuks
+invitation.target.owner.PARKING,as the owner of parking space {apartment},как владельца парковочного места {apartment},parkimiskoha {apartment} omanikuks
+invitation.target.owner.GARAGE,as the owner of garage {apartment},как владельца гаража {apartment},garaaži {apartment} omanikuks
 invitation.target.tenant,as a tenant of apartment {apartment},как арендатора квартиры {apartment},korteri {apartment} üürnikuks
+invitation.target.tenant.PARKING,as a tenant of parking space {apartment},как арендатора парковочного места {apartment},parkimiskoha {apartment} üürnikuks
+invitation.target.tenant.GARAGE,as a tenant of garage {apartment},как арендатора гаража {apartment},garaaži {apartment} üürnikuks
 invitation.target.board,as a board member,в правление,juhatuse liikmeks
 invitation.target.accountant,as the accountant,как бухгалтера,raamatupidajaks
 invitation.target.chairman,as the chairman,как председателя,esimeheks

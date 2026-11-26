@@ -10,6 +10,7 @@ from sqlalchemy import (
     ColumnElement,
     Text,
     and_,
+    case,
     false,
     func,
     literal,
@@ -107,10 +108,11 @@ UNKNOWN_AUTHOR_BADGE = AuthorBadgeDTO(display_label="Unknown author", role_badge
 
 type AuthorKey = tuple[uuid.UUID, uuid.UUID | None]
 
-# The SQL form of `object_sort_key` (kept equal to it by a test): entrance (none last), then the
-# number in natural order by code point, "2" < "10" < "14" < "14A" < "14a", whatever the
-# database's collation.
+# The SQL form of `object_sort_key` (kept equal to it by a test): the kind (apartments, parking
+# spaces, garages), entrance (none last), then the number in natural order by code point,
+# "2" < "10" < "14" < "14A" < "14a", whatever the database's collation.
 _APARTMENT_ORDER = (
+    case(*((Apartment.kind == kind, index) for index, kind in enumerate(ObjectKind))),
     Apartment.entrance.asc().nulls_last(),
     func.length(Apartment.number),
     Apartment.number.collate("C"),
@@ -226,7 +228,7 @@ class PropertyService:
         full_name = await self._full_name_of(current_user.id)
         badge = format_author_badge(
             full_name=full_name,
-            apt_number=apartment.number if apartment else None,
+            apartment=ObjectRef(apartment.kind, apartment.number) if apartment else None,
             relation_type=membership.relation_type,
             building_role=current_user.building_role,
             display_mode=mode,
@@ -255,7 +257,7 @@ class PropertyService:
         the caller adds them by role (`users_with_roles`).
         """
         rows = await self.session.execute(
-            select(User.id, User.locale, Apartment.id, Apartment.entrance)
+            select(User.id, User.locale, Apartment.id, Apartment.kind, Apartment.entrance)
             .join(ApartmentMembership, ApartmentMembership.user_id == User.id)
             .join(Apartment, Apartment.id == ApartmentMembership.apartment_id)
             .where(
@@ -266,13 +268,9 @@ class PropertyService:
             )
         )
         recipients: dict[uuid.UUID, RecipientDTO] = {}
-        for user_id, locale, apartment_id, apartment_entrance in rows.all():
-            # Objects carry no kind yet: every object is an apartment.
+        for user_id, locale, apartment_id, kind, apartment_entrance in rows.all():
             if user_id not in recipients and apartment_in_target(
-                target,
-                apartment_id=apartment_id,
-                kind=ObjectKind.APARTMENT,
-                entrance=apartment_entrance,
+                target, apartment_id=apartment_id, kind=kind, entrance=apartment_entrance
             ):
                 recipients[user_id] = RecipientDTO(user_id=user_id, locale=locale)
         return sorted(recipients.values(), key=lambda r: str(r.user_id))
@@ -286,7 +284,7 @@ class PropertyService:
         The shared targeting rule decides which apartments are targeted, as for alerts.
         """
         statement = (
-            select(User.id, Apartment.id, Apartment.entrance)
+            select(User.id, Apartment.id, Apartment.kind, Apartment.entrance)
             .join(ApartmentMembership, ApartmentMembership.user_id == User.id)
             .join(Apartment, Apartment.id == ApartmentMembership.apartment_id)
             .where(
@@ -300,13 +298,11 @@ class PropertyService:
             statement = statement.where(ApartmentMembership.relation_type == RelationType.OWNER)
         electors = {
             (user_id, apartment_id)
-            for user_id, apartment_id, apartment_entrance in (await self.session.execute(statement))
-            # Objects carry no kind yet: every object is an apartment.
+            for user_id, apartment_id, kind, apartment_entrance in (
+                await self.session.execute(statement)
+            )
             if apartment_in_target(
-                target,
-                apartment_id=apartment_id,
-                kind=ObjectKind.APARTMENT,
-                entrance=apartment_entrance,
+                target, apartment_id=apartment_id, kind=kind, entrance=apartment_entrance
             )
         }
         return [
@@ -429,15 +425,27 @@ class PropertyService:
 
     async def get_building(self, current_user: CurrentUserDTO) -> BuildingResponse:
         building = await self.session.get_one(Building, current_user.building_id)
+        # The counts and the heated area are of the apartments only (epic E14).
         apartment_count, entrance_count, area = (
             await self.session.execute(
                 select(
                     func.count(Apartment.id),
                     func.count(Apartment.entrance.distinct()),
                     func.coalesce(func.sum(Apartment.area_m2), 0),
-                ).where(Apartment.building_id == building.id)
+                ).where(
+                    Apartment.building_id == building.id, Apartment.kind == ObjectKind.APARTMENT
+                )
             )
         ).one()
+        per_kind = dict(
+            (
+                await self.session.execute(
+                    select(Apartment.kind, func.count(Apartment.id))
+                    .where(Apartment.building_id == building.id)
+                    .group_by(Apartment.kind)
+                )
+            ).all()
+        )
         return BuildingResponse(
             building_id=building.id,
             name=building.name,
@@ -448,6 +456,7 @@ class PropertyService:
             apartment_count=apartment_count,
             entrance_count=entrance_count,
             heated_area_m2=Decimal(area),
+            object_counts={kind: per_kind.get(kind, 0) for kind in ObjectKind},
             registry_facts=load_block(
                 await self.session.scalar(
                     select(BuildingRegistryRecord.accepted).where(
@@ -537,7 +546,7 @@ class PropertyService:
             .order_by(*_APARTMENT_ORDER)
         )
         return [
-            ApartmentDTO(id=a.id, number=a.number, entrance=a.entrance, floor=a.floor)
+            ApartmentDTO(id=a.id, kind=a.kind, number=a.number, entrance=a.entrance, floor=a.floor)
             for a in apartments
         ]
 
@@ -582,7 +591,7 @@ class PropertyService:
         if member_only and not user.memberships:
             return false()
         targeted: list[ColumnElement[bool]] = [scope == TargetScope.ALL_BUILDING]
-        if entrances := sorted({membership.entrance for membership in user.memberships}):
+        if entrances := sorted({m.entrance for m in user.memberships if m.entrance is not None}):
             targeted.append(and_(scope == TargetScope.ENTRANCE, entrance.in_(entrances)))
         if ids := sorted(str(apartment_id) for apartment_id in user.apartment_ids):
             targeted.append(
@@ -595,9 +604,12 @@ class PropertyService:
         return or_(*targeted)
 
     async def apartment_areas(self, building_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
-        """The recorded area (m2) of each apartment of a building, for consumption per m2."""
+        """The recorded area (m2) of each object of a building that has one, for consumption per
+        m2 (a parking space may have none)."""
         rows = await self.session.execute(
-            select(Apartment.id, Apartment.area_m2).where(Apartment.building_id == building_id)
+            select(Apartment.id, Apartment.area_m2).where(
+                Apartment.building_id == building_id, Apartment.area_m2.is_not(None)
+            )
         )
         return {apartment_id: area for apartment_id, area in rows}
 
@@ -651,7 +663,7 @@ class PropertyService:
         }
         membership_rows = (
             await self.session.execute(
-                select(ApartmentMembership, Apartment.number)
+                select(ApartmentMembership, Apartment.kind, Apartment.number)
                 .join(Apartment, Apartment.id == ApartmentMembership.apartment_id)
                 .join(User, User.id == ApartmentMembership.user_id)
                 .where(
@@ -661,10 +673,13 @@ class PropertyService:
                 )
             )
         ).all()
-        memberships: dict[tuple[uuid.UUID, uuid.UUID], tuple[ApartmentMembership, str]] = {}
+        memberships: dict[tuple[uuid.UUID, uuid.UUID], tuple[ApartmentMembership, ObjectRef]] = {}
         modes_by_user: dict[uuid.UUID, list[DisplayMode]] = {}
-        for membership, number in membership_rows:
-            memberships[(membership.user_id, membership.apartment_id)] = (membership, number)
+        for membership, kind, number in membership_rows:
+            memberships[(membership.user_id, membership.apartment_id)] = (
+                membership,
+                ObjectRef(kind, number),
+            )
             modes_by_user.setdefault(membership.user_id, []).append(membership.privacy_display_mode)
 
         orphan_apartment_ids = {
@@ -672,17 +687,17 @@ class PropertyService:
             for user_id, apartment_id in keys
             if apartment_id is not None and (user_id, apartment_id) not in memberships
         }
-        orphan_numbers: dict[uuid.UUID, str] = {}
+        # An object the author no longer holds keeps its kind in the badge.
+        orphan_objects: dict[uuid.UUID, ObjectRef] = {}
         if orphan_apartment_ids:
-            orphan_numbers = dict(
-                (
-                    await self.session.execute(
-                        select(Apartment.id, Apartment.number).where(
-                            Apartment.id.in_(orphan_apartment_ids)
-                        )
+            orphan_objects = {
+                apartment_id: ObjectRef(kind, number)
+                for apartment_id, kind, number in await self.session.execute(
+                    select(Apartment.id, Apartment.kind, Apartment.number).where(
+                        Apartment.id.in_(orphan_apartment_ids)
                     )
-                ).all()
-            )
+                )
+            }
 
         result: dict[AuthorKey, AuthorBadgeDTO] = {}
         for user_id, apartment_id in keys:
@@ -693,16 +708,16 @@ class PropertyService:
             if apartment_id is None:
                 badge = format_author_badge(
                     full_name=user.full_name,
-                    apt_number=None,
+                    apartment=None,
                     relation_type=None,
                     building_role=user.building_role,
                     display_mode=most_private_display_mode(modes_by_user.get(user_id, ())),
                 )
             elif (user_id, apartment_id) in memberships:
-                membership, number = memberships[(user_id, apartment_id)]
+                membership, place = memberships[(user_id, apartment_id)]
                 badge = format_author_badge(
                     full_name=user.full_name,
-                    apt_number=number,
+                    apartment=place,
                     relation_type=membership.relation_type,
                     building_role=user.building_role,
                     display_mode=membership.privacy_display_mode,
@@ -710,7 +725,7 @@ class PropertyService:
             else:
                 badge = format_author_badge(
                     full_name=user.full_name,
-                    apt_number=orphan_numbers.get(apartment_id),
+                    apartment=orphan_objects.get(apartment_id),
                     relation_type=None,
                     building_role=user.building_role,
                     display_mode=DisplayMode.APARTMENT_ONLY,
@@ -764,6 +779,7 @@ class PropertyService:
         rows = [
             Apartment(
                 building_id=building_id,
+                kind=apartment.kind,
                 number=apartment.number,
                 entrance=apartment.entrance,
                 floor=apartment.floor,
@@ -773,8 +789,7 @@ class PropertyService:
         ]
         self.session.add_all(rows)
         await self.session.flush()
-        # Objects carry no kind yet: every object is an apartment.
-        return {ObjectRef(ObjectKind.APARTMENT, row.number): row.id for row in rows}
+        return {ObjectRef(row.kind, row.number): row.id for row in rows}
 
     async def building_ids(self) -> list[uuid.UUID]:
         """Every building of the installation (one per installation today; the operator
@@ -852,7 +867,16 @@ class PropertyService:
         privacy_display_mode: DisplayMode,
     ) -> uuid.UUID | None:
         """Create the membership, or reopen an ended one (a new start, the given relation and
-        mode). Returns its id, or None without any change when an active one already exists."""
+        mode). Returns its id, or None without any change when an active one already exists.
+
+        A RESIDENT (a family member) lives in an apartment: another kind refuses it (ValueError;
+        nothing invites a RESIDENT today, so this only guards the rule)."""
+        if relation_type == RelationType.RESIDENT:
+            kind = await self.session.scalar(
+                select(Apartment.kind).where(Apartment.id == apartment_id)
+            )
+            if kind is not None and kind != ObjectKind.APARTMENT:
+                raise ValueError(f"a RESIDENT membership needs an apartment, not a {kind}")
         await self._lock_person(user_id)
         existing = await self.session.scalar(
             select(ApartmentMembership)
@@ -1000,11 +1024,11 @@ class PropertyService:
     ) -> ApartmentRefDTO | None:
         """The object of the building with this kind and number, or None (a number alone names
         no object: it repeats across kinds)."""
-        if kind != ObjectKind.APARTMENT:
-            return None  # objects carry no kind yet: every object is an apartment
         apartment = await self.session.scalar(
             select(Apartment).where(
-                Apartment.building_id == building_id, Apartment.number == number
+                Apartment.building_id == building_id,
+                Apartment.kind == kind,
+                Apartment.number == number,
             )
         )
         return self._apartment_ref(apartment)
@@ -1059,6 +1083,7 @@ class PropertyService:
         rows = await self.session.execute(
             select(
                 Apartment.id,
+                Apartment.kind,
                 Apartment.number,
                 Apartment.entrance,
                 Apartment.on_paper,
@@ -1080,13 +1105,14 @@ class PropertyService:
         return [
             ConnectionRowDTO(
                 apartment_id=apartment_id,
+                kind=kind,
                 number=number,
                 entrance=entrance,
                 on_paper=on_paper,
                 owners=owners,
                 tenants=tenants,
             )
-            for apartment_id, number, entrance, on_paper, owners, tenants in rows.all()
+            for apartment_id, kind, number, entrance, on_paper, owners, tenants in rows.all()
         ]
 
     async def set_on_paper(
@@ -1115,7 +1141,13 @@ class PropertyService:
         """The active members of one apartment, by relation, start and id, under the badge
         rules of that apartment."""
         rows = await self.session.execute(
-            select(ApartmentMembership, Apartment.number, User.full_name, User.building_role)
+            select(
+                ApartmentMembership,
+                Apartment.kind,
+                Apartment.number,
+                User.full_name,
+                User.building_role,
+            )
             .join(Apartment, Apartment.id == ApartmentMembership.apartment_id)
             .join(User, User.id == ApartmentMembership.user_id)
             .where(
@@ -1132,14 +1164,14 @@ class PropertyService:
                 relation_type=membership.relation_type,
                 display_label=format_author_badge(
                     full_name=full_name,
-                    apt_number=number,
+                    apartment=ObjectRef(kind, number),
                     relation_type=membership.relation_type,
                     building_role=role,
                     display_mode=membership.privacy_display_mode,
                 ).display_label,
                 since=membership.started_at,
             )
-            for membership, number, full_name, role in rows.all()
+            for membership, kind, number, full_name, role in rows.all()
         ]
         return sorted(
             residents,
@@ -1170,7 +1202,7 @@ class PropertyService:
         def membership_key(item: tuple[ApartmentMembership, Apartment]) -> tuple:
             membership, apartment = item
             return (
-                *object_sort_key(ObjectKind.APARTMENT, apartment.entrance, apartment.number),
+                *object_sort_key(apartment.kind, apartment.entrance, apartment.number),
                 _RELATION_ORDER.index(membership.relation_type),
                 membership.started_at,
                 str(membership.user_id),
@@ -1184,7 +1216,7 @@ class PropertyService:
                 building_role=user.building_role,
                 display_label=format_author_badge(
                     full_name=user.full_name,
-                    apt_number=None,
+                    apartment=None,
                     relation_type=None,
                     building_role=user.building_role,
                     display_mode=most_private_display_mode(
@@ -1196,10 +1228,11 @@ class PropertyService:
                         membership_id=m.id,
                         apartment_id=a.id,
                         apartment_number=a.number,
+                        apartment_kind=a.kind,
                         relation_type=m.relation_type,
                         display_label=format_author_badge(
                             full_name=user.full_name,
-                            apt_number=a.number,
+                            apartment=ObjectRef(a.kind, a.number),
                             relation_type=m.relation_type,
                             building_role=user.building_role,
                             display_mode=m.privacy_display_mode,
@@ -1325,7 +1358,10 @@ class PropertyService:
         if apartment is None:
             return None
         return ApartmentRefDTO(
-            apartment_id=apartment.id, building_id=apartment.building_id, number=apartment.number
+            apartment_id=apartment.id,
+            building_id=apartment.building_id,
+            kind=apartment.kind,
+            number=apartment.number,
         )
 
     # --- Internals ------------------------------------------------------------------------------
@@ -1355,6 +1391,7 @@ class PropertyService:
             membership_id=membership.id,
             apartment_id=apartment.id,
             apartment_number=apartment.number,
+            apartment_kind=apartment.kind,
             entrance=apartment.entrance,
             floor=apartment.floor,
             relation_type=membership.relation_type,
@@ -1375,7 +1412,7 @@ class PropertyService:
     ) -> AuthorBadgeDTO:
         return format_author_badge(
             full_name=full_name,
-            apt_number=membership.apartment_number,
+            apartment=ObjectRef(membership.apartment_kind, membership.apartment_number),
             relation_type=membership.relation_type,
             building_role=building_role,
             display_mode=membership.privacy_display_mode,
@@ -1389,6 +1426,7 @@ def _apartment_summary(apartment: Apartment, residents: list[CardResident]) -> A
     return ApartmentSummary(
         apartment_id=apartment.id,
         apartment_number=apartment.number,
+        apartment_kind=apartment.kind,
         entrance=apartment.entrance,
         floor=apartment.floor,
         area_m2=apartment.area_m2,

@@ -130,9 +130,11 @@ class ApartmentDTO(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: uuid.UUID
+    kind: ObjectKind
     number: str
-    entrance: int
-    floor: int
+    # None for an object without an entrance or a floor (a parking space, a garage).
+    entrance: int | None
+    floor: int | None
 
 
 class NewApartment(BaseModel):
@@ -140,10 +142,11 @@ class NewApartment(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    kind: ObjectKind = ObjectKind.APARTMENT
     number: str
-    entrance: int
-    floor: int
-    area_m2: Decimal
+    entrance: int | None
+    floor: int | None
+    area_m2: Decimal | None
 
 
 class ApartmentMembershipDTO(BaseModel):
@@ -152,8 +155,9 @@ class ApartmentMembershipDTO(BaseModel):
     membership_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
-    entrance: int
-    floor: int
+    apartment_kind: ObjectKind
+    entrance: int | None
+    floor: int | None
     relation_type: RelationType
     can_submit_readings: bool
     can_view_bills: bool
@@ -250,11 +254,10 @@ def first_object_in(user: CurrentUserDTO, target: TargetDTO | None) -> uuid.UUID
     none: the author's first membership (in list order) inside `target`, or the first of all
     without one; None without such a membership. Never an error."""
     for membership in user.memberships:
-        # Memberships carry no kind yet: every object is an apartment.
         if target is None or apartment_in_target(
             target,
             apartment_id=membership.apartment_id,
-            kind=ObjectKind.APARTMENT,
+            kind=membership.apartment_kind,
             entrance=membership.entrance,
         ):
             return membership.apartment_id
@@ -269,17 +272,24 @@ class ObjectNotChosen(ValueError):
     """No object was named and there are several to choose from."""
 
 
-def chosen_object(candidates: Sequence[uuid.UUID], requested: uuid.UUID | None) -> uuid.UUID | None:
+def chosen_object(
+    candidates: Sequence[tuple[uuid.UUID, ObjectKind]], requested: uuid.UUID | None
+) -> uuid.UUID | None:
     """The object an issue report or a ballot is made from: the requested one, which must be a
-    candidate (else ObjectNotHeld); without one the only candidate, None without candidates, and
-    ObjectNotChosen with several. Each caller answers the errors in its own words."""
+    candidate (else ObjectNotHeld); without one the only candidate; with several the only
+    apartment among them (an owner of Apt. 14 who also gets a parking space keeps working with a
+    client that leaves the object out), else ObjectNotChosen; None without candidates. Each
+    caller answers the errors in its own words."""
     if requested is not None:
-        if requested not in candidates:
+        if requested not in {object_id for object_id, _ in candidates}:
             raise ObjectNotHeld
         return requested
-    if len(candidates) > 1:
-        raise ObjectNotChosen
-    return candidates[0] if candidates else None
+    if len(candidates) <= 1:
+        return candidates[0][0] if candidates else None
+    apartments = [object_id for object_id, kind in candidates if kind == ObjectKind.APARTMENT]
+    if len(apartments) == 1:
+        return apartments[0]
+    raise ObjectNotChosen
 
 
 class MembershipView(ApartmentMembershipDTO):
@@ -422,9 +432,12 @@ class BuildingResponse(BaseModel):
     address: str
     country_code: str
     reading_deadline_day: int
+    # Of the apartments only (epic E14): parking spaces and garages are not heated area.
     apartment_count: int
     entrance_count: int
     heated_area_m2: AreaAmount
+    # The number of objects of every kind (0 for a kind the building has none of).
+    object_counts: dict[ObjectKind, int]
     # The building passport the chairman accepted (epic E12); null without one.
     registry_facts: RegistryFacts | None = None
 
@@ -434,9 +447,10 @@ class ApartmentSummary(BaseModel):
 
     apartment_id: uuid.UUID
     apartment_number: str
-    entrance: int
-    floor: int
-    area_m2: AreaAmount
+    apartment_kind: ObjectKind
+    entrance: int | None
+    floor: int | None
+    area_m2: AreaAmount | None
     owner_count: int
     tenant_count: int
     resident_count: int
@@ -477,6 +491,7 @@ class ApartmentRefDTO(BaseModel):
 
     apartment_id: uuid.UUID
     building_id: uuid.UUID
+    kind: ObjectKind
     number: str
 
 
@@ -486,8 +501,9 @@ class ConnectionRowDTO(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apartment_id: uuid.UUID
+    kind: ObjectKind
     number: str
-    entrance: int
+    entrance: int | None
     on_paper: bool
     owners: int
     tenants: int
@@ -523,6 +539,7 @@ class PersonMembershipDTO(BaseModel):
     membership_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     relation_type: RelationType
     display_label: str
     since: datetime

@@ -14,7 +14,7 @@ from src.core.filling.layout import BuildingLayout
 from src.core.instance import is_real_installation
 from src.modules.meters.schemas import NewMeter
 from src.modules.meters.service import MetersService
-from src.modules.property.schemas import NewApartment, ObjectKind, ObjectRef
+from src.modules.property.schemas import NewApartment
 from src.modules.property.service import PropertyService
 
 FILLING_LOCK_KEY = 7_202_612_001
@@ -59,12 +59,18 @@ async def filling_target(session: AsyncSession) -> FillingTarget:
 
 
 async def lay_out(session: AsyncSession, target: FillingTarget, layout: BuildingLayout) -> None:
-    """Every apartment and meter of the layout; the caller's transaction commits or not."""
+    """Every object and meter of the layout; the caller's transaction commits or not."""
     properties = PropertyService(session)
     ids = await properties.create_apartments(
         target.building_id,
         [
-            NewApartment(number=a.number, entrance=a.entrance, floor=a.floor, area_m2=a.area_m2)
+            NewApartment(
+                kind=a.kind,
+                number=a.number,
+                entrance=a.entrance,
+                floor=a.floor,
+                area_m2=a.area_m2,
+            )
             for a in layout.apartments
         ],
     )
@@ -72,11 +78,7 @@ async def lay_out(session: AsyncSession, target: FillingTarget, layout: Building
         target.building_id,
         [
             NewMeter(
-                apartment_id=(
-                    ids[ObjectRef(ObjectKind.APARTMENT, m.apartment)]
-                    if m.apartment is not None
-                    else None
-                ),
+                apartment_id=ids[m.apartment] if m.apartment is not None else None,
                 resource_type=m.resource,
                 unit=m.unit,
                 serial_number=m.serial_number,

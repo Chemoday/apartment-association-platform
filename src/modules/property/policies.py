@@ -11,7 +11,7 @@ from src.modules.property.schemas import (
     AuthorBadgeDTO,
     BuildingRole,
     DisplayMode,
-    ObjectKind,
+    ObjectRef,
     RelationType,
     RoleBadge,
     object_label,
@@ -63,19 +63,19 @@ def resolve_role_badge(
 
 def format_author_badge(
     full_name: str,
-    apt_number: str | None,
+    apartment: ObjectRef | None,
     relation_type: RelationType | None,
     building_role: BuildingRole,
     display_mode: DisplayMode,
 ) -> AuthorBadgeDTO:
     """Build the only representation of a person that other residents may ever see.
 
-    APARTMENT_ONLY -> "Apt. 14"
+    APARTMENT_ONLY -> "Apt. 14" (a parking space "P14", a garage "G12": `object_label`)
     INITIALS       -> "I. P. (Apt. 14)"
     FULL_NAME      -> "Ivan Petrov (Apt. 14)"
-    Without an apartment the name stands alone, or the building role label is used.
+    Without an object the name stands alone, or the building role label is used.
     """
-    apartment = object_label(ObjectKind.APARTMENT, apt_number) if apt_number else None
+    place = object_label(apartment.kind, apartment.number) if apartment else None
 
     name: str | None = None
     if display_mode == DisplayMode.INITIALS:
@@ -83,10 +83,10 @@ def format_author_badge(
     elif display_mode == DisplayMode.FULL_NAME:
         name = " ".join(full_name.split()) or None
 
-    if name and apartment:
-        label = f"{name} ({apartment})"
+    if name and place:
+        label = f"{name} ({place})"
     else:
-        label = name or apartment or BUILDING_ROLE_LABELS[building_role]
+        label = name or place or BUILDING_ROLE_LABELS[building_role]
 
     return AuthorBadgeDTO(
         display_label=label,

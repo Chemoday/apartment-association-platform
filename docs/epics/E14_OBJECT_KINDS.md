@@ -134,7 +134,7 @@ the contract wins. Section 10 collects the work this epic gives the frontend.
   refuses a `RESIDENT` membership of another kind.
 - Nothing else changes: a person already holds any number of memberships
   (`property_memberships`, `CurrentUserDTO.memberships`), and an existing account accepts an
-  invitation to another object. `ApartmentMembershipDTO` gains `kind` (the query of
+  invitation to another object. `ApartmentMembershipDTO` gains `apartment_kind` (the query of
   `get_current_user` already loads the whole apartment row, so it stays one query).
 
 ### 2.4 Labels
@@ -752,7 +752,7 @@ this list is the reminder, the contract is the source.
 - **Nullable fields:** `entrance`, `floor` and `area_m2` may be `null` on every object view; the
   card, the lists and the matrix show nothing instead of "entrance 0" or "NaN m2". A floor may be
   negative.
-- **`kind` everywhere an object is shown:** apartments of the board and the card,
+- **`apartment_kind` everywhere an object is shown** (next to `apartment_number`; the contract, docs/API.md section 0): apartments of the board and the card,
   `GET /property/me` memberships, the chairman's people list (`GET /auth/users`), the connection
   overview, invitations (the preview the invited person sees, the list of invitations, the bulk
   result), join codes (issued, listed, the public join page), join requests and decisions, the
@@ -792,7 +792,7 @@ this list is the reminder, the contract is the source.
 - **`shared_access`** in `GET /property/me`: when false (a tenant of a parking space or a garage
   only), hide the documents and the issue tracker; handle `403` there anyway.
 - **The chat** is for the people of the apartments and the board: hide it for a person without an
-  active membership of an apartment (from `GET /property/me`: no membership of `kind`
+  active membership of an apartment (from `GET /property/me`: no membership of `apartment_kind`
   `APARTMENT`, and no board role); handle `403` anyway.
 - **A person without an apartment** (an owner or a tenant of a garage) sees no whole-building
   topics; hide "new forum topic" for them until PR 4 (forum topics by kind).

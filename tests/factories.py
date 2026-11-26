@@ -9,9 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import get_settings
 from src.modules.meters.models import MeterDevice, MeterReading, ReadingPeriod
 from src.modules.meters.policies import period_due_date
-from src.modules.meters.schemas import PeriodStatus, PreviousOrigin, ReadingSource, ResourceType
+from src.modules.meters.schemas import (
+    MeterUnit,
+    PeriodStatus,
+    PreviousOrigin,
+    ReadingSource,
+    ResourceType,
+)
 from src.modules.property.models import Apartment, ApartmentMembership, Building, User
-from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType
+from src.modules.property.schemas import BuildingRole, DisplayMode, ObjectKind, RelationType
 
 
 async def create_building(session: AsyncSession, name: str = "KÜ Sõpruse 12") -> Building:
@@ -21,19 +27,42 @@ async def create_building(session: AsyncSession, name: str = "KÜ Sõpruse 12") 
     return building
 
 
-async def create_apartment(
-    session: AsyncSession, building: Building, number: str, entrance: int = 1, floor: int = 1
+async def create_object(
+    session: AsyncSession,
+    building: Building,
+    kind: ObjectKind,
+    number: str,
+    *,
+    entrance: int | None = None,
+    floor: int | None = None,
+    area: Decimal | None = None,
 ) -> Apartment:
+    """An object of any kind (epic E14); a parking space or a garage has no entrance."""
     apartment = Apartment(
         building_id=building.id,
+        kind=kind,
         number=number,
         entrance=entrance,
         floor=floor,
-        area_m2=Decimal("54.30"),
+        area_m2=area,
     )
     session.add(apartment)
     await session.flush()
     return apartment
+
+
+async def create_apartment(
+    session: AsyncSession, building: Building, number: str, entrance: int = 1, floor: int = 1
+) -> Apartment:
+    return await create_object(
+        session,
+        building,
+        ObjectKind.APARTMENT,
+        number,
+        entrance=entrance,
+        floor=floor,
+        area=Decimal("54.30"),
+    )
 
 
 async def create_user(
@@ -189,3 +218,112 @@ async def create_reading(
     session.add(reading)
     await session.flush()
     return reading
+
+
+# --- A mixed building (epic E14, section 6.2) -----------------------------------------------------
+
+
+@dataclass
+class MixedBuilding:
+    """Apartments, parking spaces and garages, and the people of the design's tables."""
+
+    building: Building
+    apt_1: Apartment
+    apt_14: Apartment
+    p_1: Apartment
+    p_2: Apartment  # number "P-2", floor -1, an electricity meter, no area
+    g_12: Apartment  # 18.50 m2, an electricity meter
+    g_1: Apartment
+    g_7: Apartment  # no members
+    a: User  # owner of Apt 14 and of P1
+    b: User  # owner of G12 only, INITIALS
+    c: User  # tenant of P-2 only
+    d: User  # owner of Apt 1
+    e: User  # tenant of Apt 1
+    x: User  # tenant of Apt 1 and of P-2
+    r: User  # RESIDENT of Apt 14
+    board_member: User  # owner of G1
+    chairman: User  # no membership
+    accountant: User  # no membership
+
+    @property
+    def people(self) -> dict[str, User]:
+        return {
+            "A": self.a,
+            "B": self.b,
+            "C": self.c,
+            "D": self.d,
+            "E": self.e,
+            "X": self.x,
+            "R": self.r,
+            "board member": self.board_member,
+            "chairman": self.chairman,
+            "accountant": self.accountant,
+        }
+
+
+async def create_mixed_building(session: AsyncSession) -> MixedBuilding:
+    building = await create_building(session, name="KÜ Segamaja 7")
+    apt_1 = await create_apartment(session, building, "1", entrance=1, floor=1)
+    apt_14 = await create_apartment(session, building, "14", entrance=2, floor=4)
+    p_1 = await create_object(session, building, ObjectKind.PARKING, "1")
+    p_2 = await create_object(session, building, ObjectKind.PARKING, "P-2", floor=-1)
+    g_12 = await create_object(session, building, ObjectKind.GARAGE, "12", area=Decimal("18.50"))
+    g_1 = await create_object(session, building, ObjectKind.GARAGE, "1")
+    g_7 = await create_object(session, building, ObjectKind.GARAGE, "7")
+
+    async def person(name: str, role: BuildingRole = BuildingRole.USER) -> User:
+        return await create_user(
+            session, building, name, role=role, email=f"{uuid.uuid4().hex[:12]}@example.com"
+        )
+
+    a, b, c = await person("Anna Aru"), await person("Toomas Kask"), await person("Carl Cee")
+    d, e, x = await person("Dina Dee"), await person("Eero Ee"), await person("Xena Iks")
+    r = await person("Rita Arr")
+    board_member = await person("Boris Board", BuildingRole.BOARD)
+    chairman = await person("Chair Man", BuildingRole.CHAIRMAN)
+    accountant = await person("Acc Ountant", BuildingRole.ACCOUNTANT)
+    tenant = RelationType.TENANT
+    for user, apartment, relation, mode in [
+        (a, apt_14, RelationType.OWNER, DisplayMode.APARTMENT_ONLY),
+        (a, p_1, RelationType.OWNER, DisplayMode.APARTMENT_ONLY),
+        (b, g_12, RelationType.OWNER, DisplayMode.INITIALS),
+        (c, p_2, tenant, DisplayMode.APARTMENT_ONLY),
+        (d, apt_1, RelationType.OWNER, DisplayMode.APARTMENT_ONLY),
+        (e, apt_1, tenant, DisplayMode.APARTMENT_ONLY),
+        (x, apt_1, tenant, DisplayMode.APARTMENT_ONLY),
+        (x, p_2, tenant, DisplayMode.APARTMENT_ONLY),
+        (r, apt_14, RelationType.RESIDENT, DisplayMode.APARTMENT_ONLY),
+        (board_member, g_1, RelationType.OWNER, DisplayMode.APARTMENT_ONLY),
+    ]:
+        await create_membership(session, user, apartment, relation=relation, mode=mode)
+    for apartment in (p_2, g_12):
+        meter = await create_meter(
+            session,
+            building,
+            apartment,
+            ResourceType.ELECTRICITY,
+            max_monthly_delta=Decimal("1000.000"),
+        )
+        meter.unit = MeterUnit.KWH
+    await session.flush()
+    return MixedBuilding(
+        building=building,
+        apt_1=apt_1,
+        apt_14=apt_14,
+        p_1=p_1,
+        p_2=p_2,
+        g_12=g_12,
+        g_1=g_1,
+        g_7=g_7,
+        a=a,
+        b=b,
+        c=c,
+        d=d,
+        e=e,
+        x=x,
+        r=r,
+        board_member=board_member,
+        chairman=chairman,
+        accountant=accountant,
+    )

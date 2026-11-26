@@ -42,6 +42,7 @@ from tests.smtp_server import SmtpServer
 ITEM_FIELDS = {
     "apartment_id",
     "apartment_number",
+    "apartment_kind",
     "entrance",
     "status",
     "owners",

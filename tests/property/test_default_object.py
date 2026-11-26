@@ -24,6 +24,7 @@ from src.modules.property.schemas import (
     BuildingRole,
     CurrentUserDTO,
     DisplayMode,
+    ObjectKind,
     ObjectNotChosen,
     ObjectNotHeld,
     RelationType,
@@ -190,6 +191,7 @@ def _member(*homes: tuple[uuid.UUID, int]) -> CurrentUserDTO:
                 membership_id=uuid.uuid4(),
                 apartment_id=apartment_id,
                 apartment_number="1",
+                apartment_kind=ObjectKind.APARTMENT,
                 entrance=entrance,
                 floor=1,
                 relation_type=RelationType.OWNER,
@@ -215,15 +217,20 @@ def test_the_badge_object_is_the_first_membership_or_the_first_inside_a_target()
     assert first_object_in(_member(), None) is None
 
 
-def test_the_chosen_object_is_the_requested_or_the_only_one() -> None:
-    first, second = uuid.uuid4(), uuid.uuid4()
+def test_the_chosen_object_is_the_requested_the_only_one_or_the_only_apartment() -> None:
+    apartment, space, garage, other = (uuid.uuid4() for _ in range(4))
+    A, P, G = ObjectKind.APARTMENT, ObjectKind.PARKING, ObjectKind.GARAGE
 
-    assert chosen_object([first, second], second) == second
-    assert chosen_object([first], None) == first
+    assert chosen_object([(apartment, A), (space, P)], space) == space
+    assert chosen_object([(space, P)], None) == space
     assert chosen_object([], None) is None
+    # An owner of an apartment who also gets a parking space: the apartment.
+    assert chosen_object([(space, P), (apartment, A), (garage, G)], None) == apartment
     with pytest.raises(ObjectNotHeld):
-        chosen_object([first], second)
+        chosen_object([(apartment, A)], space)
     with pytest.raises(ObjectNotHeld):
-        chosen_object([], first)
+        chosen_object([], apartment)
     with pytest.raises(ObjectNotChosen):
-        chosen_object([first, second], None)
+        chosen_object([(space, P), (garage, G)], None)
+    with pytest.raises(ObjectNotChosen):
+        chosen_object([(apartment, A), (other, A), (space, P)], None)

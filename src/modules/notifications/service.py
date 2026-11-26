@@ -582,6 +582,7 @@ class NotificationsSubscriber:
             params = {
                 "apartment_id": str(thread.apartment_id),
                 "apartment_number": apartment.number,
+                "apartment_kind": apartment.kind.value,
                 "from_board": event.from_board,
             }
             dedup_key = apartment_message_key(thread.post_id, event.comment_id)
@@ -752,7 +753,10 @@ class NotificationsSubscriber:
                 event_type=NotificationEventType.JOIN_REQUEST_SUBMITTED,
                 dedup_key=join_request_key(event.request_id),
                 subject=(SubjectType.JOIN_REQUEST, event.request_id),
-                params={"apartment_number": event.apartment_number},
+                params={
+                    "apartment_number": event.apartment_number,
+                    "apartment_kind": event.apartment_kind.value,
+                },
             )
             await session.commit()
 

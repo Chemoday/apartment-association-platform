@@ -694,6 +694,7 @@ class MetersService:
                 DashboardApartment(
                     apartment_id=membership.apartment_id,
                     apartment_number=membership.apartment_number,
+                    apartment_kind=membership.apartment_kind,
                     can_submit_readings=membership.can_submit_readings,
                     meters=dashboard_meters,
                 )
@@ -796,6 +797,7 @@ class MetersService:
         return ApartmentReadingsResponse(
             apartment_id=apartment_id,
             apartment_number=apartment.number,
+            apartment_kind=apartment.kind,
             periods=[_period_dto(period) for period in periods],
             meters=[
                 ApartmentMeterHistory(
@@ -902,6 +904,7 @@ class MetersService:
         return ApartmentConsumptionResponse(
             apartment_id=apartment_id,
             apartment_number=apartment.number,
+            apartment_kind=apartment.kind,
             periods=[_period_dto(period) for period in periods],
             resources=[
                 ApartmentConsumptionSeries(
@@ -946,31 +949,40 @@ class MetersService:
                 )
             )
         ).all()
+        areas = await self.property_service.apartment_areas(user.building_id)
         deltas: dict[tuple[ResourceType, MeterUnit, uuid.UUID], list[Decimal]] = {}
+        # Only objects with an area count per m2, in the consumption and the area alike.
+        area_deltas: dict[tuple[ResourceType, MeterUnit, uuid.UUID], list[Decimal]] = {}
         apartments: dict[tuple[ResourceType, MeterUnit, uuid.UUID], set[uuid.UUID]] = {}
         estimates: dict[tuple[ResourceType, MeterUnit, uuid.UUID], int] = {}
         for period_id, apartment_id, resource_type, unit, delta, source in rows:
             key = (resource_type, unit, period_id)
             deltas.setdefault(key, []).append(delta)
+            if apartment_id in areas:
+                area_deltas.setdefault(key, []).append(delta)
             apartments.setdefault(key, set()).add(apartment_id)
             if source == ReadingSource.AUTO_ESTIMATED:
                 estimates[key] = estimates.get(key, 0) + 1
         kinds = await self._meter_kinds(user.building_id, None)
         kinds |= {(resource_type, unit) for resource_type, unit, _ in deltas}
-        areas = await self.property_service.apartment_areas(user.building_id)
 
         def month(
             key: tuple[ResourceType, MeterUnit, uuid.UUID], code: str
         ) -> BuildingConsumptionMonth:
             counted = apartments.get(key, set())
             total = total_consumption(deltas.get(key, []))
-            area = sum((areas.get(apartment, Decimal(0)) for apartment in counted), Decimal(0))
+            with_area = [apartment for apartment in counted if apartment in areas]
+            area = sum((areas[apartment] for apartment in with_area), Decimal(0))
             return BuildingConsumptionMonth(
                 period_code=code,
                 total=total if counted else None,
                 apartments_counted=len(counted),
                 average_per_apartment=average_per_apartment(total, len(counted)),
-                average_per_m2=consumption_per_area(total, area) if counted else None,
+                average_per_m2=(
+                    consumption_per_area(total_consumption(area_deltas.get(key, [])), area)
+                    if with_area
+                    else None
+                ),
                 estimated_readings=estimates.get(key, 0),
             )
 
@@ -1023,6 +1035,7 @@ class MetersService:
                 MatrixApartment(
                     apartment_id=apartment.id,
                     apartment_number=apartment.number,
+                    apartment_kind=apartment.kind,
                     entrance=apartment.entrance,
                     floor=apartment.floor,
                     status=apartment_submission_status(cell.status for cell in cells),

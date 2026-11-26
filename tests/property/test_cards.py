@@ -53,6 +53,7 @@ async def test_board_lists_every_apartment_naturally_with_member_counts(
         assert by_number["2"] == {
             "apartment_id": str(demo.apt_2.id),
             "apartment_number": "2",
+            "apartment_kind": "APARTMENT",
             "entrance": 1,
             "floor": 1,
             "area_m2": "54.30",

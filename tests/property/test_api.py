@@ -78,6 +78,7 @@ async def test_me_returns_role_memberships_permissions_and_masked_preview(
         "membership_id": str(demo.owner_14_membership.id),
         "apartment_id": str(demo.apt_14.id),
         "apartment_number": "14",
+        "apartment_kind": "APARTMENT",
         "entrance": 2,
         "floor": 4,
         "relation_type": "OWNER",
@@ -476,6 +477,7 @@ async def test_building_details_for_any_user_of_the_building(
         "apartment_count": 2,
         "entrance_count": 2,
         "heated_area_m2": "108.60",  # 2 x 54.30
+        "object_counts": {"APARTMENT": 2, "PARKING": 0, "GARAGE": 0},
         "registry_facts": None,  # no register provider in the tests (epic E12)
     }
     assert_no_raw_pii(response.text, demo)
