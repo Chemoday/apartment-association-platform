@@ -17,7 +17,7 @@ from src.core.validation import (
     clean_text,
     safe_text,
 )
-from src.modules.property.schemas import BuildingRole, DisplayMode, Locale, RelationType
+from src.modules.property.schemas import BuildingRole, DisplayMode, Locale, ObjectKind, RelationType
 
 MAX_EMAIL_LENGTH = 254
 
@@ -186,6 +186,7 @@ class InvitationPreview(BaseModel):
 
     kind: InvitationKind
     apartment_number: str | None
+    apartment_kind: ObjectKind | None
     building_role: StaffRole | None
     # The building's country (ISO 3166-1 alpha-2): the default of the phone field.
     country_code: str
@@ -249,6 +250,7 @@ class InvitationView(BaseModel):
     email: str
     apartment_id: uuid.UUID | None
     apartment_number: str | None
+    apartment_kind: ObjectKind | None
     building_role: StaffRole | None
     status: InvitationStatus
     mine: bool
@@ -282,6 +284,7 @@ class BulkInvitationRow(BaseModel):
     line: int
     # The cells as typed (the e-mail in canonical form when valid); None when the row lacks it.
     apartment_number: str | None
+    apartment_kind: ObjectKind | None
     email: str | None
     locale: str | None
     outcome: BulkRowOutcome
@@ -345,6 +348,7 @@ class PersonMembershipView(BaseModel):
     membership_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     relation_type: RelationType
     display_label: str
     since: datetime
@@ -440,6 +444,7 @@ class ConnectionStatus(StrEnum):
 class ConnectionItem(BaseModel):
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     entrance: int | None
     status: ConnectionStatus
     owners: int
@@ -501,6 +506,7 @@ class IssuedJoinCode(BaseModel):
     code_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     join_code: str
     expires_at: datetime
 
@@ -515,6 +521,7 @@ class JoinCodeView(BaseModel):
     code_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     created_at: datetime
     expires_at: datetime
 
@@ -534,6 +541,7 @@ class JoinLookup(BaseModel):
 class JoinTarget(BaseModel):
     association_name: str
     apartment_number: str
+    apartment_kind: ObjectKind
     # The building's country (ISO 3166-1 alpha-2): the default of the phone field.
     country_code: str
 
@@ -559,6 +567,7 @@ class JoinRequestView(BaseModel):
     request_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     full_name: str
     phone: str
     email: str
@@ -569,6 +578,7 @@ class JoinRequestView(BaseModel):
 class JoinDecisionView(BaseModel):
     apartment_id: uuid.UUID | None
     apartment_number: str | None
+    apartment_kind: ObjectKind | None
     outcome: JoinOutcome
     decided_by_user_id: uuid.UUID | None
     decided_at: datetime

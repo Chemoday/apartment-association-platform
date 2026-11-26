@@ -318,6 +318,7 @@ async def test_the_send_answers_with_the_cells_and_the_invitations_carry_them(
         {
             "line": 1,
             "apartment_number": "21",
+            "apartment_kind": "APARTMENT",
             "email": email.lower(),
             "locale": "en",
             "outcome": "INVITED",

@@ -111,6 +111,7 @@ class AccountService:
                             membership_id=m.membership_id,
                             apartment_id=m.apartment_id,
                             apartment_number=m.apartment_number,
+                            apartment_kind=m.apartment_kind,
                             relation_type=m.relation_type,
                             display_label=m.display_label,
                             since=m.since,

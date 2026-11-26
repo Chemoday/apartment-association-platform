@@ -9,13 +9,20 @@ from src.modules.property.policies import (
     most_private_display_mode,
     resolve_role_badge,
 )
-from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType, RoleBadge
+from src.modules.property.schemas import (
+    BuildingRole,
+    DisplayMode,
+    ObjectKind,
+    ObjectRef,
+    RelationType,
+    RoleBadge,
+)
 
 
 def badge(mode: DisplayMode, **overrides):
     arguments = {
         "full_name": "Ivan Petrov",
-        "apt_number": "14",
+        "apartment": ObjectRef(ObjectKind.APARTMENT, "14"),
         "relation_type": RelationType.OWNER,
         "building_role": BuildingRole.USER,
         "display_mode": mode,
@@ -91,7 +98,7 @@ def test_blank_name_falls_back_to_apartment() -> None:
 def test_staff_without_apartment(
     role: BuildingRole, mode: DisplayMode, expected_label: str
 ) -> None:
-    result = badge(mode, apt_number=None, relation_type=None, building_role=role)
+    result = badge(mode, apartment=None, relation_type=None, building_role=role)
     assert result.display_label == expected_label
 
 
@@ -113,9 +120,24 @@ def test_role_badge(relation, role, expected) -> None:
 
 
 def test_plain_string_inputs_are_accepted() -> None:
-    result = format_author_badge("Ivan Petrov", "14", "OWNER", "USER", "INITIALS")
+    result = format_author_badge(
+        "Ivan Petrov", ObjectRef(ObjectKind.APARTMENT, "14"), "OWNER", "USER", "INITIALS"
+    )
     assert result.display_label == "I. P. (Apt. 14)"
     assert result.role_badge == RoleBadge.OWNER
+
+
+@pytest.mark.parametrize(
+    ("mode", "kind", "number", "expected"),
+    [
+        (DisplayMode.APARTMENT_ONLY, ObjectKind.PARKING, "1", "P1"),
+        (DisplayMode.APARTMENT_ONLY, ObjectKind.PARKING, "P-2", "P-2"),
+        (DisplayMode.INITIALS, ObjectKind.GARAGE, "12", "I. P. (G12)"),
+        (DisplayMode.FULL_NAME, ObjectKind.GARAGE, "12", "Ivan Petrov (G12)"),
+    ],
+)
+def test_the_badge_names_the_object_by_kind(mode, kind, number, expected) -> None:
+    assert badge(mode, apartment=ObjectRef(kind, number)).display_label == expected
 
 
 @pytest.mark.parametrize(

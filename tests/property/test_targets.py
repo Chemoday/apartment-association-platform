@@ -112,6 +112,7 @@ def test_the_targeting_clause_takes_objects_without_an_entrance() -> None:
             membership_id=uuid.uuid4(),
             apartment_id=uuid.uuid4(),
             apartment_number="1",
+            apartment_kind=ObjectKind.APARTMENT if entrance else ObjectKind.PARKING,
             entrance=entrance,
             floor=None,
             relation_type=RelationType.OWNER,

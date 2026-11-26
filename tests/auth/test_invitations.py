@@ -223,6 +223,7 @@ async def test_a_new_owner_registers_through_the_invitation(
     assert body["invitation"] == {
         "kind": "OWNER",
         "apartment_number": "21",
+        "apartment_kind": "APARTMENT",
         "building_role": None,
         "country_code": "EE",
     }
@@ -323,6 +324,7 @@ async def test_a_staff_registration_gets_the_role_and_no_membership(
     assert form["invitation"] == {
         "kind": "STAFF",
         "apartment_number": None,
+        "apartment_kind": None,
         "building_role": "BOARD",
         "country_code": "EE",
     }
@@ -355,6 +357,7 @@ async def test_an_existing_account_signs_in_and_accepts(
         "invitation": {
             "kind": "OWNER",
             "apartment_number": "2",
+            "apartment_kind": "APARTMENT",
             "building_role": None,
             "country_code": "EE",
         },

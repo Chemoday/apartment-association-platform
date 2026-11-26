@@ -12852,6 +12852,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "entrance": {
             "anyOf": [
               {
@@ -12913,6 +12916,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "entrance",
           "floor",
           "area_m2",
@@ -12968,6 +12972,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "periods": {
             "items": {
               "$ref": "#/components/schemas/PeriodDTO"
@@ -12987,6 +12994,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "periods",
           "resources"
         ],
@@ -13146,6 +13154,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "periods": {
             "items": {
               "$ref": "#/components/schemas/PeriodDTO"
@@ -13165,6 +13176,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "periods",
           "meters"
         ],
@@ -13181,6 +13193,9 @@
           "apartment_number": {
             "type": "string",
             "title": "Apartment Number"
+          },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
           },
           "entrance": {
             "anyOf": [
@@ -13236,6 +13251,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "entrance",
           "floor",
           "area_m2",
@@ -13670,6 +13686,16 @@
             ],
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObjectKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "email": {
             "anyOf": [
               {
@@ -13700,6 +13726,7 @@
         "required": [
           "line",
           "apartment_number",
+          "apartment_kind",
           "email",
           "locale",
           "outcome"
@@ -14166,6 +14193,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "entrance": {
             "anyOf": [
               {
@@ -14219,6 +14249,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "entrance",
           "status",
           "owners",
@@ -14388,6 +14419,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "can_submit_readings": {
             "type": "boolean",
             "title": "Can Submit Readings"
@@ -14404,6 +14438,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "can_submit_readings",
           "meters"
         ],
@@ -15846,6 +15881,16 @@
             ],
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObjectKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "building_role": {
             "anyOf": [
               {
@@ -15865,6 +15910,7 @@
         "required": [
           "kind",
           "apartment_number",
+          "apartment_kind",
           "building_role",
           "country_code"
         ],
@@ -15918,6 +15964,16 @@
             ],
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObjectKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "building_role": {
             "anyOf": [
               {
@@ -15966,6 +16022,7 @@
           "email",
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "building_role",
           "status",
           "mine",
@@ -16536,6 +16593,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "join_code": {
             "type": "string",
             "title": "Join Code"
@@ -16551,6 +16611,7 @@
           "code_id",
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "join_code",
           "expires_at"
         ],
@@ -16583,6 +16644,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -16599,6 +16663,7 @@
           "code_id",
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "created_at",
           "expires_at"
         ],
@@ -16679,6 +16744,16 @@
             ],
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObjectKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "outcome": {
             "$ref": "#/components/schemas/JoinOutcome"
           },
@@ -16704,6 +16779,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "outcome",
           "decided_by_user_id",
           "decided_at"
@@ -16751,6 +16827,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "full_name": {
             "type": "string",
             "title": "Full Name"
@@ -16784,6 +16863,7 @@
           "request_id",
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "full_name",
           "phone",
           "email",
@@ -16849,6 +16929,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "country_code": {
             "type": "string",
             "title": "Country Code"
@@ -16858,6 +16941,7 @@
         "required": [
           "association_name",
           "apartment_number",
+          "apartment_kind",
           "country_code"
         ],
         "title": "JoinTarget"
@@ -17144,6 +17228,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "entrance": {
             "anyOf": [
               {
@@ -17181,6 +17268,7 @@
         "required": [
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "entrance",
           "floor",
           "status",
@@ -17350,6 +17438,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "entrance": {
             "anyOf": [
               {
@@ -17404,6 +17495,7 @@
           "membership_id",
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "entrance",
           "floor",
           "relation_type",
@@ -18055,6 +18147,9 @@
             "type": "string",
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
           "relation_type": {
             "$ref": "#/components/schemas/RelationType"
           },
@@ -18084,6 +18179,7 @@
           "membership_id",
           "apartment_id",
           "apartment_number",
+          "apartment_kind",
           "relation_type",
           "display_label",
           "since",

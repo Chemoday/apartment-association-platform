@@ -62,11 +62,19 @@ from tests.smtp_server import SmtpServer
 
 SETTINGS = "/api/v1/settings"
 NOTICE_KEY = "auth.privacy_notice_url"
-CODE_FIELDS = {"code_id", "apartment_id", "apartment_number", "created_at", "expires_at"}
+CODE_FIELDS = {
+    "code_id",
+    "apartment_id",
+    "apartment_number",
+    "apartment_kind",
+    "created_at",
+    "expires_at",
+}
 REQUEST_FIELDS = {
     "request_id",
     "apartment_id",
     "apartment_number",
+    "apartment_kind",
     "full_name",
     "phone",
     "email",
@@ -76,6 +84,7 @@ REQUEST_FIELDS = {
 DECISION_FIELDS = {
     "apartment_id",
     "apartment_number",
+    "apartment_kind",
     "outcome",
     "decided_by_user_id",
     "decided_at",

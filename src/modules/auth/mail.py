@@ -14,7 +14,7 @@ import structlog
 from src.core.config import Settings
 from src.core.messages import MessageCatalog
 from src.modules.auth.policies import demo_mail_allowed
-from src.modules.property.schemas import Locale
+from src.modules.property.schemas import Locale, ObjectRef
 from src.plugins.registry import OutgoingMessage, PluginRegistry
 
 CATALOG_FILE = Path(__file__).with_name("messages.csv")
@@ -74,11 +74,17 @@ async def send_auth_email(
 
 
 def invitation_target(
-    locale: str, kind: str, apartment_number: str | None, building_role: str | None
+    locale: str, kind: str, place: ObjectRef | None, building_role: str | None
 ) -> str:
-    """ "as the owner of apartment 14", "as a board member" … in the recipient's language."""
+    """ "as the owner of apartment 14", "of garage 12", "as a board member" … in the
+    recipient's language; each kind of object has a sentence of its own."""
     key = building_role.lower() if kind == "STAFF" and building_role else kind.lower()
-    return auth_catalog().render(f"invitation.target.{key}", locale, apartment=apartment_number)
+    catalog = auth_catalog()
+    return catalog.render(
+        catalog.key_for_kind(f"invitation.target.{key}", place.kind if place else None),
+        locale,
+        apartment=place.number if place else None,
+    )
 
 
 @dataclass(frozen=True)

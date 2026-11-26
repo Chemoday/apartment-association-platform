@@ -694,6 +694,7 @@ class MetersService:
                 DashboardApartment(
                     apartment_id=membership.apartment_id,
                     apartment_number=membership.apartment_number,
+                    apartment_kind=membership.apartment_kind,
                     can_submit_readings=membership.can_submit_readings,
                     meters=dashboard_meters,
                 )
@@ -796,6 +797,7 @@ class MetersService:
         return ApartmentReadingsResponse(
             apartment_id=apartment_id,
             apartment_number=apartment.number,
+            apartment_kind=apartment.kind,
             periods=[_period_dto(period) for period in periods],
             meters=[
                 ApartmentMeterHistory(
@@ -902,6 +904,7 @@ class MetersService:
         return ApartmentConsumptionResponse(
             apartment_id=apartment_id,
             apartment_number=apartment.number,
+            apartment_kind=apartment.kind,
             periods=[_period_dto(period) for period in periods],
             resources=[
                 ApartmentConsumptionSeries(
@@ -1032,6 +1035,7 @@ class MetersService:
                 MatrixApartment(
                     apartment_id=apartment.id,
                     apartment_number=apartment.number,
+                    apartment_kind=apartment.kind,
                     entrance=apartment.entrance,
                     floor=apartment.floor,
                     status=apartment_submission_status(cell.status for cell in cells),

@@ -81,6 +81,7 @@ from src.modules.property.schemas import (
     DisplayMode,
     Locale,
     ObjectKind,
+    ObjectRef,
     RelationType,
 )
 from src.modules.property.service import PropertyService
@@ -363,10 +364,11 @@ class InvitationService:
         now = _now()
         if send:
             await self.properties.lock_people(caller.building_id)  # rows and limit stay put
-        apartments = {
-            a.number: a.id for a in await self.properties.list_apartments(caller.building_id)
-        }
-        limit = BULK_INVITATIONS_PER_APARTMENT_PER_DAY * len(apartments)
+        objects = await self.properties.list_apartments(caller.building_id)
+        # The list names apartments only until it takes a kind (epic E14, K4); the limit counts
+        # objects of every kind.
+        apartments = {a.number: a.id for a in objects if a.kind == ObjectKind.APARTMENT}
+        limit = BULK_INVITATIONS_PER_APARTMENT_PER_DAY * len(objects)
         try:
             parsed = parse_bulk_list(
                 list_text, max_rows=limit, offered_locales=self.offered_locales()
@@ -398,6 +400,7 @@ class InvitationService:
             BulkInvitationRow(
                 line=row.line,
                 apartment_number=row.apartment_number,
+                apartment_kind=ObjectKind.APARTMENT,
                 email=row.email,
                 locale=row.locale,
                 outcome=outcome or done,
@@ -613,7 +616,7 @@ class InvitationService:
             invitation.send_due_at = now + INVITATION_SEND_LEASE
             expires_at = now + INVITATION_TTL
             token = await self._new_link(invitation, now, expires_at)
-            number = await self._apartment_number(invitation)
+            place = await self._apartment_of(invitation)
             claimed.append(
                 QueuedMail(
                     invitation_id=invitation.id,
@@ -621,7 +624,7 @@ class InvitationService:
                     failures=invitation.send_failures,
                     lease=invitation.send_due_at,
                     expires_at=expires_at,
-                    mail=await self._mail(invitation, number, token),
+                    mail=await self._mail(invitation, place, token),
                 )
             )
         await self.session.flush()
@@ -903,8 +906,8 @@ class InvitationService:
             if not await self._applies(invitation, cache):
                 continue
             token = await self._new_link(invitation, now)
-            number = await self._apartment_number(invitation)
-            mails.append(await self._mail(invitation, number, token))
+            place = await self._apartment_of(invitation)
+            mails.append(await self._mail(invitation, place, token))
         return mails
 
     # --- For the system (the first chairman) -----------------------------------------------------
@@ -1169,16 +1172,18 @@ class InvitationService:
             now=now,
         )
 
-    async def _apartment_number(self, invitation: AuthInvitation) -> str | None:
+    async def _apartment_of(self, invitation: AuthInvitation) -> ObjectRef | None:
         if invitation.apartment_id is None:
             return None
         ref = await self.properties.apartment_ref(invitation.apartment_id)
-        return ref.number if ref else None
+        return ObjectRef(ref.kind, ref.number) if ref else None
 
     async def _preview(self, invitation: AuthInvitation) -> InvitationPreview:
+        place = await self._apartment_of(invitation)
         return InvitationPreview(
             kind=invitation.kind,
-            apartment_number=await self._apartment_number(invitation),
+            apartment_number=place.number if place else None,
+            apartment_kind=place.kind if place else None,
             building_role=invitation.building_role,
             country_code=await self.properties.building_country(invitation.building_id),
         )
@@ -1187,11 +1192,12 @@ class InvitationService:
         self, rows: list[AuthInvitation], caller_id: uuid.UUID, now: datetime
     ) -> list[InvitationView]:
         cache: dict[object, bool] = {}
-        numbers: dict[uuid.UUID, str | None] = {}
+        places: dict[uuid.UUID, ObjectRef | None] = {}
         views = []
         for invitation in rows:
-            if invitation.apartment_id is not None and invitation.apartment_id not in numbers:
-                numbers[invitation.apartment_id] = await self._apartment_number(invitation)
+            if invitation.apartment_id is not None and invitation.apartment_id not in places:
+                places[invitation.apartment_id] = await self._apartment_of(invitation)
+            place = places.get(invitation.apartment_id) if invitation.apartment_id else None
             mine = invitation.invited_by_user_id == caller_id
             views.append(
                 InvitationView(
@@ -1199,9 +1205,8 @@ class InvitationService:
                     kind=invitation.kind,
                     email=invitation.email if mine else mask_email(invitation.email),
                     apartment_id=invitation.apartment_id,
-                    apartment_number=numbers.get(invitation.apartment_id)
-                    if invitation.apartment_id
-                    else None,
+                    apartment_number=place.number if place else None,
+                    apartment_kind=place.kind if place else None,
                     building_role=invitation.building_role,
                     status=await self._status(invitation, now, cache),
                     mine=mine,
@@ -1214,7 +1219,7 @@ class InvitationService:
         return views
 
     async def _mail(
-        self, invitation: AuthInvitation, apartment_number: str | None, token: str
+        self, invitation: AuthInvitation, place: ObjectRef | None, token: str
     ) -> AuthMail:
         """The invitation e-mail, in the language of the account if the e-mail has one (only the
         mailbox owner sees which), else the invitation's language, else the instance default."""
@@ -1231,7 +1236,7 @@ class InvitationService:
             link=sign_in_link(self.settings.PUBLIC_BASE_URL, token),
             values={
                 "target": invitation_target(
-                    locale, invitation.kind, apartment_number, invitation.building_role
+                    locale, invitation.kind, place, invitation.building_role
                 )
             },
         )

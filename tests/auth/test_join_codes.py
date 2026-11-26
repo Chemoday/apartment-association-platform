@@ -212,6 +212,7 @@ async def test_a_person_joins_and_the_chairman_confirms(
     assert looked.json() == {
         "association_name": world.building.name,
         "apartment_number": "2",
+        "apartment_kind": "APARTMENT",
         "country_code": "EE",
     }
 

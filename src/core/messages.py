@@ -54,6 +54,14 @@ class MessageCatalog:
                 texts[key] = {locale: row[locale] for locale in columns}
         return cls(texts)
 
+    def key_for_kind(self, key: str, kind: str | None) -> str:
+        """The variant of a sentence that names an object of this kind (`<key>.GARAGE`), else the
+        sentence itself: for an apartment, for no kind (stored before epic E14: an apartment) and
+        for a key without variants. Russian and Estonian put the object in a case and agree the
+        verb with it, so a name of the kind cannot be inserted into one sentence."""
+        variant = f"{key}.{kind}"
+        return variant if kind and variant in self.texts else key
+
     def render(self, key: str, locale: str, **values: Any) -> str:
         cells = self.texts[key]
         template = cells.get(locale) or cells[FALLBACK_LOCALE]

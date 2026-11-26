@@ -228,7 +228,7 @@ class PropertyService:
         full_name = await self._full_name_of(current_user.id)
         badge = format_author_badge(
             full_name=full_name,
-            apt_number=apartment.number if apartment else None,
+            apartment=ObjectRef(apartment.kind, apartment.number) if apartment else None,
             relation_type=membership.relation_type,
             building_role=current_user.building_role,
             display_mode=mode,
@@ -663,7 +663,7 @@ class PropertyService:
         }
         membership_rows = (
             await self.session.execute(
-                select(ApartmentMembership, Apartment.number)
+                select(ApartmentMembership, Apartment.kind, Apartment.number)
                 .join(Apartment, Apartment.id == ApartmentMembership.apartment_id)
                 .join(User, User.id == ApartmentMembership.user_id)
                 .where(
@@ -673,10 +673,13 @@ class PropertyService:
                 )
             )
         ).all()
-        memberships: dict[tuple[uuid.UUID, uuid.UUID], tuple[ApartmentMembership, str]] = {}
+        memberships: dict[tuple[uuid.UUID, uuid.UUID], tuple[ApartmentMembership, ObjectRef]] = {}
         modes_by_user: dict[uuid.UUID, list[DisplayMode]] = {}
-        for membership, number in membership_rows:
-            memberships[(membership.user_id, membership.apartment_id)] = (membership, number)
+        for membership, kind, number in membership_rows:
+            memberships[(membership.user_id, membership.apartment_id)] = (
+                membership,
+                ObjectRef(kind, number),
+            )
             modes_by_user.setdefault(membership.user_id, []).append(membership.privacy_display_mode)
 
         orphan_apartment_ids = {
@@ -684,17 +687,17 @@ class PropertyService:
             for user_id, apartment_id in keys
             if apartment_id is not None and (user_id, apartment_id) not in memberships
         }
-        orphan_numbers: dict[uuid.UUID, str] = {}
+        # An object the author no longer holds keeps its kind in the badge.
+        orphan_objects: dict[uuid.UUID, ObjectRef] = {}
         if orphan_apartment_ids:
-            orphan_numbers = dict(
-                (
-                    await self.session.execute(
-                        select(Apartment.id, Apartment.number).where(
-                            Apartment.id.in_(orphan_apartment_ids)
-                        )
+            orphan_objects = {
+                apartment_id: ObjectRef(kind, number)
+                for apartment_id, kind, number in await self.session.execute(
+                    select(Apartment.id, Apartment.kind, Apartment.number).where(
+                        Apartment.id.in_(orphan_apartment_ids)
                     )
-                ).all()
-            )
+                )
+            }
 
         result: dict[AuthorKey, AuthorBadgeDTO] = {}
         for user_id, apartment_id in keys:
@@ -705,16 +708,16 @@ class PropertyService:
             if apartment_id is None:
                 badge = format_author_badge(
                     full_name=user.full_name,
-                    apt_number=None,
+                    apartment=None,
                     relation_type=None,
                     building_role=user.building_role,
                     display_mode=most_private_display_mode(modes_by_user.get(user_id, ())),
                 )
             elif (user_id, apartment_id) in memberships:
-                membership, number = memberships[(user_id, apartment_id)]
+                membership, place = memberships[(user_id, apartment_id)]
                 badge = format_author_badge(
                     full_name=user.full_name,
-                    apt_number=number,
+                    apartment=place,
                     relation_type=membership.relation_type,
                     building_role=user.building_role,
                     display_mode=membership.privacy_display_mode,
@@ -722,7 +725,7 @@ class PropertyService:
             else:
                 badge = format_author_badge(
                     full_name=user.full_name,
-                    apt_number=orphan_numbers.get(apartment_id),
+                    apartment=orphan_objects.get(apartment_id),
                     relation_type=None,
                     building_role=user.building_role,
                     display_mode=DisplayMode.APARTMENT_ONLY,
@@ -1071,6 +1074,7 @@ class PropertyService:
         rows = await self.session.execute(
             select(
                 Apartment.id,
+                Apartment.kind,
                 Apartment.number,
                 Apartment.entrance,
                 Apartment.on_paper,
@@ -1092,13 +1096,14 @@ class PropertyService:
         return [
             ConnectionRowDTO(
                 apartment_id=apartment_id,
+                kind=kind,
                 number=number,
                 entrance=entrance,
                 on_paper=on_paper,
                 owners=owners,
                 tenants=tenants,
             )
-            for apartment_id, number, entrance, on_paper, owners, tenants in rows.all()
+            for apartment_id, kind, number, entrance, on_paper, owners, tenants in rows.all()
         ]
 
     async def set_on_paper(
@@ -1127,7 +1132,13 @@ class PropertyService:
         """The active members of one apartment, by relation, start and id, under the badge
         rules of that apartment."""
         rows = await self.session.execute(
-            select(ApartmentMembership, Apartment.number, User.full_name, User.building_role)
+            select(
+                ApartmentMembership,
+                Apartment.kind,
+                Apartment.number,
+                User.full_name,
+                User.building_role,
+            )
             .join(Apartment, Apartment.id == ApartmentMembership.apartment_id)
             .join(User, User.id == ApartmentMembership.user_id)
             .where(
@@ -1144,14 +1155,14 @@ class PropertyService:
                 relation_type=membership.relation_type,
                 display_label=format_author_badge(
                     full_name=full_name,
-                    apt_number=number,
+                    apartment=ObjectRef(kind, number),
                     relation_type=membership.relation_type,
                     building_role=role,
                     display_mode=membership.privacy_display_mode,
                 ).display_label,
                 since=membership.started_at,
             )
-            for membership, number, full_name, role in rows.all()
+            for membership, kind, number, full_name, role in rows.all()
         ]
         return sorted(
             residents,
@@ -1196,7 +1207,7 @@ class PropertyService:
                 building_role=user.building_role,
                 display_label=format_author_badge(
                     full_name=user.full_name,
-                    apt_number=None,
+                    apartment=None,
                     relation_type=None,
                     building_role=user.building_role,
                     display_mode=most_private_display_mode(
@@ -1208,10 +1219,11 @@ class PropertyService:
                         membership_id=m.id,
                         apartment_id=a.id,
                         apartment_number=a.number,
+                        apartment_kind=a.kind,
                         relation_type=m.relation_type,
                         display_label=format_author_badge(
                             full_name=user.full_name,
-                            apt_number=a.number,
+                            apartment=ObjectRef(a.kind, a.number),
                             relation_type=m.relation_type,
                             building_role=user.building_role,
                             display_mode=m.privacy_display_mode,
@@ -1337,7 +1349,10 @@ class PropertyService:
         if apartment is None:
             return None
         return ApartmentRefDTO(
-            apartment_id=apartment.id, building_id=apartment.building_id, number=apartment.number
+            apartment_id=apartment.id,
+            building_id=apartment.building_id,
+            kind=apartment.kind,
+            number=apartment.number,
         )
 
     # --- Internals ------------------------------------------------------------------------------
@@ -1367,6 +1382,7 @@ class PropertyService:
             membership_id=membership.id,
             apartment_id=apartment.id,
             apartment_number=apartment.number,
+            apartment_kind=apartment.kind,
             entrance=apartment.entrance,
             floor=apartment.floor,
             relation_type=membership.relation_type,
@@ -1387,7 +1403,7 @@ class PropertyService:
     ) -> AuthorBadgeDTO:
         return format_author_badge(
             full_name=full_name,
-            apt_number=membership.apartment_number,
+            apartment=ObjectRef(membership.apartment_kind, membership.apartment_number),
             relation_type=membership.relation_type,
             building_role=building_role,
             display_mode=membership.privacy_display_mode,
@@ -1401,6 +1417,7 @@ def _apartment_summary(apartment: Apartment, residents: list[CardResident]) -> A
     return ApartmentSummary(
         apartment_id=apartment.id,
         apartment_number=apartment.number,
+        apartment_kind=apartment.kind,
         entrance=apartment.entrance,
         floor=apartment.floor,
         area_m2=apartment.area_m2,

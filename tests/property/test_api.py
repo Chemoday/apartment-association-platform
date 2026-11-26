@@ -78,6 +78,7 @@ async def test_me_returns_role_memberships_permissions_and_masked_preview(
         "membership_id": str(demo.owner_14_membership.id),
         "apartment_id": str(demo.apt_14.id),
         "apartment_number": "14",
+        "apartment_kind": "APARTMENT",
         "entrance": 2,
         "floor": 4,
         "relation_type": "OWNER",

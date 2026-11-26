@@ -113,6 +113,7 @@ class ConnectionService:
         return ConnectionItem(
             apartment_id=row.apartment_id,
             apartment_number=row.number,
+            apartment_kind=row.kind,
             entrance=row.entrance,
             status=connection_status(
                 owners=row.owners,

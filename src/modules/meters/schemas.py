@@ -23,7 +23,7 @@ from pydantic import (
 )
 
 from src.core.validation import optional_safe_text
-from src.modules.property.schemas import AuthorBadgeDTO
+from src.modules.property.schemas import AuthorBadgeDTO, ObjectKind
 
 
 class ResourceType(StrEnum):
@@ -235,6 +235,7 @@ class ApartmentReadingsResponse(BaseModel):
 
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     periods: list[PeriodDTO]  # newest first
     meters: list[ApartmentMeterHistory]
 
@@ -271,6 +272,7 @@ class ApartmentConsumptionResponse(BaseModel):
 
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     periods: list[PeriodDTO]  # oldest first
     resources: list[ApartmentConsumptionSeries]
 
@@ -332,6 +334,7 @@ class DashboardMeter(BaseModel):
 class DashboardApartment(BaseModel):
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     can_submit_readings: bool
     meters: list[DashboardMeter]
 
@@ -357,6 +360,7 @@ class MatrixMeter(BaseModel):
 class MatrixApartment(BaseModel):
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     entrance: int | None
     floor: int | None
     status: SubmissionStatus

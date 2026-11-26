@@ -155,6 +155,7 @@ class ApartmentMembershipDTO(BaseModel):
     membership_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     entrance: int | None
     floor: int | None
     relation_type: RelationType
@@ -253,11 +254,10 @@ def first_object_in(user: CurrentUserDTO, target: TargetDTO | None) -> uuid.UUID
     none: the author's first membership (in list order) inside `target`, or the first of all
     without one; None without such a membership. Never an error."""
     for membership in user.memberships:
-        # Memberships carry no kind yet: every object is an apartment.
         if target is None or apartment_in_target(
             target,
             apartment_id=membership.apartment_id,
-            kind=ObjectKind.APARTMENT,
+            kind=membership.apartment_kind,
             entrance=membership.entrance,
         ):
             return membership.apartment_id
@@ -440,6 +440,7 @@ class ApartmentSummary(BaseModel):
 
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     entrance: int | None
     floor: int | None
     area_m2: AreaAmount | None
@@ -483,6 +484,7 @@ class ApartmentRefDTO(BaseModel):
 
     apartment_id: uuid.UUID
     building_id: uuid.UUID
+    kind: ObjectKind
     number: str
 
 
@@ -492,6 +494,7 @@ class ConnectionRowDTO(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apartment_id: uuid.UUID
+    kind: ObjectKind
     number: str
     entrance: int | None
     on_paper: bool
@@ -529,6 +532,7 @@ class PersonMembershipDTO(BaseModel):
     membership_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
+    apartment_kind: ObjectKind
     relation_type: RelationType
     display_label: str
     since: datetime
