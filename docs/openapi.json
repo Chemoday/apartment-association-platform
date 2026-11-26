@@ -14631,6 +14631,27 @@
         "title": "DeadlineUpdate",
         "description": "Body of PATCH /governance/polls/{id}: extend an open poll."
       },
+      "DemoObjectView": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ObjectKind"
+          },
+          "number": {
+            "type": "string",
+            "title": "Number"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/RelationType"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "number",
+          "relation"
+        ],
+        "title": "DemoObjectView"
+      },
       "DemoUserView": {
         "properties": {
           "user_id": {
@@ -14665,6 +14686,13 @@
                 "type": "null"
               }
             ]
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/DemoObjectView"
+            },
+            "type": "array",
+            "title": "Objects"
           }
         },
         "type": "object",
@@ -14673,7 +14701,8 @@
           "label",
           "building_role",
           "apartment_number",
-          "relation_type"
+          "relation_type",
+          "objects"
         ],
         "title": "DemoUserView"
       },

@@ -4,7 +4,9 @@ Run by entrypoint.sh after the migrations:  python -m src.core.seed
 It only seeds when SEED_DEMO_DATA is true, only into an EMPTY database (no building yet) and never
 into one whose installation marker says it is real (src/core/instance/), so it never mixes demo
 residents into a real association. Running it again, or from two containers at
-once (an advisory lock serializes them), changes nothing.
+once (an advisory lock serializes them), seeds nothing twice. What was added to the demo later
+(the parking spaces and the garage of epic E14) comes from src/core/seed_completion.py on every
+run: it adds only what is missing, also to a demo building seeded before it.
 
 Like models_registry.py this is a composition root: it writes the models of several modules
 directly, because no module offers "create a building with history" as a service. It publishes no
@@ -132,11 +134,42 @@ class DemoUserKey(StrEnum):
     OWNER_14 = "owner_14"
     OWNER_1 = "owner_1"
     TENANT_2 = "tenant_2"
+    OWNER_G12 = "owner_g12"
+    TENANT_P2 = "tenant_p2"
+
+
+@dataclass(frozen=True)
+class DemoObject:
+    """An object a demo user holds besides an apartment (epic E14), added by the completion."""
+
+    kind: ObjectKind
+    number: str
+    relation: RelationType
+    display_mode: DisplayMode = DisplayMode.APARTMENT_ONLY
+
+    @property
+    def ref(self) -> ObjectRef:
+        return ObjectRef(self.kind, self.number)
+
+    @property
+    def apartment_id(self) -> uuid.UUID:
+        return demo_object_id(self.ref)
+
+
+def demo_object_id(ref: ObjectRef) -> uuid.UUID:
+    """Apartments keep their first ids; an object of another kind has its kind in the name."""
+    if ref.kind == ObjectKind.APARTMENT:
+        return demo_id(f"apartment:{ref.number}")
+    return demo_id(f"apartment:{ref.kind.value}:{ref.number}")
 
 
 @dataclass(frozen=True)
 class DemoUser:
-    """A seeded user for the demo role switcher. Fictitious people; the label has no name."""
+    """A seeded user for the demo role switcher. Fictitious people; the label has no name.
+
+    `apartment_number` is the user's apartment, seeded with the building; `later_objects` are
+    added by the completion (src/core/seed_completion.py), and so is the whole user when
+    `added_later`."""
 
     key: DemoUserKey
     label: str
@@ -145,10 +178,32 @@ class DemoUser:
     apartment_number: str | None = None
     relation_type: RelationType | None = None
     display_mode: DisplayMode = DisplayMode.APARTMENT_ONLY
+    later_objects: tuple[DemoObject, ...] = ()
+    added_later: bool = False
 
     @property
     def user_id(self) -> uuid.UUID:
         return demo_id(f"user:{self.key.value}")
+
+    @property
+    def objects(self) -> tuple[DemoObject, ...]:
+        """Every object the user holds in the demo, in the order of objects (apartments first)."""
+        apartment = ()
+        if self.apartment_number is not None and self.relation_type is not None:
+            apartment = (
+                DemoObject(
+                    ObjectKind.APARTMENT,
+                    self.apartment_number,
+                    self.relation_type,
+                    self.display_mode,
+                ),
+            )
+        return apartment + self.later_objects
+
+    @property
+    def phone(self) -> str:
+        """E.164 (docs/API.md section 0); new demo users are appended, so the numbers stay."""
+        return f"+3725000{DEMO_USERS.index(self) + 1:04d}"
 
     @property
     def email(self) -> str:
@@ -174,6 +229,8 @@ DEMO_USERS: tuple[DemoUser, ...] = (
         "Ivan Petrov",
         "14",
         RelationType.OWNER,
+        # One person, two objects, two badges that are not linked (Apt. 14 and P1).
+        later_objects=(DemoObject(ObjectKind.PARKING, "1", RelationType.OWNER),),
     ),
     DemoUser(
         DemoUserKey.OWNER_1,
@@ -192,6 +249,27 @@ DEMO_USERS: tuple[DemoUser, ...] = (
         "2",
         RelationType.TENANT,
         DisplayMode.INITIALS,
+    ),
+    # Epic E14: people without an apartment. Names nobody else has, since the e-mail is made
+    # from the name.
+    DemoUser(
+        DemoUserKey.OWNER_G12,
+        "Owner Garage 12",
+        BuildingRole.USER,
+        "Tiit Kuusk",
+        later_objects=(
+            DemoObject(ObjectKind.GARAGE, "12", RelationType.OWNER, DisplayMode.INITIALS),
+        ),
+        added_later=True,
+    ),
+    DemoUser(
+        DemoUserKey.TENANT_P2,
+        "Tenant Parking P-2",
+        BuildingRole.USER,
+        "Liis Rebane",
+        # Only a tenant of a parking space: the least access (docs/API.md section 1).
+        later_objects=(DemoObject(ObjectKind.PARKING, "P-2", RelationType.TENANT),),
+        added_later=True,
     ),
 )
 
@@ -274,7 +352,7 @@ class _Builder:
         self.add(building)
         for spec in _APARTMENTS:
             apartment = Apartment(
-                id=demo_id(f"apartment:{spec.number}"),
+                id=demo_object_id(_apt(spec.number)),
                 building_id=building.id,
                 number=spec.number,
                 entrance=spec.entrance,
@@ -283,13 +361,15 @@ class _Builder:
             )
             self.apartments[_apt(spec.number)] = apartment
             self.add(apartment)
-        for index, demo in enumerate(DEMO_USERS, start=1):
+        for demo in DEMO_USERS:
+            if demo.added_later:
+                continue  # src/core/seed_completion.py
             user = User(
                 id=demo.user_id,
                 building_id=building.id,
                 full_name=demo.full_name,
                 email=demo.email,
-                phone=f"+3725000{index:04d}",  # E.164 (docs/API.md section 0)
+                phone=demo.phone,
                 building_role=demo.building_role,
             )
             self.users[demo.key] = user
@@ -842,25 +922,31 @@ class _Builder:
 
 
 async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> bool:
-    """Add the demo building to an empty database. Returns False when nothing was done.
+    """Add the demo building to an empty database, then complete it (src/core/seed_completion.py;
+    also an existing demo building). Returns False when the building was not seeded now.
 
     The caller commits (use `transaction(session)`).
     """
+    # A function-level import: the completion builds on the specs of this module.
+    from src.core.seed_completion import complete_demo_building
+
     await session.execute(select(func.pg_advisory_xact_lock(SEED_LOCK_KEY)))
     if await is_real_installation(session):
         # The marker says a real association lives here (src/core/instance/): never seed it.
         logger.info("seed_skipped", reason="real_installation")
         return False
+    now = now or datetime.now(UTC)
     if await session.scalar(select(Building.id).limit(1)) is not None:
         demo = await session.get(Building, DEMO_BUILDING_ID)
         if demo is not None and demo.registry_code is None:
             # Seeded before the registry code existed (migration 004): complete the demo building.
             demo.registry_code, demo.address = DEMO_REGISTRY_CODE, DEMO_ADDRESS
             logger.info("seed_demo_building_completed")
+        if demo is not None:
+            await complete_demo_building(session, now)
         logger.info("seed_skipped", reason="already_seeded" if demo else "not_empty")
         return False
 
-    now = now or datetime.now(UTC)
     builder = _Builder(session)
     building = builder.building()
     apartment_meters, masters = builder.meters(building)
@@ -915,6 +1001,7 @@ async def seed_demo_data(session: AsyncSession, now: datetime | None = None) -> 
     builder.issues(building, now)
     builder.maintenance(building, now)
     await builder.insert()
+    await complete_demo_building(session, now)
     logger.info(
         "seed_completed",
         apartments=len(builder.apartments),
