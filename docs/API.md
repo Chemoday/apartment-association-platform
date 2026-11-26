@@ -84,7 +84,7 @@ An "apartment" of the API is an object of ownership of any kind: `APARTMENT`, `P
 - **`entrance`, `floor` and `area_m2` may be `null`** wherever an object is returned. An `APARTMENT` always has all three; another kind never has an entrance, and its floor (may be negative: an underground parking is floor -1) and its area are optional.
 - **Order:** apartments, parking spaces, garages; then entrance (none last) and the number in natural order by code point (`2`, `10`, `14`, `14A`, `14a`).
 - **Texts** of notifications and e-mails name the object by kind in the recipient's language ("garage 12"), never "apartment G12".
-- No parking space or garage exists before the frontend handles the kinds: the demo gets them last (epic E14, PR 5). Until then the demo user switcher (`GET /demo/users`, section 5) keeps `apartment_number` alone; it gains the objects of each user with their kinds in PR 5.
+- The demo building has two parking spaces and a garage (section 5, epic E14 task K6), and the demo user switcher (`GET /demo/users`) lists the objects of each user with their kinds.
 
 ---
 
@@ -1158,15 +1158,21 @@ Further moderation (authors deleting their own posts and comments, reports by re
 The users of the demo role switcher. **No authentication**, because the switcher needs the list before anyone acts as a user. Only while `DEMO_MODE_ENABLED=true`; otherwise `404 NOT_FOUND`, like an unknown route.
 ```json
 [
-  { "user_id": "uuid", "label": "Owner Apt 14", "building_role": "USER", "apartment_number": "14", "relation_type": "OWNER" }
+  { "user_id": "uuid", "label": "Owner Apt 14", "building_role": "USER", "apartment_number": "14", "relation_type": "OWNER",
+    "objects": [ { "kind": "APARTMENT", "number": "14", "relation": "OWNER" }, { "kind": "PARKING", "number": "1", "relation": "OWNER" } ] },
+  { "user_id": "uuid", "label": "Owner Garage 12", "building_role": "USER", "apartment_number": null, "relation_type": null,
+    "objects": [ { "kind": "GARAGE", "number": "12", "relation": "OWNER" } ] }
 ]
 ```
 - Send `user_id` as `X-Demo-User-Id` to act as that user.
+- `objects` (epic E14): what the user holds in the demo building, each with its `kind` (`APARTMENT`, `PARKING`, `GARAGE`), `number` and `relation` (a `RelationType`: `OWNER`, `TENANT`, `RESIDENT`), in the order of objects; empty for the chairman and the accountant. `apartment_number` and `relation_type` name the user's apartment only (kind `APARTMENT`) and are `null` for a user without one, so a client that reads them alone never shows `12` as Apt. 12. These are the objects the demo seeds; the public demo is shared (section "Demo building"), so a membership may have ended since, or never have been added (the completion skips an inactive user).
 - Lists only the seeded demo users that exist and are active (an empty list on an instance without demo data). No names, emails or phones.
 - The ids are fixed (the same on every instance), but clients should read them from this endpoint.
 
 ### Demo building "KÜ Sõpruse 12"
-Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker and the public demo), and only into an **empty** database: an instance that already has a building is never touched, and a restart changes nothing.
+Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker and the public demo), and only into an **empty** database: an instance that already has another building is never touched, and a restart seeds nothing twice.
+
+**The completion of the demo building** (epic E14, task K6): on every start an existing demo building gets what was added to the demo later (the parking spaces, the garage and their people and posts below), and only what is missing: nothing is duplicated, and nothing the users changed is undone (a deleted topic stays deleted, a resolved emergency resolved, a closed poll closed, an ended membership ended). It skips a step whose demo user is inactive (a closed account) or whose e-mail another account has taken, never changes the electorate of a poll that exists, and never stops the start-up: an error is logged as `seed_demo_completion_failed` and the rest of the demo stays as it was. It never runs on a real installation.
 
 | Label | Role | Apartment | Privacy mode | Shown in the forum as |
 | :--- | :--- | :--- | :--- | :--- |
@@ -1176,12 +1182,17 @@ Seeded at startup by `src/core/seed.py` when `SEED_DEMO_DATA=true` (local Docker
 | Owner Apt 14 | `USER` | 14, owner | `APARTMENT_ONLY` | `Apt. 14` (`OWNER`) |
 | Owner Apt 1 | `USER` | 1, owner | `FULL_NAME` | `Kati Mets (Apt. 1)` (`OWNER`) |
 | Tenant Apt 2 | `USER` | 2, tenant | `INITIALS` | `M. T. (Apt. 2)` (`RESIDENT`) |
+| Owner Garage 12 | `USER` | garage 12, owner (no apartment) | `INITIALS` | `T. K. (G12)` (`OWNER`) |
+| Tenant Parking P-2 | `USER` | parking space P-2, tenant (no apartment) | `APARTMENT_ONLY` | `P-2` (`RESIDENT`) |
+
+The owner of Apt 14 also owns parking space `1` (`APARTMENT_ONLY` on both): one person, two objects and two badges, `Apt. 14` and `P1`, that are not linked.
 
 - **Association:** `KÜ Sõpruse 12`, registry code `80123456`, `Sõpruse pst 12, Kristiine, 10615 Tallinn`. An instance seeded before the registry code existed gets the code and the address on its next start (only the demo building, only while its `registry_code` is empty).
-- **Building:** entrance 1 has apartments 1, 2, 3; entrance 2 has 13, 14, 15. Apartments 3 and 13 have no app users. Every apartment has a cold and a hot water meter; the basement has a cold and a hot water master meter.
+- **Building:** entrance 1 has apartments 1, 2, 3; entrance 2 has 13, 14, 15. Apartments 3 and 13 have no app users. Every apartment has a cold and a hot water meter; the basement has a cold and a hot water master meter. Besides the apartments (epic E14): parking space `1` (`P1`, no floor, no area; the same number as Apt 1 on purpose), parking space `P-2` (floor -1, no area) and garage `12` (`G12`, 18.50 m², no floor), none with an entrance. The parking spaces have no meters; the garage has an electricity meter (kWh, limit 1000 per month) with readings in the three locked months (of its owner, or typed in by the chairman when the owner's account is missing), and none yet in October.
 - **History:** `2026-07`, `2026-08`, `2026-09` are `LOCKED` with readings for every meter. Readings of apartments without app users were entered by the chairman (`ADMIN_OVERRIDE`); Apt 13 in `2026-08` is `AUTO_ESTIMATED`. The master meters show a small loss over the apartments. Apt 14's cold water reading of `2026-09` was corrected once, so its history has two entries.
 - **October (`2026-10`, `OPEN_FOR_RESIDENTS`):** Apt 1 submitted both meters and Apt 2 its cold water. Apt 15's hot water is a confirmed anomaly (31 m³, a leaking tap). **Apt 14 has submitted nothing**, so the demo can start there; a normal value is its previous value plus about 4.8 m³ (cold) or 2.2 m³ (hot). A delta above 3 × its 3-month average (about 14.4 m³ cold, 6.5 m³ hot) or above the meter limit (25 / 15 m³) triggers the two popups.
 - **Communication:** an active `EMERGENCY` (hot water off) targeted at entrance 2, so Apt 14 sees the banner and Apt 2 does not; an `OFFICIAL_NOTICE` without comments; two forum topics with comments from several residents; an `APARTMENT_THREAD` from the chairman to Apt 14 with the owner's reply (the board and Apt 14 see it, Apt 2 does not); a `BOARD_TOPIC` about the keys with a reply of the board member (only the chairman and the board see it, by name). Polls: an open poll about the Saturday of the spring clean-up (one answer per apartment, all residents), answered by Apt 1. Every demo membership starts on 2024-06-01.
+- **By kind** (epic E14): an `OFFICIAL_NOTICE` to the garages (`KINDS` `GARAGE`, the gate code changes on Friday: the owner of G12 sees it, the owner of Apt 14 does not); an `OFFICIAL_NOTICE` to everything (`ALL_OBJECTS`, the yard is closed on Saturday for asphalt work: everyone sees it, the owner of G12 and the tenant of P-2 too); an active `EMERGENCY` to the parking spaces (`KINDS` `PARKING`, the gate is stuck: the banner shows for the owner of Apt 14 and the tenant of P-2, not for the owner of G12); a `FORUM_TOPIC` of the board member to the parking spaces and the garages (a resident may address only the kinds they hold, section 4), with comments of the owner of Apt 14 signed `P1` and of the owner of G12 signed `T. K. (G12)`; an open poll to the parking spaces about the colour of the lines (one answer per object, all residents, nobody has answered yet): the owner of Apt 14 answers for `P1`, the tenant of P-2 for `P-2`. The clean-up poll stays a poll of the apartments (the whole building), so the owner of G12 neither sees nor answers it. The tenant of P-2 holds no shared access: no documents, no issue tracker, no chat.
 - Seeding publishes and stores no domain events, so no notifications are sent, now or later.
 
 ## 6. Notifications (`notifications`), epic E1

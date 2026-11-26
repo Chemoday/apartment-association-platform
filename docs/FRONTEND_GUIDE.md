@@ -39,7 +39,10 @@ Repositories, commits and the way a frontend change reaches dev (the frontend sy
 There is **no login endpoint** in the MVP (sign-in is planned in epic E7, section 12). The UI acts as a seeded user:
 
 1. `GET /api/v1/demo/users` (no auth) returns the role switcher entries:
-   `user_id`, `label` ("Owner Apt 14"), `building_role`, `apartment_number`, `relation_type`.
+   `user_id`, `label` ("Owner Apt 14"), `building_role`, `apartment_number`, `relation_type`,
+   and `objects` (`kind`, `number`, `relation`: what the user holds, epic E14). Show the objects
+   by kind ("Owner Apt 14" also owns parking space 1); `apartment_number` is `null` for a user
+   without an apartment (the owner of garage 12), never read it as an apartment.
 2. Send the chosen id as **`X-Demo-User-Id: <user_id>`** on every `/api/v1` request.
 3. Keep the choice client-side (e.g. `localStorage`); default to "Owner Apt 14", where the demo
    story starts.
