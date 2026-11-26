@@ -13739,6 +13739,7 @@
           "INVALID_ROW",
           "INVALID_EMAIL",
           "INVALID_LOCALE",
+          "INVALID_KIND",
           "APARTMENT_NOT_FOUND",
           "DUPLICATE_IN_LIST",
           "ALREADY_PENDING",

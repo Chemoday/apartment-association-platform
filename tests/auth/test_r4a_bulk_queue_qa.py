@@ -142,7 +142,8 @@ def test_spaces_and_empty_cells_at_the_end_are_ignored_but_a_gap_in_between_is_n
     rows = parse_bulk_list(text, max_rows=6, offered_locales=OFFERED)
     assert [(r.apartment_number, r.email, r.locale, r.outcome) for r in rows] == [
         ("14", "a@example.com", "en", None),
-        ("14", "b@example.com", None, BulkRowOutcome.INVALID_ROW),  # four cells
+        # Four cells: the fourth is the kind (epic E14), and "en" is none.
+        ("14", "b@example.com", None, BulkRowOutcome.INVALID_KIND),
         ("14", None, None, BulkRowOutcome.INVALID_ROW),
         (None, None, None, BulkRowOutcome.INVALID_ROW),
     ]
@@ -189,7 +190,7 @@ async def test_outcomes_follow_the_documented_order(client: AsyncClient, world: 
         "99;a@example.com;xx\n"  # bad language, unknown apartment: INVALID_LOCALE
         "99;a@example.com\n"
         "014;a@example.com\n"  # the number must match exactly
-        "99;a@example.com;en;extra\n"
+        "99;a@example.com;en;extra\n"  # a fourth cell that is not a kind
         "14;a@nodot\n"
     )
     body = (await preview(client, as_(world, world.chairman), text)).json()
@@ -198,7 +199,7 @@ async def test_outcomes_follow_the_documented_order(client: AsyncClient, world: 
         "INVALID_LOCALE",
         "APARTMENT_NOT_FOUND",
         "APARTMENT_NOT_FOUND",
-        "INVALID_ROW",
+        "INVALID_KIND",
         "INVALID_EMAIL",
     ]
     assert [row["locale"] for row in body["rows"][:2]] == ["xx", "xx"]

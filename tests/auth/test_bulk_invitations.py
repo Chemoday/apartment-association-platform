@@ -115,7 +115,9 @@ def test_a_first_line_with_an_e_mail_is_a_row_not_a_header() -> None:
 
 
 def test_wrong_rows_are_reported_not_dropped() -> None:
-    text = "14\n2;not-an-e-mail\n21;x@example.com;ru\n14;y@example.com;et;extra\n;z@example.com\n"
+    text = (
+        "14\n2;not-an-e-mail\n21;x@example.com;ru\n14;y@example.com;et;extra;more\n;z@example.com\n"
+    )
     rows = parse_bulk_list(text, max_rows=6, offered_locales=OFFERED)
     assert [r.outcome for r in rows] == [
         BulkRowOutcome.INVALID_ROW,

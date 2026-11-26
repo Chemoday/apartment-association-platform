@@ -80,7 +80,6 @@ from src.modules.property.schemas import (
     CurrentUserDTO,
     DisplayMode,
     Locale,
-    ObjectKind,
     ObjectRef,
     RelationType,
 )
@@ -98,6 +97,12 @@ _RELATION = {InvitationKind.OWNER: RelationType.OWNER, InvitationKind.TENANT: Re
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _ref(row: ParsedRow) -> ObjectRef:
+    """The object a valid bulk row names (its kind is known once the row has no outcome)."""
+    assert row.apartment_number is not None and row.apartment_kind is not None
+    return ObjectRef(row.apartment_kind, row.apartment_number)
 
 
 def delivery_of(send_due_at: datetime | None, send_failures: int) -> InvitationDelivery:
@@ -365,9 +370,8 @@ class InvitationService:
         if send:
             await self.properties.lock_people(caller.building_id)  # rows and limit stay put
         objects = await self.properties.list_apartments(caller.building_id)
-        # The list names apartments only until it takes a kind (epic E14, K4); the limit counts
-        # objects of every kind.
-        apartments = {a.number: a.id for a in objects if a.kind == ObjectKind.APARTMENT}
+        # A number names an object only with its kind (epic E14); the limit counts every object.
+        apartments = {ObjectRef(a.kind, a.number): a.id for a in objects}
         limit = BULK_INVITATIONS_PER_APARTMENT_PER_DAY * len(objects)
         try:
             parsed = parse_bulk_list(
@@ -387,7 +391,7 @@ class InvitationService:
                     caller,
                     kind=InvitationKind.OWNER,
                     email=row.email,
-                    apartment_id=apartments[row.apartment_number],
+                    apartment_id=apartments[_ref(row)],
                     building_role=None,
                     locale=Locale(row.locale) if row.locale else None,
                     now=now,
@@ -400,7 +404,7 @@ class InvitationService:
             BulkInvitationRow(
                 line=row.line,
                 apartment_number=row.apartment_number,
-                apartment_kind=ObjectKind.APARTMENT,
+                apartment_kind=row.apartment_kind,
                 email=row.email,
                 locale=row.locale,
                 outcome=outcome or done,
@@ -416,7 +420,7 @@ class InvitationService:
         self,
         caller: CurrentUserDTO,
         parsed: list[ParsedRow],
-        apartments: dict[str, uuid.UUID],
+        apartments: dict[ObjectRef, uuid.UUID],
         now: datetime,
     ) -> list[BulkRowOutcome | None]:
         """The outcome of each row that is not READY, in the order of the contract."""
@@ -448,7 +452,7 @@ class InvitationService:
                 outcomes.append(row.outcome)
                 continue
             assert row.email is not None and row.apartment_number is not None
-            apartment_id = apartments.get(row.apartment_number)
+            apartment_id = apartments.get(_ref(row))
             if apartment_id is None:
                 outcomes.append(BulkRowOutcome.APARTMENT_NOT_FOUND)
             elif (row.email, apartment_id) in seen:
