@@ -124,6 +124,8 @@ The payload never contains the raw `full_name`, `email` or `phone`, not even the
 
 The payload also has `"locale": "et" | "ru" | "en" | null`: the language of notifications sent outside the app (`null` = the instance default). It is not personal data.
 
+`"shared_access": true | false` (epic E14): whether the caller's memberships open the shared spaces of the association, the documents (section 13) and the issue tracker (section 10). Every membership does, except a `TENANT` of a `PARKING` or a `GARAGE` (the least access: what is addressed to their object, their kind or everything, and the conversation with the board). It counts memberships only; the staff keep what their role gives (an accountant keeps the documents). The client hides what such a person cannot open, and handles `403` anyway.
+
 Ended memberships are not listed. Memberships are in the order of objects (section 0, "Objects of several kinds": apartments first, then entrance and the number in natural order: `2`, `10`, `14`, `14A`); `entrance` and `floor` are `null` where the object has none. The top-level `privacy_display_mode` is the most private mode across the memberships (`APARTMENT_ONLY` when there are none); it is the mode used when the user acts without an apartment context. Only memberships of apartments in the user's own building are returned.
 
 ### `GET /api/v1/property/building`
@@ -2645,8 +2647,10 @@ duplicates, the action log), in the same section; task I3 the notifications (sec
 Every endpoint needs a signed-in user.
 
 ### Who sees the tracker
-- Every active user with an active membership in the building, the chairman and the board. An
-  accountant (or anyone else) without an apartment: `403 FORBIDDEN` on every endpoint.
+- Every active user whose memberships give shared access (`GET /property/me` `shared_access`: an
+  owner of any object, any member of an apartment; not a tenant of a parking space or a garage
+  only), the chairman and the board, by their role. An accountant (or anyone else) without such a
+  membership: `403 FORBIDDEN` on every endpoint.
 - Seen: every open issue, and ended ones (`RESOLVED`, `DUPLICATE`, `DECLINED`) for 30 days after
   `ended_at`. A `WITHDRAWN` issue only by its reporter and the board, in lists also for 30 days;
   by its link (`GET /issues/{id}`) they open it at any age. The board also lists older ended
@@ -2718,7 +2722,8 @@ Every endpoint needs a signed-in user.
 ### `GET /api/v1/issues/form`
 What the report form needs: `{"urgent_enabled": false, "apartment_ids": ["uuid"], "entrances": [1, 2]}`.
 `urgent_enabled` is the chairman's setting `issues.urgent_enabled` (section 9); `apartment_ids`
-the caller's objects in the building (choose one when there are several); `entrances` the
+the caller's objects in the building that open the tracker (not a rented parking space or garage;
+choose one when there are several); `entrances` the
 building's entrances (parking spaces and garages have none).
 
 ### `POST /api/v1/issues`
@@ -2737,8 +2742,8 @@ Reports an issue; `201` with the `IssueView`. The reporter follows it from the s
 - `title` 1..120, `description` 0..2000 (optional), `place` 1..200 characters; free-text rules of
   section 4. `urgent` (default `false`) only while `issues.urgent_enabled` is on, else
   `422 VALIDATION_ERROR` (`loc` `["body", "urgent"]`).
-- `apartment_id`: the object the report comes from. May be omitted (or `null`) when the caller
-  has exactly one object, or several of which exactly one is of kind `APARTMENT` (then that one);
+- `apartment_id`: the object the report comes from, one of `GET /issues/form` `apartment_ids`.
+  May be omitted (or `null`) when the caller has exactly one such object, or several of which exactly one is of kind `APARTMENT` (then that one);
   required otherwise (`422 VALIDATION_ERROR`); must be the caller's own, else
   `422 INVALID_AUTHOR_APARTMENT`. The chairman and the board report without an
   apartment when they send `"apartment_id": null` explicitly (or have none); then the report
@@ -2893,7 +2898,6 @@ time zone (`INSTANCE_TIMEZONE`).
     "target_entrance": null,
     "target_apartment_ids": null,
     "target_kinds": null,
-  "target_kinds": null,
     "comments_enabled": false
   },
   "current": {
@@ -3209,14 +3213,14 @@ and errors shared by every upload: section 12.*
 ### Who sees and who does what
 | Audience | Who sees it | Who may upload into it |
 | :--- | :--- | :--- |
-| `EVERYONE` | every resident of the building (an active membership), the chairman, the board, the accountant | the chairman, the board |
+| `EVERYONE` | every member of the association with shared access (`GET /property/me` `shared_access`: an owner of any object, any member of an apartment), the chairman, the board, the accountant | the chairman, the board |
 | `BOARD_AND_ACCOUNTANT` | the chairman, the board, the accountant | the chairman, the board, the accountant |
 | `BOARD` | the chairman, the board | the chairman, the board |
 
 - Editing the title, category, audience or date: the chairman and the board.
 - Deleting: **only the chairman**. The document disappears at once; its file is erased from the
   server after 14 days.
-- Anyone without access to the module (no active membership and no staff role): `403 FORBIDDEN`.
+- Anyone without access to the module (no membership with shared access and no staff role; a tenant of a parking space or a garage only): `403 FORBIDDEN`.
   A document the caller may not see, of another building or deleted: `404 DOCUMENT_NOT_FOUND`.
 - Documents are kept until the chairman deletes them (in demo mode about a day at most: a
   document whose file expired disappears from the list).
@@ -3306,10 +3310,13 @@ Returns the `DocumentView`.
 One short-lived chat per building, for residents to coordinate when something happens (a leak,
 smoke, a power cut). Owner decisions of 2026-11-14/15 (issue
 [#142](https://github.com/Chemoday/apartment-association-platform/issues/142)):
-- **Who takes part:** every active member of an apartment of the building (tenants included) and
-  the chairman and the board. Anyone else (an accountant without an apartment) does not: `403
-  FORBIDDEN` on the message endpoints; `GET /api/v1/chat` still answers, with
-  `can_take_part: false`.
+- **Who takes part:** the chat is the room of the apartments (epic E14): every active member of an
+  apartment of the building (tenants included), and the chairman and the board by their role.
+  Anyone else (an owner or a tenant of a parking space or a garage without an apartment, an
+  accountant without an apartment) does not: `403 FORBIDDEN` on the message endpoints;
+  `GET /api/v1/chat` still answers, with `can_take_part: false`. A message is signed by the
+  author's first apartment; an `author_apartment_id` that is not one of the author's apartments
+  is `422 INVALID_AUTHOR_APARTMENT`.
 - **Messages live 2 hours** and are then deleted for good. They are never edited or deleted by
   hand; nobody moderates them.
 - **The chairman's switch is the only control:** the building setting `chat.enabled` (section 9),

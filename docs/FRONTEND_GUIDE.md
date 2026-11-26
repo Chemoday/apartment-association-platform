@@ -280,6 +280,12 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   instead of "entrance 0" or "NaN m2"; a floor may be negative. Badge labels (`P1`, `G12`) are
   text from the backend. Notification `params` of `APARTMENT_MESSAGE*` and
   `JOIN_REQUEST_SUBMITTED` have `apartment_kind` (absent in old rows: an apartment).
+- **`shared_access`** of `GET /property/me` (epic E14): it counts memberships only, the role
+  decides first. Hide the documents when it is false and the `building_role` is `USER` (staff
+  see them by their role), and the issue tracker when it is false and the role is `USER` or
+  `ACCOUNTANT` (the chairman and the board see it by their role); handle `403` anyway. The
+  chat is for the people of the apartments and the board: hide it for a person with no
+  membership of `apartment_kind` `APARTMENT` and no board role.
 - **Privacy mode selector:** `PATCH /property/memberships/{membership_id}/privacy` per apartment;
   the response's `preview_badge` is exactly what neighbours will see. Badges are resolved on every
   read, so old posts change too after the switch: reload the feed.
