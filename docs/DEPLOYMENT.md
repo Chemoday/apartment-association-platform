@@ -265,6 +265,12 @@ association stores files.
   which protects a manual `alembic downgrade` only. Until then an automatic rollback stays safe:
   no object of another kind exists.
 
+- **Rolling back past epic E14 K2** (migration 038, targets by kind): an older release cannot
+  load a post or a poll with `target_scope` `KINDS` or `ALL_OBJECTS` (an unknown enum value), so
+  the feed and the poll list fail for everyone once such a row exists. The downgrade of 038
+  refuses while such rows exist (posts, polls and maintenance notices); deploys never run a
+  downgrade, so after the first such post a failed deploy is fixed forward.
+
 ## Host configuration as code
 
 A VPS is set up and changed only from the repository, so that a new one can be built without

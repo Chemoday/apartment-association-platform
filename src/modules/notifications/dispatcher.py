@@ -418,11 +418,18 @@ class Dispatcher:
                 return skip("TASK_MOVED")  # the move publishes or reminds again on its own
             params = {**row.params, "title": ref.title}
         elif row.subject_type == SubjectType.POST:
-            ref = await CommunicationService(session, properties).get_emergency_ref(row.subject_id)
+            communication = CommunicationService(session, properties)
+            ref = await communication.get_emergency_ref(row.subject_id)
             if ref is None:
                 return skip("SUBJECT_NOT_FOUND")
-            if row.event_type == NotificationEventType.EMERGENCY_PUBLISHED and not ref.is_active:
-                return skip("POST_RESOLVED")
+            if row.event_type == NotificationEventType.EMERGENCY_PUBLISHED:
+                if not ref.is_active:
+                    return skip("POST_RESOLVED")
+                # The alert's own text goes out: its target must still hold the person (who
+                # moved out of the target meanwhile, or lost the role, is not told).
+                user = await properties.get_current_user(row.user_id)
+                if user is None or not await communication.can_read_post(user, row.subject_id):
+                    return skip("SUBJECT_NOT_FOUND")
             title, body = ref.title, ref.body
 
         address = await self._address(session, properties, row)

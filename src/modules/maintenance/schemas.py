@@ -20,7 +20,7 @@ from pydantic import (
 from src.core.validation import optional_safe_text, safe_text
 from src.modules.communication.schemas import PostCategory, TargetApartmentIds
 from src.modules.communication.schemas import TitleText as NoticeTitleText
-from src.modules.property.schemas import AuthorBadgeDTO, TargetScope
+from src.modules.property.schemas import AuthorBadgeDTO, ObjectKind, TargetKinds, TargetScope
 
 TITLE_MAX_LENGTH = 120
 INSTRUCTIONS_MAX_LENGTH = 4000
@@ -97,6 +97,7 @@ class NoticeDraft(BaseModel):
     target_scope: TargetScope = TargetScope.ALL_BUILDING
     target_entrance: StrictInt | None = Field(default=None, ge=1, le=1000)
     target_apartment_ids: TargetApartmentIds = None
+    target_kinds: TargetKinds = None
     comments_enabled: StrictBool = False
 
 
@@ -168,6 +169,7 @@ class NoticeView(BaseModel):
     target_scope: TargetScope
     target_entrance: int | None
     target_apartment_ids: list[uuid.UUID] | None
+    target_kinds: list[ObjectKind] | None
     comments_enabled: bool
 
 

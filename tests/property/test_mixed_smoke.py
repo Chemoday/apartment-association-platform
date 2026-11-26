@@ -44,11 +44,22 @@ async def test_every_read_endpoint_answers_every_person_of_a_mixed_building(
     mixed = await create_mixed_building(db_session)
     await create_period(db_session, mixed.building)
     objects = [mixed.apt_1, mixed.apt_14, mixed.p_1, mixed.p_2, mixed.g_12, mixed.g_1, mixed.g_7]
-    for author, body in ((mixed.a, "From P1 or Apt 14"), (mixed.b, "From G12")):
+    content = [
+        (mixed.a, {"post_type": "FORUM_TOPIC", "title": "Hello", "body": "Hi"}),
+        (
+            mixed.chairman,
+            {"post_type": "OFFICIAL_NOTICE", "title": "Yard", "body": "Closed"}
+            | {"target_scope": "ALL_OBJECTS"},
+        ),
+        (
+            mixed.b,
+            {"post_type": "APARTMENT_THREAD", "title": "The gate", "body": "It squeaks."}
+            | {"target_scope": "APARTMENT_LIST", "target_apartment_ids": [str(mixed.g_12.id)]},
+        ),
+    ]
+    for author, post in content:
         published = await api_client.post(
-            "/api/v1/communication/posts",
-            json={"post_type": "FORUM_TOPIC", "title": "Hello", "body": body},
-            headers=_bearer(author),
+            "/api/v1/communication/posts", json=post, headers=_bearer(author)
         )
         assert published.status_code == 201, published.text
     paths = _read_paths(

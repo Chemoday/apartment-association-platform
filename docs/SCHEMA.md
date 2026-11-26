@@ -200,9 +200,10 @@ The daily quota of register calls of the installation (docs/API.md section 1).
 | `category` | `VARCHAR(50)` | `NOT NULL, DEFAULT 'GENERAL'` | Enum: `GENERAL`, `WATER_SHUTOFF`, `MAINTENANCE`, `MARKETPLACE` |
 | `title` | `VARCHAR(255)` | `NOT NULL` | Headline |
 | `body` | `TEXT` | `NOT NULL` | Content (the API caps it at 10000 characters) |
-| `target_scope` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'ALL_BUILDING'`| Enum: `ALL_BUILDING`, `ENTRANCE`, `APARTMENT_LIST` |
+| `target_scope` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'ALL_BUILDING'`| Enum: `ALL_BUILDING` (the apartments), `ENTRANCE`, `APARTMENT_LIST`, `ALL_OBJECTS` (every object), `KINDS` (epic E14, migration 038) |
 | `target_entrance` | `INTEGER` | `NULLABLE` | Populated if `target_scope == 'ENTRANCE'` |
 | `target_apartment_ids`| `JSONB` | `NULLABLE` | Non-empty array of apartment UUID strings if `target_scope == 'APARTMENT_LIST'` (SQL `NULL` otherwise, never JSON `null`) |
+| `target_kinds` | `JSONB` | `NULLABLE` | Non-empty array of kinds (`APARTMENT`, `PARKING`, `GARAGE`) if `target_scope == 'KINDS'` (SQL `NULL` otherwise; migration 038) |
 | `is_active` | `BOOLEAN` | `NOT NULL, DEFAULT TRUE` | For `EMERGENCY`: `TRUE` while the banner is active, `FALSE` once resolved. Always `TRUE` for other types |
 | `comments_enabled` | `BOOLEAN` | `NOT NULL, DEFAULT TRUE` | Board can disable comments on official notices. Always `TRUE` for `APARTMENT_THREAD` |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL, INDEX` | Creation timestamp |
@@ -241,8 +242,8 @@ The daily quota of register calls of the installation (docs/API.md section 1).
 
 **Integrity constraints of `comm_*` tables** (enforced by PostgreSQL, covered by `tests/core/test_migrations.py`):
 - Every enum column (`post_type`, `category`, `target_scope`) has a named `CHECK (… IN (…))`.
-- `ck_comm_posts_target_consistent`: `ALL_BUILDING` has neither entrance nor apartment list; `ENTRANCE` has an entrance and no list; `APARTMENT_LIST` has a non-empty JSON array of canonical lowercase UUID strings (checked with `jsonb_path_exists`) and no entrance. The list is tested with an explicit `IS NOT NULL`, because a CHECK whose result is `NULL` counts as passed. `target_entrance > 0`. Covered by `tests/communication/test_models.py`.
-- `ck_comm_posts_forum_whole_building`: a `FORUM_TOPIC` is always `ALL_BUILDING`; `ck_comm_posts_board_topic_whole_building`: so is a `BOARD_TOPIC` (its audience is the board, decided by the post type), and it has no author apartment. That its comments have no author apartment either is checked by the service only.
+- `ck_comm_posts_target_consistent`: `ALL_BUILDING` and `ALL_OBJECTS` have neither entrance nor apartment list nor kinds; `ENTRANCE` has an entrance only; `APARTMENT_LIST` has a non-empty JSON array of canonical lowercase UUID strings (checked with `jsonb_path_exists`) and no entrance or kinds; `KINDS` has a non-empty JSON array of known kinds (one unknown string would break every read of the row) and nothing else. The list is tested with an explicit `IS NOT NULL`, because a CHECK whose result is `NULL` counts as passed. `target_entrance > 0`. Covered by `tests/communication/test_models.py`.
+- `ck_comm_posts_forum_whole_building`: a `FORUM_TOPIC` is `ALL_BUILDING`, `ALL_OBJECTS` or `KINDS` (migration 038; the service keeps forum topics `ALL_BUILDING` until epic E14 K3); `ck_comm_posts_board_topic_whole_building`: so is a `BOARD_TOPIC` (its audience is the board, decided by the post type), and it has no author apartment. That its comments have no author apartment either is checked by the service only.
 - `ck_comm_posts_thread_one_apartment`: an `APARTMENT_THREAD` is `APARTMENT_LIST` with exactly one apartment (`NOT jsonb_path_exists(target_apartment_ids, '$[1]')`; the target check above already makes the list a non-empty array). `ck_comm_posts_thread_comments_enabled`: an `APARTMENT_THREAD` always takes comments.
 - `ck_comm_posts_activity_after_creation`: `last_activity_at >= created_at`.
 - Index `ix_comm_posts_building_type_activity (building_id, post_type, last_activity_at)` for the thread inbox.
@@ -580,7 +581,7 @@ Enums (each a named `CHECK (… IN (…))`):
 | `kind` | `VARCHAR(16)` | `NOT NULL` | Enum |
 | `title` | `VARCHAR(255)` | `NOT NULL` | Not blank |
 | `description` | `TEXT` | `NOT NULL, DEFAULT ''` | At most 5000 characters (API) |
-| `target_scope`, `target_entrance`, `target_apartment_ids` | as `comm_posts` | | The same target rules and the same consistency check (`ck_gov_polls_target_consistent`) |
+| `target_scope`, `target_entrance`, `target_apartment_ids`, `target_kinds` | as `comm_posts` | | The same target rules and the same consistency check (`ck_gov_polls_target_consistent`); `target_kinds` since migration 038 |
 | `eligibility` | `VARCHAR(16)` | `NOT NULL` | Enum |
 | `unit` | `VARCHAR(16)` | `NOT NULL` | Enum |
 | `status` | `VARCHAR(16)` | `NOT NULL, DEFAULT 'DRAFT'` | Enum |
@@ -791,6 +792,7 @@ Users are referenced by id only; names come from `PropertyService`.*
 | `notice_target_scope` | `VARCHAR(32)` | `NULLABLE` | Target as for `comm_posts`, the same consistency check |
 | `notice_target_entrance` | `INTEGER` | `NULLABLE` | |
 | `notice_target_apartment_ids` | `JSONB` | `NULLABLE` | |
+| `notice_target_kinds` | `JSONB` | `NULLABLE` | The kinds of a `KINDS` notice (migration 038), validated by `ck_maint_tasks_notice_target` as for posts |
 | `notice_comments_enabled` | `BOOLEAN` | `NULLABLE` | |
 | `created_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |
 | `updated_by_user_id` | `UUID` | `FK(core_users.id), NOT NULL` | |

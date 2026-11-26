@@ -81,7 +81,7 @@ async def test_a_forum_topic_without_an_object_is_signed_by_the_first_apartment(
     assert topic["author_badge"] == {"display_label": "Apt. 3", "role_badge": "RESIDENT"}
 
 
-async def test_a_comment_without_an_object_is_signed_by_the_first_apartment(
+async def test_a_comment_without_an_object_is_signed_by_the_first_apartment_in_the_target(
     api_client: AsyncClient, world: IssueWorld, two_homes: User
 ) -> None:
     notice = await created(
@@ -106,8 +106,9 @@ async def test_a_comment_without_an_object_is_signed_by_the_first_apartment(
         )
     )
 
-    # Today the default ignores the post's target: Apt 3 is in entrance 1, the notice is for 2.
-    assert comment["author_badge"] == {"display_label": "Apt. 3", "role_badge": "RESIDENT"}
+    # Since epic E14 K2 the default is the first object inside the post's target: the notice is
+    # for entrance 2, so Apt 14, not Apt 3 (entrance 1), which comes first in list order.
+    assert comment["author_badge"] == {"display_label": "Apt. 14", "role_badge": "OWNER"}
 
 
 async def test_a_chat_message_without_an_object_is_signed_by_the_first_apartment(

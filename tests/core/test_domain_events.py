@@ -228,6 +228,7 @@ def test_the_payload_holds_only_the_event_fields_and_no_text() -> None:
         "target_scope",
         "target_entrance",
         "target_apartment_ids",
+        "target_kinds",
         "published_by_user_id",
     }, "no titles, bodies or names; event_id and occurred_at live in their own columns"
 

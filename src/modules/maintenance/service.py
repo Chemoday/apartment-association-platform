@@ -66,7 +66,13 @@ from src.modules.maintenance.schemas import (
     YearReport,
 )
 from src.modules.maintenance.settings import OVERDUE_REMINDER_DAYS
-from src.modules.property.schemas import BuildingRole, CurrentUserDTO, TargetDTO, TargetScope
+from src.modules.property.schemas import (
+    BuildingRole,
+    CurrentUserDTO,
+    ObjectKind,
+    TargetDTO,
+    TargetScope,
+)
 from src.modules.property.service import PropertyService, get_property_service
 
 
@@ -622,8 +628,10 @@ class MaintenanceService:
         if task.notice_title is not None:
             scope = TargetScope(task.notice_target_scope)
             apartments = self._notice_apartments(task)
+            kinds = [ObjectKind(kind) for kind in task.notice_target_kinds or ()] or None
             problem = await communication.notice_target_problem(
-                task.building_id, TargetDTO.of(scope, task.notice_target_entrance, apartments)
+                task.building_id,
+                TargetDTO.of(scope, task.notice_target_entrance, apartments, kinds),
             )
             if problem is None:
                 planned = render(
@@ -639,6 +647,7 @@ class MaintenanceService:
                         target_scope=scope,
                         target_entrance=task.notice_target_entrance,
                         target_apartment_ids=apartments,
+                        target_kinds=kinds,
                         comments_enabled=bool(task.notice_comments_enabled),
                     ),
                     origin=PostOrigin.MAINTENANCE,
@@ -772,7 +781,12 @@ class MaintenanceService:
         communication = CommunicationService(self.session, self.property_service)
         if problem := await communication.notice_target_problem(
             user.building_id,
-            TargetDTO.of(notice.target_scope, notice.target_entrance, notice.target_apartment_ids),
+            TargetDTO.of(
+                notice.target_scope,
+                notice.target_entrance,
+                notice.target_apartment_ids,
+                notice.target_kinds,
+            ),
         ):
             message, extra = problem
             raise DomainError(
@@ -790,6 +804,11 @@ class MaintenanceService:
             None
             if notice is None or notice.target_apartment_ids is None
             else [str(apartment_id) for apartment_id in notice.target_apartment_ids]
+        )
+        task.notice_target_kinds = (
+            None
+            if notice is None or not notice.target_kinds
+            else [kind.value for kind in notice.target_kinds]
         )
         task.notice_comments_enabled = None if notice is None else notice.comments_enabled
 
@@ -999,6 +1018,11 @@ def _notice_view(task: Task) -> NoticeView | None:
             None
             if task.notice_target_apartment_ids is None
             else [uuid.UUID(value) for value in task.notice_target_apartment_ids]
+        ),
+        target_kinds=(
+            [ObjectKind(kind) for kind in task.notice_target_kinds]
+            if task.notice_target_kinds
+            else None
         ),
         comments_enabled=bool(task.notice_comments_enabled),
     )

@@ -246,6 +246,16 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
 
 ## 8. Emergencies and the forum
 
+- **Targets by kind** (epic E14, docs/API.md section 4): the board's choice of a target for
+  emergencies, notices, polls and maintenance notices offers "the whole building" (`ALL_BUILDING`,
+  the apartments only, and say that it leaves the parking spaces and garages out), "everything"
+  (`ALL_OBJECTS`), by kind (`KINDS` with `target_kinds`; offer only the kinds the building has,
+  `GET /property/building` `object_counts`), an entrance and a list of objects. Render the new
+  scopes wherever a target is shown (the feed, the banner, polls, a task's notice, and
+  `params.target_kinds` of `EMERGENCY_*` notifications). A resident's forum topic needs an
+  apartment (`403` otherwise): hide "new topic" for a person without one. A comment's author
+  object defaults to one inside the post's target, and an explicit one outside it is
+  `422 INVALID_AUTHOR_APARTMENT`: offer only objects inside the target.
 - **Banner:** `GET /communication/emergencies/active` returns the alerts that target the caller.
   Show the sticky red banner for items with `acknowledged_at: null`; "Acknowledge" is
   `POST /emergencies/{id}/acknowledge` (idempotent, per user). Poll the endpoint (e.g. every
@@ -270,6 +280,12 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   instead of "entrance 0" or "NaN m2"; a floor may be negative. Badge labels (`P1`, `G12`) are
   text from the backend. Notification `params` of `APARTMENT_MESSAGE*` and
   `JOIN_REQUEST_SUBMITTED` have `apartment_kind` (absent in old rows: an apartment).
+- **`shared_access`** of `GET /property/me` (epic E14): it counts memberships only, the role
+  decides first. Hide the documents when it is false and the `building_role` is `USER` (staff
+  see them by their role), and the issue tracker when it is false and the role is `USER` or
+  `ACCOUNTANT` (the chairman and the board see it by their role); handle `403` anyway. The
+  chat is for the people of the apartments and the board: hide it for a person with no
+  membership of `apartment_kind` `APARTMENT` and no board role.
 - **Privacy mode selector:** `PATCH /property/memberships/{membership_id}/privacy` per apartment;
   the response's `preview_badge` is exactly what neighbours will see. Badges are resolved on every
   read, so old posts change too after the switch: reload the feed.

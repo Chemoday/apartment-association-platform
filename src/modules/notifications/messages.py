@@ -53,6 +53,13 @@ class RenderedMessage:
 
 def _target(catalog: MessageCatalog, locale: str, params: Mapping[str, Any]) -> str:
     scope = params.get("target_scope") or "ALL_BUILDING"
+    kinds = params.get("target_kinds") or []
+    if scope == "KINDS" and kinds:  # "parking spaces and garages", in the order of kinds
+        names = [catalog.render(f"kind.{kind}.plural", locale) for kind in kinds]
+        conjunction = catalog.render("list.and", locale)
+        return f" {conjunction} ".join(
+            [", ".join(names[:-1]), names[-1]] if len(names) > 1 else names
+        )
     return catalog.render(f"target.{scope}", locale, entrance=params.get("target_entrance"))
 
 

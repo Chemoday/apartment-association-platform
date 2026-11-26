@@ -117,6 +117,8 @@ _APARTMENT_ORDER = (
     func.length(Apartment.number),
     Apartment.number.collate("C"),
 )
+# Who sees, by the role, the posts that reach at least the apartments (targeting_clause).
+_STAFF_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD, BuildingRole.ACCOUNTANT})
 # Ended memberships are history: every query that resolves people filters them
 # (docs/ARCHITECTURE.md 4.3).
 ACTIVE_MEMBERSHIP = ApartmentMembership.ended_at.is_(None)
@@ -193,6 +195,7 @@ class PropertyService:
             building_role=current_user.building_role,
             privacy_display_mode=current_user.privacy_display_mode,
             locale=locale,
+            shared_access=current_user.shared_access,
             memberships=[
                 MembershipView(
                     **membership.model_dump(),
@@ -554,14 +557,20 @@ class PropertyService:
         self, building_id: uuid.UUID, target: TargetDTO
     ) -> tuple[str, dict[str, object]] | None:
         """Why a target cannot be used in the building, as the message and the extra fields of
-        INVALID_TARGET, or None: the consistency of its fields, then whether its entrance or its
-        apartments exist. The one check of posts, polls and maintenance notices."""
+        INVALID_TARGET, or None: the consistency of its fields, then whether its entrance, its
+        apartments or its kinds exist. The one check of posts, polls and maintenance notices."""
         if problem := target_consistency_problem(target):
             return problem, {}
-        if target.scope == TargetScope.ALL_BUILDING:
+        if target.scope in (TargetScope.ALL_BUILDING, TargetScope.ALL_OBJECTS):
             return None
         apartments = await self.list_apartments(building_id)
-        if target.scope == TargetScope.ENTRANCE:
+        if target.scope == TargetScope.KINDS:
+            if unknown_kinds := target.kinds - {apartment.kind for apartment in apartments}:
+                return (
+                    "The building has no objects of some target kinds.",
+                    {"unknown_kinds": [k.value for k in ObjectKind if k in unknown_kinds]},
+                )
+        elif target.scope == TargetScope.ENTRANCE:
             if target.entrance not in {apartment.entrance for apartment in apartments}:
                 return f"The building has no apartments in entrance {target.entrance}.", {}
         elif unknown := target.apartment_ids - {apartment.id for apartment in apartments}:
@@ -578,19 +587,36 @@ class PropertyService:
         scope: ColumnElement[Any],
         entrance: ColumnElement[Any],
         apartment_ids: ColumnElement[Any],
+        kinds: ColumnElement[Any],
         member_only: bool,
     ) -> ColumnElement[bool]:
         """The rows whose target includes one of the caller's objects, as a SQL condition over
         the caller's own target columns (property never imports another module's models).
-        `apartment_ids` is a JSONB array of id strings. Kept equal to `apartment_in_target` by
-        tests.
+        `apartment_ids` and `kinds` are JSONB arrays of strings. Kept equal to
+        `apartment_in_target` by tests, per object: the whole building through an apartment,
+        everything through any object, a kind through an object of that kind.
 
-        `member_only`: a whole-building target counts only through a membership (polls); without
-        it a whole-building row is for everyone of the building, staff included (posts).
+        `member_only`: only the caller's memberships count (polls). Without it the staff (an
+        accountant, the board) also see by their role what reaches at least the apartments: the
+        whole building, everything, and kinds that include apartments (posts).
         """
-        if member_only and not user.memberships:
-            return false()
-        targeted: list[ColumnElement[bool]] = [scope == TargetScope.ALL_BUILDING]
+        held = {m.apartment_kind for m in user.memberships}
+        targeted: list[ColumnElement[bool]] = []
+        if not member_only and user.building_role in _STAFF_ROLES:
+            targeted += [
+                scope.in_([TargetScope.ALL_BUILDING, TargetScope.ALL_OBJECTS]),
+                and_(scope == TargetScope.KINDS, kinds.has_key(ObjectKind.APARTMENT.value)),
+            ]
+        if ObjectKind.APARTMENT in held:
+            targeted.append(scope == TargetScope.ALL_BUILDING)
+        if held:
+            targeted.append(scope == TargetScope.ALL_OBJECTS)
+            targeted.append(
+                and_(
+                    scope == TargetScope.KINDS,
+                    kinds.has_any(literal([k.value for k in ObjectKind if k in held], ARRAY(Text))),
+                )
+            )
         if entrances := sorted({m.entrance for m in user.memberships if m.entrance is not None}):
             targeted.append(and_(scope == TargetScope.ENTRANCE, entrance.in_(entrances)))
         if ids := sorted(str(apartment_id) for apartment_id in user.apartment_ids):
@@ -601,7 +627,7 @@ class PropertyService:
                     apartment_ids.has_any(literal(ids, ARRAY(Text))),
                 )
             )
-        return or_(*targeted)
+        return or_(*targeted) if targeted else false()
 
     async def apartment_areas(self, building_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
         """The recorded area (m2) of each object of a building that has one, for consumption per

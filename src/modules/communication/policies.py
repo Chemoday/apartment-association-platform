@@ -5,7 +5,13 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from src.modules.communication.schemas import PostType, TargetScope
-from src.modules.property.schemas import BuildingRole, TargetDTO, target_consistency_problem
+from src.modules.property.schemas import (
+    BuildingRole,
+    CurrentUserDTO,
+    ObjectKind,
+    TargetDTO,
+    target_consistency_problem,
+)
 
 # Publish emergencies and official notices, resolve emergencies, and see every targeted post.
 PUBLISHER_ROLES = frozenset({BuildingRole.CHAIRMAN, BuildingRole.BOARD})
@@ -34,6 +40,30 @@ def can_publish(post_type: PostType, building_role: BuildingRole) -> bool:
     apartment is checked by the service against their memberships.
     """
     return post_type not in _BOARD_ONLY_TYPES or building_role in PUBLISHER_ROLES
+
+
+def user_kinds(user: CurrentUserDTO) -> frozenset[ObjectKind]:
+    """The kinds of the objects the user holds an active membership of."""
+    return frozenset(m.apartment_kind for m in user.memberships)
+
+
+def may_address(
+    post_type: PostType,
+    target: TargetDTO,
+    building_role: BuildingRole,
+    held: frozenset[ObjectKind],
+) -> bool:
+    """Whether the author may address this target, checked before the target itself (epic E14,
+    section 3.2). The board addresses any target. Anyone else writes a forum topic to the whole
+    building only with an apartment, and to kinds only of which they hold an object; everything
+    (ALL_OBJECTS) is for the board. Other post types have their own rules."""
+    if building_role in PUBLISHER_ROLES or post_type != PostType.FORUM_TOPIC:
+        return True
+    if target.scope == TargetScope.ALL_BUILDING:
+        return ObjectKind.APARTMENT in held
+    if target.scope == TargetScope.KINDS:  # no kinds: the target check answers 422
+        return target.kinds <= held
+    return target.scope != TargetScope.ALL_OBJECTS
 
 
 def sees_all_targets(building_role: BuildingRole) -> bool:

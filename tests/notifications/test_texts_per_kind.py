@@ -121,3 +121,71 @@ def test_the_invitation_mail_names_the_object_by_its_kind(
     locale: str, kind: ObjectKind, expected: str
 ) -> None:
     assert invitation_target(locale, "OWNER", ObjectRef(kind, "14"), None) == expected
+
+
+@pytest.mark.parametrize("locale", ["en", "ru", "et"])
+@pytest.mark.parametrize(
+    ("params", "english"),
+    [
+        ({"target_scope": "ALL_OBJECTS"}, "everything: apartments, parking spaces and garages"),
+        ({"target_scope": "KINDS", "target_kinds": ["GARAGE"]}, "garages"),
+        (
+            {"target_scope": "KINDS", "target_kinds": ["PARKING", "GARAGE"]},
+            "parking spaces and garages",
+        ),
+        (
+            {"target_scope": "KINDS", "target_kinds": ["APARTMENT", "PARKING", "GARAGE"]},
+            "apartments, parking spaces and garages",
+        ),
+    ],
+)
+def test_an_emergency_names_a_target_by_kind(params: dict, english: str, locale: str) -> None:
+    message = compose(
+        E.EMERGENCY_PUBLISHED,
+        locale,
+        {"category": "GENERAL", "target_entrance": None, **params},
+        site_url=SITE,
+        timezone=TZ,
+        title="Gate",
+        body="Stuck.",
+    )
+
+    if locale == "en":
+        assert message.text.endswith(f"Affected: {english}")
+    for kind in params.get("target_kinds", []):
+        assert NAMES[locale][kind] in message.text.lower(), (kind, locale)
+
+
+def test_an_emergency_stored_before_the_kinds_still_decodes() -> None:
+    from src.modules.communication.events import EmergencyAlertPublished
+
+    stored = {
+        "post_id": str(uuid.uuid4()),
+        "building_id": str(uuid.uuid4()),
+        "category": "WATER_SHUTOFF",
+        "target_scope": "ENTRANCE",
+        "target_entrance": 2,
+        "target_apartment_ids": [],
+        "published_by_user_id": str(uuid.uuid4()),
+    }
+
+    event = get_event_registry().decode(
+        "EmergencyAlertPublished", stored, event_id=uuid.uuid4(), occurred_at=datetime.now(UTC)
+    )
+
+    assert isinstance(event, EmergencyAlertPublished) and event.target_kinds == ()
+
+
+@pytest.mark.parametrize("params", [{}, {"target_kinds": []}])
+def test_kinds_missing_from_params_never_break_an_emergency(params: dict) -> None:
+    message = compose(
+        E.EMERGENCY_PUBLISHED,
+        "en",
+        {"category": "GENERAL", "target_scope": "KINDS", "target_entrance": None, **params},
+        site_url=SITE,
+        timezone=TZ,
+        title="Gate",
+        body="Stuck.",
+    )
+
+    assert message.text.endswith("Affected: objects of some kinds")

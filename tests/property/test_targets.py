@@ -135,9 +135,59 @@ def test_the_targeting_clause_takes_objects_without_an_entrance() -> None:
         scope=column("target_scope"),
         entrance=column("target_entrance"),
         apartment_ids=column("target_apartment_ids", postgresql.JSONB),
+        kinds=column("target_kinds", postgresql.JSONB),
         member_only=True,
     )
 
     compiled = clause.compile(dialect=postgresql.dialect())
     assert "target_entrance IN" in str(compiled)
     assert [2] in compiled.params.values()  # the entrance of the parking space is left out
+
+
+@pytest.mark.parametrize(
+    ("scope", "entrance", "kinds", "message"),
+    [
+        (TargetScope.KINDS, None, None, "KINDS needs at least one kind in target_kinds."),
+        (
+            TargetScope.KINDS,
+            2,
+            ["GARAGE"],
+            "KINDS takes neither target_entrance nor target_apartment_ids.",
+        ),
+        (TargetScope.ALL_BUILDING, None, ["GARAGE"], "ALL_BUILDING does not take target_kinds."),
+        (TargetScope.ALL_OBJECTS, None, ["GARAGE"], "ALL_OBJECTS does not take target_kinds."),
+        (TargetScope.ENTRANCE, 2, ["APARTMENT"], "ENTRANCE does not take target_kinds."),
+        (
+            TargetScope.ALL_OBJECTS,
+            2,
+            None,
+            "ALL_OBJECTS takes neither target_entrance nor target_apartment_ids.",
+        ),
+    ],
+)
+def test_targets_by_kind_are_explained(scope, entrance, kinds, message) -> None:
+    assert target_consistency_problem(TargetDTO.of(scope, entrance, None, kinds)) == message
+
+
+def test_a_list_of_objects_takes_no_kinds() -> None:
+    target = TargetDTO.of(TargetScope.APARTMENT_LIST, None, [APARTMENT], ["PARKING"])
+
+    assert target_consistency_problem(target) == "APARTMENT_LIST does not take target_kinds."
+
+
+@pytest.mark.parametrize(
+    ("scope", "kinds", "reached"),
+    [
+        (TargetScope.ALL_BUILDING, None, {ObjectKind.APARTMENT}),
+        (TargetScope.ALL_OBJECTS, None, set(ObjectKind)),
+        (TargetScope.KINDS, ["PARKING", "GARAGE"], {ObjectKind.PARKING, ObjectKind.GARAGE}),
+    ],
+)
+def test_the_rule_reaches_objects_by_kind(scope, kinds, reached) -> None:
+    target = TargetDTO.of(scope, None, None, kinds)
+
+    assert {
+        kind
+        for kind in ObjectKind
+        if apartment_in_target(target, apartment_id=APARTMENT, kind=kind, entrance=None)
+    } == reached

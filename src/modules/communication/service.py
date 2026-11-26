@@ -50,12 +50,14 @@ from src.modules.communication.policies import (
     deletable_types,
     edit_window_closed,
     is_deletable,
+    may_address,
     post_editable_until,
     post_is_editable,
     sees_all_targets,
     sees_hidden_text,
     target_problem,
     thread_author_apartment,
+    user_kinds,
 )
 from src.modules.communication.schemas import (
     AcknowledgeResponse,
@@ -78,7 +80,9 @@ from src.modules.communication.schemas import (
 from src.modules.property.schemas import (
     AuthorBadgeDTO,
     CurrentUserDTO,
+    ObjectKind,
     TargetDTO,
+    apartment_in_target,
     first_object_in,
 )
 from src.modules.property.service import AuthorKey, PropertyService, get_property_service
@@ -97,7 +101,13 @@ def _invalid_author_apartment() -> DomainError:
     return DomainError(
         status_code=422,
         error_code="INVALID_AUTHOR_APARTMENT",
-        message="You can only write on behalf of an apartment you belong to.",
+        message="You can only write on behalf of your own object inside the post's target.",
+    )
+
+
+def _target_of(post: Post) -> TargetDTO:
+    return TargetDTO.of(
+        post.target_scope, post.target_entrance, post.target_apartment_ids, post.target_kinds
     )
 
 
@@ -179,6 +189,7 @@ class CommunicationService:
             target_scope=post.target_scope,
             target_entrance=post.target_entrance,
             target_apartment_ids=tuple(uuid.UUID(a) for a in post.target_apartment_ids or ()),
+            target_kinds=tuple(ObjectKind(kind) for kind in post.target_kinds or ()),
             title=post.title,
             body=post.body,
             category=post.category,
@@ -368,8 +379,18 @@ class CommunicationService:
                 message="Only the board publishes emergencies, official notices and board topics.",
             )
         target = TargetDTO.of(
-            request.target_scope, request.target_entrance, request.target_apartment_ids
+            request.target_scope,
+            request.target_entrance,
+            request.target_apartment_ids,
+            request.target_kinds,
         )
+        # Before any check of the target, so a resident learns nothing about other objects.
+        if not may_address(request.post_type, target, user.building_role, user_kinds(user)):
+            raise DomainError(
+                status_code=403,
+                error_code="FORBIDDEN",
+                message="You can address only the objects of your own kinds.",
+            )
         if problem := target_problem(request.post_type, target):
             raise _invalid_target(problem)
         if missing := await self.property_service.target_problem_in_building(
@@ -385,6 +406,7 @@ class CommunicationService:
             author_apartment_id = self._author_apartment(
                 user,
                 request.author_apartment_id,
+                target,
                 default_to_membership=request.post_type == PostType.FORUM_TOPIC,
             )
 
@@ -403,6 +425,7 @@ class CommunicationService:
                 if request.target_apartment_ids
                 else None
             ),
+            target_kinds=target.stored_kinds,
             comments_enabled=request.comments_enabled,
             origin=origin,
         )
@@ -419,6 +442,7 @@ class CommunicationService:
                     target_scope=post.target_scope,
                     target_entrance=post.target_entrance,
                     target_apartment_ids=tuple(request.target_apartment_ids or ()),
+                    target_kinds=tuple(request.target_kinds or ()),
                     published_by_user_id=user.id,
                 )
             )
@@ -431,6 +455,7 @@ class CommunicationService:
                     target_scope=post.target_scope,
                     target_entrance=post.target_entrance,
                     target_apartment_ids=tuple(request.target_apartment_ids or ()),
+                    target_kinds=tuple(request.target_kinds or ()),
                     published_by_user_id=user.id,
                 )
             )
@@ -461,7 +486,7 @@ class CommunicationService:
             author_apartment_id = self._as_themselves(request.author_apartment_id)
         else:
             author_apartment_id = self._author_apartment(
-                user, request.author_apartment_id, default_to_membership=True
+                user, request.author_apartment_id, _target_of(post), default_to_membership=True
             )
         comment = Comment(
             post_id=post.id,
@@ -723,12 +748,13 @@ class CommunicationService:
         )
         targeted = and_(
             Post.post_type.not_in([PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC]),
-            # A whole-building post is for everyone of the building, staff included.
+            # The staff also see by their role what reaches at least the apartments.
             PropertyService.targeting_clause(
                 user,
                 scope=Post.target_scope,
                 entrance=Post.target_entrance,
                 apartment_ids=Post.target_apartment_ids,
+                kinds=Post.target_kinds,
                 member_only=False,
             ),
         )
@@ -794,19 +820,31 @@ class CommunicationService:
 
     @staticmethod
     def _author_apartment(
-        user: CurrentUserDTO, requested: uuid.UUID | None, default_to_membership: bool
+        user: CurrentUserDTO,
+        requested: uuid.UUID | None,
+        target: TargetDTO,
+        *,
+        default_to_membership: bool,
     ) -> uuid.UUID | None:
-        """The apartment whose privacy mode decides the author's badge.
+        """The object whose privacy mode decides the author's badge, always inside the post's
+        target (epic E14, section 3.2): a comment signed "Apt. 14" under a notice for the garages
+        would tell everyone that Apt. 14 holds a garage.
 
-        An explicit choice must be one of the caller's own apartments. Without one, forum
-        topics and comments use the caller's first apartment, and board posts none (the board
-        speaks as the board).
+        An explicit choice must be one of the caller's own objects inside the target. Without
+        one, forum topics and comments use the caller's first object inside it (none for a board
+        member without one there), and board posts none (the board speaks as the board).
         """
         if requested is not None:
-            if user.membership_for(requested) is None:
+            membership = user.membership_for(requested)
+            if membership is None or not apartment_in_target(
+                target,
+                apartment_id=membership.apartment_id,
+                kind=membership.apartment_kind,
+                entrance=membership.entrance,
+            ):
                 raise _invalid_author_apartment()
             return requested
-        return first_object_in(user, None) if default_to_membership else None
+        return first_object_in(user, target) if default_to_membership else None
 
     async def _check_new_thread(
         self, user: CurrentUserDTO, request: PostCreateRequest
@@ -927,6 +965,9 @@ class CommunicationService:
                 if post.target_apartment_ids is not None
                 else None
             ),
+            target_kinds=[ObjectKind(kind) for kind in post.target_kinds]
+            if post.target_kinds
+            else None,
             is_active=post.is_active,
             comments_enabled=post.comments_enabled,
             comments_count=comments_count,
