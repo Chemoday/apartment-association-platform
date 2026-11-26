@@ -85,7 +85,12 @@ from src.modules.meters.schemas import (
     ResourceType,
     canonical_meter_value,
 )
-from src.modules.property.schemas import ApartmentRefDTO, BuildingRole, CurrentUserDTO
+from src.modules.property.schemas import (
+    ApartmentRefDTO,
+    BuildingRole,
+    CurrentUserDTO,
+    ObjectKind,
+)
 from src.modules.property.service import PropertyService, get_property_service
 from src.plugins.registry import ReadingExporter, ReadingExportRow
 
@@ -1003,7 +1008,11 @@ class MetersService:
 
     # --- Chairman matrix ------------------------------------------------------------------------
 
-    async def get_matrix(self, user: CurrentUserDTO, period_code: str) -> MatrixResponse:
+    async def get_matrix(
+        self, user: CurrentUserDTO, period_code: str, kind: ObjectKind | None = None
+    ) -> MatrixResponse:
+        """The period's matrix; `kind` lists the objects of that kind only, while the balances
+        and the master meters stay those of the whole building (epic E14)."""
         period = await self._period(user.building_id, period_code)
         readings = await self._readings_by_meter(period)
         # Active meters, plus meters replaced during the period that still have a reading in it.
@@ -1028,6 +1037,8 @@ class MetersService:
 
         rows = []
         for apartment in apartments:
+            if kind is not None and apartment.kind != kind:
+                continue
             cells = [cell(meter) for meter in meters if meter.apartment_id == apartment.id]
             if not cells:
                 continue
@@ -1356,6 +1367,7 @@ class MetersService:
                     is_anomaly_confirmed=reading.is_anomaly_confirmed,
                     recorded_at=reading.recorded_at,
                     previous_origin=reading.previous_origin.value,
+                    apartment_kind=apartment.kind.value if apartment else None,
                 )
             )
         return result

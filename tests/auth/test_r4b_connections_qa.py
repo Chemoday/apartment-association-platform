@@ -320,6 +320,11 @@ async def test_the_summary_lists_only_statuses_that_occur_whatever_the_filter_an
         "apartments": 3,
         "connected": 1,
         "by_status": {"CONNECTED": 1, "NOT_INVITED": 1, "CODE_ISSUED": 1},
+        "by_kind": {
+            "APARTMENT": {"objects": 3, "connected": 1},
+            "PARKING": {"objects": 0, "connected": 0},
+            "GARAGE": {"objects": 0, "connected": 0},
+        },
     }
     assert (body["matching"], body["items"]) == (1, [])
     only_codes = await overview(client, world, status="CODE_ISSUED")

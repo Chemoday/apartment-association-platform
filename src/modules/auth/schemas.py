@@ -457,10 +457,17 @@ class ConnectionItem(BaseModel):
     invitation_delivery: InvitationDelivery | None
 
 
+class KindSummary(BaseModel):
+    objects: int
+    connected: int
+
+
 class ConnectionSummary(BaseModel):
-    apartments: int
+    apartments: int  # objects of every kind
     connected: int
     by_status: dict[ConnectionStatus, int]
+    # Per kind of object, zeros for a kind the building has none of (epic E14).
+    by_kind: dict[ObjectKind, KindSummary]
 
 
 class ConnectionOverview(BaseModel):

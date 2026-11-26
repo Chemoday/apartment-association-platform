@@ -24,8 +24,9 @@ from src.modules.auth.schemas import (
     ConnectionSummary,
     InvitationDelivery,
     InvitationKind,
+    KindSummary,
 )
-from src.modules.property.schemas import BuildingRole, ConnectionRowDTO, CurrentUserDTO
+from src.modules.property.schemas import BuildingRole, ConnectionRowDTO, CurrentUserDTO, ObjectKind
 from src.modules.property.service import PropertyService
 
 
@@ -82,6 +83,17 @@ class ConnectionService:
                 apartments=len(items),
                 connected=by_status.get(ConnectionStatus.CONNECTED, 0),
                 by_status=by_status,
+                by_kind={
+                    kind: KindSummary(
+                        objects=sum(1 for i in items if i.apartment_kind == kind),
+                        connected=sum(
+                            1
+                            for i in items
+                            if i.apartment_kind == kind and i.status == ConnectionStatus.CONNECTED
+                        ),
+                    )
+                    for kind in ObjectKind
+                },
             ),
             matching=len(matching),
             items=matching[offset : offset + limit],

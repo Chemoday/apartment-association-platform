@@ -273,11 +273,11 @@ async def test_the_export_carries_the_origin_and_an_empty_serial(
 
     assert response.status_code == 200, response.text
     lines = response.text.lstrip("﻿").splitlines()
-    assert lines[0].endswith(",previous_origin")
+    assert lines[0].endswith(",previous_origin,apartment_kind")
     (row,) = [line for line in lines if str(meter.id) in line]
     cells = row.split(",")
     assert cells[5] == ""  # serial_number not set yet
-    assert cells[-1] == "START"
+    assert cells[-2:] == ["START", "APARTMENT"]  # previous_origin, then the kind (epic E14)
 
 
 async def test_after_the_first_reading_the_start_may_still_be_corrected(

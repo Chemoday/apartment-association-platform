@@ -16,7 +16,7 @@ from src.core.security import DEMO_USER_HEADER, create_access_token
 from src.modules.meters.models import MeterDevice
 from src.modules.meters.schemas import MeterUnit, PeriodStatus, ResourceType
 from src.modules.property.models import ApartmentMembership, User
-from src.modules.property.schemas import DisplayMode, RelationType
+from src.modules.property.schemas import BuildingRole, DisplayMode, RelationType
 from src.modules.property.service import PropertyService
 from tests.factories import (
     MixedBuilding,
@@ -333,3 +333,98 @@ async def test_the_consumption_per_m2_counts_only_the_objects_with_an_area(
     assert month["average_per_m2"] == "1.2541"
     assert export.status_code == 200, export.text
     assert len([line for line in export.text.splitlines()[1:] if line]) == 3
+
+
+# --- The chairman's views per kind (task K5) -----------------------------------------------------
+
+
+async def test_the_overview_counts_and_the_matrix_filters_by_kind(
+    api_client: AsyncClient, db_session: AsyncSession, mixed: MixedBuilding
+) -> None:
+    period = await create_period(db_session, mixed.building, "2026-09", PeriodStatus.LOCKED)
+    master = await create_meter(db_session, mixed.building, None, ResourceType.ELECTRICITY)
+    master.unit = MeterUnit.KWH
+    meters = {
+        m.apartment_id: m
+        for m in await db_session.scalars(
+            select(MeterDevice).where(MeterDevice.building_id == mixed.building.id)
+        )
+    }
+    for apartment_id, delta in ((mixed.g_12.id, "37"), (mixed.p_2.id, "100"), (None, "150")):
+        await create_reading(db_session, meters[apartment_id], period, Decimal(delta), Decimal(0))
+
+    overview = await ok(
+        await api_client.get(
+            "/api/v1/auth/connections", params={"limit": 50}, headers=bearer(mixed.chairman)
+        )
+    )
+    bodies = {}
+    for kind in (None, "PARKING", "GARAGE", "APARTMENT"):
+        bodies[kind] = await ok(
+            await api_client.get(
+                "/api/v1/meters/periods/2026-09/matrix",
+                params={"kind": kind} if kind else {},
+                headers=as_user(mixed.chairman),
+            )
+        )
+    unknown = await api_client.get(
+        "/api/v1/meters/periods/2026-09/matrix",
+        params={"kind": "CELLAR"},
+        headers=as_user(mixed.chairman),
+    )
+    export = await api_client.get(
+        "/api/v1/meters/periods/2026-09/export-csv", headers=as_user(mixed.chairman)
+    )
+
+    def matrix(kind: str | None = None) -> list[tuple[str, str]]:
+        return [(r["apartment_kind"], r["apartment_number"]) for r in bodies[kind]["apartments"]]
+
+    assert overview["summary"]["by_kind"] == {
+        "APARTMENT": {"objects": 2, "connected": 2},
+        "PARKING": {"objects": 2, "connected": 1},  # P-2 has tenants only
+        "GARAGE": {"objects": 3, "connected": 2},  # G7 has nobody
+    }
+    assert matrix() == [("PARKING", "P-2"), ("GARAGE", "12")]
+    assert matrix("PARKING") == [("PARKING", "P-2")]
+    assert matrix("GARAGE") == [("GARAGE", "12")]
+    assert matrix("APARTMENT") == []  # no apartment meter in this building
+    assert (unknown.status_code, unknown.json()["error_code"]) == (422, "VALIDATION_ERROR")
+    # The balances stay those of the whole building: the master meter measures every object.
+    (balance,) = bodies[None]["balances"]
+    assert balance["apartments_sum"] == "137.000"
+    assert bodies["GARAGE"]["balances"] == bodies[None]["balances"]
+    rows = sorted(export.text.lstrip("\ufeff").splitlines()[1:])
+    assert [row.split(",")[2] for row in rows] == ["12", "MASTER", "P-2"]
+    assert [row.rsplit(",", 1)[1] for row in rows] == ["GARAGE", "", "PARKING"]
+
+
+async def test_a_matrix_filter_by_a_kind_the_building_lacks_is_empty(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from tests.factories import create_apartment, create_building
+
+    plain = await create_building(db_session, name="KÜ Korterid 2")
+    flat = await create_apartment(db_session, plain, "1")
+    chairman = await create_user(db_session, plain, "Plain Chair", role=BuildingRole.CHAIRMAN)
+    await create_meter(db_session, plain, flat)
+    await create_period(db_session, plain, "2026-09", PeriodStatus.LOCKED)
+
+    response = await api_client.get(
+        "/api/v1/meters/periods/2026-09/matrix",
+        params={"kind": "GARAGE"},
+        headers=as_user(chairman),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["apartments"] == []
+
+
+def test_the_join_page_names_every_kind() -> None:
+    from src.modules.auth.join import notice_template
+    from src.modules.property.schemas import Locale
+
+    for locale, words in (
+        (Locale.EN, "parking space or garage"),
+        (Locale.ET, "parkimiskoha või garaaži"),
+    ):
+        assert words in notice_template(locale).replace("\n", " "), locale

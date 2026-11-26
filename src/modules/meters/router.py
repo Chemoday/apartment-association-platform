@@ -26,7 +26,7 @@ from src.modules.meters.schemas import (
     ReadingSubmitRequest,
 )
 from src.modules.meters.service import MetersService, get_meters_service
-from src.modules.property.schemas import BuildingRole, CurrentUserDTO
+from src.modules.property.schemas import BuildingRole, CurrentUserDTO, ObjectKind
 from src.plugins.registry import PluginRegistry, get_plugin_registry
 
 router = APIRouter(
@@ -167,10 +167,13 @@ async def list_periods(
 )
 async def period_matrix(
     period_code: PeriodCodePath,
+    kind: ObjectKind | None = Query(
+        None, description="Only the objects of this kind (the balances stay the building's)."
+    ),
     user: CurrentUserDTO = Depends(staff_viewer),
     service: MetersService = Depends(get_meters_service),
 ) -> MatrixResponse:
-    return await service.get_matrix(user, period_code)
+    return await service.get_matrix(user, period_code, kind)
 
 
 @router.post(

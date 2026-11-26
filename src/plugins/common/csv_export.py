@@ -23,6 +23,8 @@ COLUMNS = (
     "is_anomaly_confirmed",
     "recorded_at",
     "previous_origin",
+    # Last, so the accountant's existing imports by position keep working (epic E14).
+    "apartment_kind",
 )
 MASTER_METER_LABEL = "MASTER"
 
@@ -53,6 +55,7 @@ def _cells(row: ReadingExportRow) -> list[object]:
         "true" if row.is_anomaly_confirmed else "false",
         row.recorded_at.isoformat(),
         row.previous_origin,
+        row.apartment_kind or "",
     ]
 
 
