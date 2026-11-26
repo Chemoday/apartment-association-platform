@@ -76,6 +76,7 @@ async def test_an_entrance_alert_reaches_its_residents_and_the_board_once_each(
                 "category": "WATER_SHUTOFF",
                 "target_scope": "ENTRANCE",
                 "target_entrance": 2,
+                "target_kinds": [],
             },
             "created_at": owner_feed[0]["created_at"],
             "read_at": None,

@@ -50,12 +50,14 @@ from src.modules.communication.policies import (
     deletable_types,
     edit_window_closed,
     is_deletable,
+    may_address,
     post_editable_until,
     post_is_editable,
     sees_all_targets,
     sees_hidden_text,
     target_problem,
     thread_author_apartment,
+    user_kinds,
 )
 from src.modules.communication.schemas import (
     AcknowledgeResponse,
@@ -78,6 +80,7 @@ from src.modules.communication.schemas import (
 from src.modules.property.schemas import (
     AuthorBadgeDTO,
     CurrentUserDTO,
+    ObjectKind,
     TargetDTO,
     first_object_in,
 )
@@ -179,6 +182,7 @@ class CommunicationService:
             target_scope=post.target_scope,
             target_entrance=post.target_entrance,
             target_apartment_ids=tuple(uuid.UUID(a) for a in post.target_apartment_ids or ()),
+            target_kinds=tuple(ObjectKind(kind) for kind in post.target_kinds or ()),
             title=post.title,
             body=post.body,
             category=post.category,
@@ -368,8 +372,18 @@ class CommunicationService:
                 message="Only the board publishes emergencies, official notices and board topics.",
             )
         target = TargetDTO.of(
-            request.target_scope, request.target_entrance, request.target_apartment_ids
+            request.target_scope,
+            request.target_entrance,
+            request.target_apartment_ids,
+            request.target_kinds,
         )
+        # Before any check of the target, so a resident learns nothing about other objects.
+        if not may_address(request.post_type, target, user.building_role, user_kinds(user)):
+            raise DomainError(
+                status_code=403,
+                error_code="FORBIDDEN",
+                message="You can address only the objects of your own kinds.",
+            )
         if problem := target_problem(request.post_type, target):
             raise _invalid_target(problem)
         if missing := await self.property_service.target_problem_in_building(
@@ -403,6 +417,7 @@ class CommunicationService:
                 if request.target_apartment_ids
                 else None
             ),
+            target_kinds=target.stored_kinds,
             comments_enabled=request.comments_enabled,
             origin=origin,
         )
@@ -419,6 +434,7 @@ class CommunicationService:
                     target_scope=post.target_scope,
                     target_entrance=post.target_entrance,
                     target_apartment_ids=tuple(request.target_apartment_ids or ()),
+                    target_kinds=tuple(request.target_kinds or ()),
                     published_by_user_id=user.id,
                 )
             )
@@ -431,6 +447,7 @@ class CommunicationService:
                     target_scope=post.target_scope,
                     target_entrance=post.target_entrance,
                     target_apartment_ids=tuple(request.target_apartment_ids or ()),
+                    target_kinds=tuple(request.target_kinds or ()),
                     published_by_user_id=user.id,
                 )
             )
@@ -723,12 +740,13 @@ class CommunicationService:
         )
         targeted = and_(
             Post.post_type.not_in([PostType.APARTMENT_THREAD, PostType.BOARD_TOPIC]),
-            # A whole-building post is for everyone of the building, staff included.
+            # The staff also see by their role what reaches at least the apartments.
             PropertyService.targeting_clause(
                 user,
                 scope=Post.target_scope,
                 entrance=Post.target_entrance,
                 apartment_ids=Post.target_apartment_ids,
+                kinds=Post.target_kinds,
                 member_only=False,
             ),
         )
@@ -927,6 +945,9 @@ class CommunicationService:
                 if post.target_apartment_ids is not None
                 else None
             ),
+            target_kinds=[ObjectKind(kind) for kind in post.target_kinds]
+            if post.target_kinds
+            else None,
             is_active=post.is_active,
             comments_enabled=post.comments_enabled,
             comments_count=comments_count,

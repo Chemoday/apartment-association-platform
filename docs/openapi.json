@@ -15503,6 +15503,20 @@
             ],
             "title": "Target Apartment Ids"
           },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
@@ -15595,6 +15609,7 @@
           "target_scope",
           "target_entrance",
           "target_apartment_ids",
+          "target_kinds",
           "is_active",
           "comments_enabled",
           "comments_count",
@@ -17639,6 +17654,20 @@
             ],
             "title": "Target Apartment Ids"
           },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
+          },
           "comments_enabled": {
             "type": "boolean",
             "title": "Comments Enabled",
@@ -17696,6 +17725,20 @@
             ],
             "title": "Target Apartment Ids"
           },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
+          },
           "comments_enabled": {
             "type": "boolean",
             "title": "Comments Enabled"
@@ -17709,6 +17752,7 @@
           "target_scope",
           "target_entrance",
           "target_apartment_ids",
+          "target_kinds",
           "comments_enabled"
         ],
         "title": "NoticeView"
@@ -18299,6 +18343,20 @@
             ],
             "title": "Target Apartment Ids"
           },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
+          },
           "eligibility": {
             "$ref": "#/components/schemas/Eligibility"
           },
@@ -18434,6 +18492,20 @@
             ],
             "title": "Target Apartment Ids"
           },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
+          },
           "eligibility": {
             "$ref": "#/components/schemas/Eligibility"
           },
@@ -18517,6 +18589,7 @@
           "target_scope",
           "target_entrance",
           "target_apartment_ids",
+          "target_kinds",
           "eligibility",
           "unit",
           "closes_at",
@@ -18589,6 +18662,20 @@
               }
             ],
             "title": "Target Apartment Ids"
+          },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
           },
           "eligibility": {
             "$ref": "#/components/schemas/Eligibility"
@@ -18683,6 +18770,7 @@
           "target_scope",
           "target_entrance",
           "target_apartment_ids",
+          "target_kinds",
           "eligibility",
           "unit",
           "closes_at",
@@ -18758,6 +18846,20 @@
               }
             ],
             "title": "Target Apartment Ids"
+          },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
           },
           "comments_enabled": {
             "type": "boolean",
@@ -18843,6 +18945,20 @@
               }
             ],
             "title": "Target Apartment Ids"
+          },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
           },
           "is_active": {
             "type": "boolean",
@@ -18931,6 +19047,7 @@
           "target_scope",
           "target_entrance",
           "target_apartment_ids",
+          "target_kinds",
           "is_active",
           "comments_enabled",
           "comments_count",
@@ -19048,6 +19165,20 @@
             ],
             "title": "Target Apartment Ids"
           },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
@@ -19128,6 +19259,7 @@
           "target_scope",
           "target_entrance",
           "target_apartment_ids",
+          "target_kinds",
           "is_active",
           "comments_enabled",
           "comments_count",
@@ -20706,10 +20838,12 @@
         "enum": [
           "ALL_BUILDING",
           "ENTRANCE",
-          "APARTMENT_LIST"
+          "APARTMENT_LIST",
+          "ALL_OBJECTS",
+          "KINDS"
         ],
         "title": "TargetScope",
-        "description": "Who an alert, a notice or a poll is meant for."
+        "description": "Who an alert, a notice or a poll is meant for. ALL_BUILDING: the apartments;\nALL_OBJECTS: every object of every kind; KINDS: the objects of `target_kinds`."
       },
       "TaskCreate": {
         "properties": {

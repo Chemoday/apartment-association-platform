@@ -28,7 +28,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.core.database import Base, uuid_pk, varchar_enum
 from src.modules.maintenance.schemas import LogKind, OccurrenceStatus, PeriodUnit, TaskStatus
 
-# Keep these texts identical to alembic/versions/020_maintenance.py: tests compare the catalogs.
+# Keep these texts identical to alembic/versions/020_maintenance.py (NOTICE_TARGET_CHECK: to
+# 038_targets_by_kind.py): tests compare the catalogs.
 NOTICE_COMPLETE_CHECK = (
     "(notice_title IS NULL) = (notice_body IS NULL)"
     " AND (notice_title IS NULL) = (notice_target_scope IS NULL)"
@@ -37,11 +38,19 @@ NOTICE_COMPLETE_CHECK = (
 )
 NOTICE_TARGET_CHECK = (
     "notice_target_scope IS NULL"
-    " OR (notice_target_scope = 'ALL_BUILDING' AND notice_target_entrance IS NULL"
-    " AND notice_target_apartment_ids IS NULL)"
+    " OR (notice_target_scope IN ('ALL_BUILDING', 'ALL_OBJECTS')"
+    " AND notice_target_entrance IS NULL"
+    " AND notice_target_apartment_ids IS NULL AND notice_target_kinds IS NULL)"
     " OR (notice_target_scope = 'ENTRANCE' AND notice_target_entrance IS NOT NULL"
-    " AND notice_target_apartment_ids IS NULL)"
+    " AND notice_target_apartment_ids IS NULL AND notice_target_kinds IS NULL)"
+    " OR (notice_target_scope = 'KINDS' AND notice_target_entrance IS NULL"
+    " AND notice_target_apartment_ids IS NULL AND notice_target_kinds IS NOT NULL"
+    " AND jsonb_typeof(notice_target_kinds) = 'array' AND notice_target_kinds <> '[]'::jsonb"
+    " AND NOT jsonb_path_exists(notice_target_kinds,"
+    """ '$[*] ? (!(@.type() == "string" && (@ == "APARTMENT" || @ == "PARKING" """
+    """|| @ == "GARAGE")))'))"""
     " OR (notice_target_scope = 'APARTMENT_LIST' AND notice_target_entrance IS NULL"
+    " AND notice_target_kinds IS NULL"
     " AND notice_target_apartment_ids IS NOT NULL"
     " AND jsonb_typeof(notice_target_apartment_ids) = 'array'"
     " AND notice_target_apartment_ids <> '[]'::jsonb)"
@@ -102,6 +111,10 @@ class Task(Base):
     notice_target_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
     notice_target_entrance: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notice_target_apartment_ids: Mapped[list[str] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    # The kinds of a KINDS notice, in the order of kinds (epic E14, migration 038).
+    notice_target_kinds: Mapped[list[str] | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
     notice_comments_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

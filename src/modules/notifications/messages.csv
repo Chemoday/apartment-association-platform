@@ -59,6 +59,12 @@ line.affected,Affected: {target},Затронуто: {target},Puudutab: {target}
 target.ALL_BUILDING,the whole building,весь дом,kogu maja
 target.ENTRANCE,entrance {entrance},подъезд {entrance},trepikoda {entrance}
 target.APARTMENT_LIST,selected apartments,отдельные квартиры,valitud korterid
+target.ALL_OBJECTS,"everything: apartments, parking spaces and garages","всё: квартиры, парковочные места и гаражи","kõik: korterid, parkimiskohad ja garaažid"
+target.KINDS,objects of some kinds,объекты отдельных видов,mõne liigi objektid
+kind.APARTMENT.plural,apartments,квартиры,korterid
+kind.PARKING.plural,parking spaces,парковочные места,parkimiskohad
+kind.GARAGE.plural,garages,гаражи,garaažid
+list.and,and,и,ja
 footer,"This is an automatic message from your apartment association. Details, contacts and notification settings are on the site: {site_url}","Это автоматическое сообщение вашего квартирного товарищества. Подробности, контакты и настройки уведомлений на сайте: {site_url}","See on teie korteriühistu automaatne teade. Üksikasjad, kontaktid ja teavituste seaded on veebilehel: {site_url}"
 bot.linked,Done: this chat now receives the notifications of your apartment association. Send /stop to unlink it.,"Готово: этот чат теперь получает уведомления вашего квартирного товарищества. Чтобы отвязать его, отправьте /stop.",Valmis: see vestlus saab nüüd teie korteriühistu teavitusi. Sidumise eemaldamiseks saatke /stop.
 bot.already_linked,This chat is already linked to your account.,Этот чат уже привязан к вашей учётной записи.,See vestlus on juba teie kontoga seotud.

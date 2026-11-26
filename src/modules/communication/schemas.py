@@ -22,6 +22,8 @@ from pydantic import (
 from src.core.validation import safe_text
 from src.modules.property.schemas import (
     AuthorBadgeDTO,
+    ObjectKind,
+    TargetKinds,
     TargetScope,
 )
 
@@ -92,6 +94,7 @@ class PostCreateRequest(BaseModel):
     target_scope: TargetScope = TargetScope.ALL_BUILDING
     target_entrance: StrictInt | None = Field(default=None, ge=1, le=1000)
     target_apartment_ids: TargetApartmentIds = None
+    target_kinds: TargetKinds = None
     comments_enabled: StrictBool = True
     # The apartment the author writes from; it decides the badge (docs/API.md, section 4).
     author_apartment_id: uuid.UUID | None = None
@@ -157,6 +160,7 @@ class PostView(BaseModel):
     target_scope: TargetScope
     target_entrance: int | None
     target_apartment_ids: list[uuid.UUID] | None
+    target_kinds: list[ObjectKind] | None
     is_active: bool
     comments_enabled: bool
     comments_count: int
@@ -221,6 +225,7 @@ class EmergencyRefDTO(BaseModel):
     target_scope: TargetScope
     target_entrance: int | None
     target_apartment_ids: tuple[uuid.UUID, ...]
+    target_kinds: tuple[ObjectKind, ...] = ()
     title: str
     body: str
     category: PostCategory

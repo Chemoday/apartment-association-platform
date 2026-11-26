@@ -104,9 +104,17 @@ async def test_the_people_list_names_each_object_by_kind(
 async def test_a_post_keeps_the_kind_of_its_object_after_the_author_leaves(
     api_client: AsyncClient, db_session: AsyncSession, mixed: MixedBuilding
 ) -> None:
+    # A garage without an apartment writes to the board about it (the whole building is for
+    # the apartments since epic E14 K2).
     published = await api_client.post(
         "/api/v1/communication/posts",
-        json={"post_type": "FORUM_TOPIC", "title": "The gate", "body": "It squeaks."},
+        json={
+            "post_type": "APARTMENT_THREAD",
+            "title": "The gate",
+            "body": "It squeaks.",
+            "target_scope": "APARTMENT_LIST",
+            "target_apartment_ids": [str(mixed.g_12.id)],
+        },
         headers=as_user(mixed.b),
     )
     assert published.status_code == 201, published.text
@@ -208,8 +216,11 @@ async def test_a_ballot_without_an_object_answers_for_the_only_apartment(
     await create_membership(db_session, spaces_only, mixed.p_1)
     await create_membership(db_session, spaces_only, mixed.g_1)
     polls = "/api/v1/governance/polls"
+    # To everything: the whole building would hold the apartments only (epic E14 K2).
     created = await api_client.post(
-        polls, json=draft(closes_at=deadline()), headers=as_user(mixed.chairman)
+        polls,
+        json=draft(closes_at=deadline(), target_scope="ALL_OBJECTS"),
+        headers=as_user(mixed.chairman),
     )
     assert created.status_code == 201, created.text
     poll = await ok(

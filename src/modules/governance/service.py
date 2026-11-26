@@ -60,6 +60,7 @@ from src.modules.governance.schemas import (
 )
 from src.modules.property.schemas import (
     CurrentUserDTO,
+    ObjectKind,
     ObjectNotChosen,
     ObjectNotHeld,
     RelationType,
@@ -277,7 +278,12 @@ class GovernanceService:
             raise _invalid_deadline("A poll stays open for at most a year.")
         electors = await self.property_service.poll_electors(
             poll.building_id,
-            TargetDTO.of(poll.target_scope, poll.target_entrance, poll.target_apartment_ids),
+            TargetDTO.of(
+                poll.target_scope,
+                poll.target_entrance,
+                poll.target_apartment_ids,
+                poll.target_kinds,
+            ),
             owners_only=poll.eligibility == Eligibility.OWNERS,
         )
         units = electorate_units(
@@ -487,6 +493,7 @@ class GovernanceService:
             scope=Poll.target_scope,
             entrance=Poll.target_entrance,
             apartment_ids=Poll.target_apartment_ids,
+            kinds=Poll.target_kinds,
             member_only=True,
         )
         return and_(in_building, Poll.status != PollStatus.DRAFT, targeted)
@@ -537,7 +544,10 @@ class GovernanceService:
         if problem := await self.property_service.target_problem_in_building(
             user.building_id,
             TargetDTO.of(
-                request.target_scope, request.target_entrance, request.target_apartment_ids
+                request.target_scope,
+                request.target_entrance,
+                request.target_apartment_ids,
+                request.target_kinds,
             ),
         ):
             message, extra = problem
@@ -633,6 +643,9 @@ class GovernanceService:
             [str(apartment_id) for apartment_id in request.target_apartment_ids]
             if request.target_apartment_ids
             else None
+        )
+        poll.target_kinds = (
+            [kind.value for kind in request.target_kinds] if request.target_kinds else None
         )
         poll.eligibility = request.eligibility
         poll.unit = request.unit
@@ -759,6 +772,9 @@ class GovernanceService:
                 [uuid.UUID(value) for value in poll.target_apartment_ids]
                 if poll.target_apartment_ids is not None
                 else None
+            ),
+            target_kinds=(
+                [ObjectKind(kind) for kind in poll.target_kinds] if poll.target_kinds else None
             ),
             eligibility=poll.eligibility,
             unit=poll.unit,

@@ -28,14 +28,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.core.database import Base, uuid_pk, varchar_enum
 from src.modules.communication.schemas import PostCategory, PostOrigin, PostType, TargetScope
 
-# Keep these texts identical to alembic/versions/003_communication.py: tests compare the catalogs.
+# Keep these texts identical to alembic/versions/038_targets_by_kind.py: tests compare the catalogs.
 TARGET_CONSISTENT_CHECK = (
-    "(target_scope = 'ALL_BUILDING' AND target_entrance IS NULL"
-    " AND target_apartment_ids IS NULL)"
+    "(target_scope IN ('ALL_BUILDING', 'ALL_OBJECTS') AND target_entrance IS NULL"
+    " AND target_apartment_ids IS NULL AND target_kinds IS NULL)"
     " OR (target_scope = 'ENTRANCE' AND target_entrance IS NOT NULL"
-    " AND target_apartment_ids IS NULL)"
+    " AND target_apartment_ids IS NULL AND target_kinds IS NULL)"
+    # A non-empty array of known kinds: one unknown string would break every read of the row.
+    " OR (target_scope = 'KINDS' AND target_entrance IS NULL"
+    " AND target_apartment_ids IS NULL AND target_kinds IS NOT NULL"
+    " AND jsonb_typeof(target_kinds) = 'array' AND target_kinds <> '[]'::jsonb"
+    " AND NOT jsonb_path_exists(target_kinds,"
+    """ '$[*] ? (!(@.type() == "string" && (@ == "APARTMENT" || @ == "PARKING" """
+    """|| @ == "GARAGE")))'))"""
     # IS NOT NULL first: jsonb_typeof(NULL) is NULL, and a NULL CHECK result counts as passed.
-    " OR (target_scope = 'APARTMENT_LIST' AND target_entrance IS NULL"
+    " OR (target_scope = 'APARTMENT_LIST' AND target_entrance IS NULL AND target_kinds IS NULL"
     " AND target_apartment_ids IS NOT NULL"
     " AND jsonb_typeof(target_apartment_ids) = 'array'"
     " AND target_apartment_ids <> '[]'::jsonb"
@@ -95,8 +102,10 @@ class Post(Base):
         ),
         CheckConstraint(TARGET_CONSISTENT_CHECK, name="ck_comm_posts_target_consistent"),
         CheckConstraint("target_entrance > 0", name="ck_comm_posts_target_entrance_positive"),
+        # The service keeps forum topics ALL_BUILDING until epic E14 K3 (forum topics by kind).
         CheckConstraint(
-            "post_type <> 'FORUM_TOPIC' OR target_scope = 'ALL_BUILDING'",
+            "post_type <> 'FORUM_TOPIC'"
+            " OR target_scope IN ('ALL_BUILDING', 'ALL_OBJECTS', 'KINDS')",
             name="ck_comm_posts_forum_whole_building",
         ),
         # Only an emergency can be resolved (is_active = false).
@@ -172,6 +181,8 @@ class Post(Base):
     target_apartment_ids: Mapped[list[str] | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
+    # The kinds of a KINDS target, in the order of kinds (epic E14, migration 038).
+    target_kinds: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )

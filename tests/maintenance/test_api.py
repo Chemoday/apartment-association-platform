@@ -162,6 +162,7 @@ async def test_a_notice_for_residents(api_client: AsyncClient, world: MaintWorld
         **notice,
         "category": "MAINTENANCE",
         "target_apartment_ids": None,
+        "target_kinds": None,
         "comments_enabled": False,
     }
     for response in (bad_entrance, foreign, inconsistent):

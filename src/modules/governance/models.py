@@ -38,13 +38,19 @@ from src.modules.governance.schemas import (
 )
 from src.modules.property.schemas import TargetScope
 
-# Keep these texts identical to alembic/versions/015_governance_polls.py: tests compare catalogs.
+# Keep these texts identical to alembic/versions/038_targets_by_kind.py: tests compare catalogs.
 POLL_TARGET_CHECK = (
-    "(target_scope = 'ALL_BUILDING' AND target_entrance IS NULL"
-    " AND target_apartment_ids IS NULL)"
+    "(target_scope IN ('ALL_BUILDING', 'ALL_OBJECTS') AND target_entrance IS NULL"
+    " AND target_apartment_ids IS NULL AND target_kinds IS NULL)"
     " OR (target_scope = 'ENTRANCE' AND target_entrance IS NOT NULL"
-    " AND target_apartment_ids IS NULL)"
-    " OR (target_scope = 'APARTMENT_LIST' AND target_entrance IS NULL"
+    " AND target_apartment_ids IS NULL AND target_kinds IS NULL)"
+    " OR (target_scope = 'KINDS' AND target_entrance IS NULL"
+    " AND target_apartment_ids IS NULL AND target_kinds IS NOT NULL"
+    " AND jsonb_typeof(target_kinds) = 'array' AND target_kinds <> '[]'::jsonb"
+    " AND NOT jsonb_path_exists(target_kinds,"
+    """ '$[*] ? (!(@.type() == "string" && (@ == "APARTMENT" || @ == "PARKING" """
+    """|| @ == "GARAGE")))'))"""
+    " OR (target_scope = 'APARTMENT_LIST' AND target_entrance IS NULL AND target_kinds IS NULL"
     " AND target_apartment_ids IS NOT NULL"
     " AND jsonb_typeof(target_apartment_ids) = 'array'"
     " AND target_apartment_ids <> '[]'::jsonb"
@@ -117,6 +123,8 @@ class Poll(Base):
     target_apartment_ids: Mapped[list[str] | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
+    # The kinds of a KINDS target, in the order of kinds (epic E14, migration 038).
+    target_kinds: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     eligibility: Mapped[Eligibility] = mapped_column(
         varchar_enum(Eligibility, "ck_gov_polls_eligibility", length=16), nullable=False
     )

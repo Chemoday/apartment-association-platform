@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from src.core.event_bus import DomainEvent
 from src.modules.communication.schemas import PostCategory, PostType, TargetScope
+from src.modules.property.schemas import ObjectKind
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -23,6 +24,8 @@ class EmergencyAlertPublished(DomainEvent):
     target_entrance: int | None  # set for ENTRANCE
     target_apartment_ids: tuple[uuid.UUID, ...]  # set for APARTMENT_LIST, empty otherwise
     published_by_user_id: uuid.UUID
+    # Set for KINDS (epic E14); events stored before it carry none.
+    target_kinds: tuple[ObjectKind, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -36,6 +39,7 @@ class OfficialNoticePublished(DomainEvent):
     target_entrance: int | None
     target_apartment_ids: tuple[uuid.UUID, ...]
     published_by_user_id: uuid.UUID
+    target_kinds: tuple[ObjectKind, ...] = ()  # as EmergencyAlertPublished
 
 
 @dataclass(frozen=True, kw_only=True)

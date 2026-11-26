@@ -61,11 +61,14 @@ class Locale(StrEnum):
 
 # Every module shares this enum, `TargetDTO` and the one rule `apartment_in_target` below.
 class TargetScope(StrEnum):
-    """Who an alert, a notice or a poll is meant for."""
+    """Who an alert, a notice or a poll is meant for. ALL_BUILDING: the apartments;
+    ALL_OBJECTS: every object of every kind; KINDS: the objects of `target_kinds`."""
 
     ALL_BUILDING = "ALL_BUILDING"
     ENTRANCE = "ENTRANCE"
     APARTMENT_LIST = "APARTMENT_LIST"
+    ALL_OBJECTS = "ALL_OBJECTS"
+    KINDS = "KINDS"
 
 
 class ObjectKind(StrEnum):
@@ -79,13 +82,15 @@ class ObjectKind(StrEnum):
 
 class TargetDTO(BaseModel):
     """The target of a post, a poll or a maintenance notice: the one shape every check and every
-    targeting rule takes. `apartment_ids` is empty unless the scope is APARTMENT_LIST."""
+    targeting rule takes. `apartment_ids` is empty unless the scope is APARTMENT_LIST, `kinds`
+    unless it is KINDS."""
 
     model_config = ConfigDict(frozen=True)
 
     scope: TargetScope
     entrance: int | None = None
     apartment_ids: frozenset[uuid.UUID] = frozenset()
+    kinds: frozenset[ObjectKind] = frozenset()
 
     @classmethod
     def of(
@@ -93,13 +98,30 @@ class TargetDTO(BaseModel):
         scope: TargetScope,
         entrance: int | None,
         apartment_ids: Iterable[uuid.UUID | str] | None,
+        kinds: Iterable[ObjectKind | str] | None = None,
     ) -> "TargetDTO":
-        """From the target fields of a request or a stored row (ids as UUIDs or JSON strings)."""
+        """From the target fields of a request or a stored row (ids as UUIDs or JSON strings,
+        kinds as enum members or their values)."""
         return cls(
             scope=scope,
             entrance=entrance,
             apartment_ids=frozenset(uuid.UUID(str(value)) for value in apartment_ids or ()),
+            kinds=frozenset(ObjectKind(value) for value in kinds or ()),
         )
+
+    @property
+    def stored_kinds(self) -> list[str] | None:
+        """`kinds` as a JSONB column stores them: in the order of kinds, NULL without any."""
+        return [kind.value for kind in ObjectKind if kind in self.kinds] or None
+
+
+def _unique_kinds(kinds: list[ObjectKind] | None) -> list[ObjectKind] | None:
+    """Drop duplicates, in the order of kinds; an empty list means "not given"."""
+    return [kind for kind in ObjectKind if kind in kinds] if kinds else None
+
+
+# `target_kinds` of a request: the kinds of a KINDS target (epic E14).
+TargetKinds = Annotated[list[ObjectKind] | None, AfterValidator(_unique_kinds)]
 
 
 class ObjectRef(NamedTuple):
@@ -221,9 +243,16 @@ def object_sort_key(kind: ObjectKind, entrance: int | None, number: str) -> tupl
 def target_consistency_problem(target: TargetDTO) -> str | None:
     """Why the fields of a target do not fit its scope, or None when they do. Whether the
     entrance or the apartments exist is `PropertyService.target_problem_in_building`."""
-    if target.scope == TargetScope.ALL_BUILDING:
+    if target.kinds and target.scope != TargetScope.KINDS:
+        return f"{target.scope.value} does not take target_kinds."
+    if target.scope in (TargetScope.ALL_BUILDING, TargetScope.ALL_OBJECTS):
         if target.entrance is not None or target.apartment_ids:
-            return "ALL_BUILDING takes neither target_entrance nor target_apartment_ids."
+            return f"{target.scope.value} takes neither target_entrance nor target_apartment_ids."
+    elif target.scope == TargetScope.KINDS:
+        if not target.kinds:
+            return "KINDS needs at least one kind in target_kinds."
+        if target.entrance is not None or target.apartment_ids:
+            return "KINDS takes neither target_entrance nor target_apartment_ids."
     elif target.scope == TargetScope.ENTRANCE:
         if target.entrance is None:
             return "ENTRANCE needs target_entrance."
@@ -239,13 +268,24 @@ def target_consistency_problem(target: TargetDTO) -> str | None:
 def apartment_in_target(
     target: TargetDTO, *, apartment_id: uuid.UUID, kind: ObjectKind, entrance: int | None
 ) -> bool:
-    """Whether an object is in a target: the one rule of who is reached. Recipients and
-    electors use it directly; the SQL of `PropertyService.targeting_clause` is kept equal to it
-    by tests. `kind` takes part once targets by kind exist; today every scope ignores it."""
+    """Whether an object is in a target: the one rule of who is reached, per object (a person is
+    reached through each of their objects that the target holds). Recipients and electors use
+    it directly; the SQL of `PropertyService.targeting_clause` is kept equal to it by tests.
+
+    The whole building is the apartments: a parking space or a garage is reached by
+    ALL_OBJECTS, by its kind, or by its own id."""
     if target.scope == TargetScope.ALL_BUILDING:
+        return kind == ObjectKind.APARTMENT
+    if target.scope == TargetScope.ALL_OBJECTS:
         return True
+    if target.scope == TargetScope.KINDS:
+        return kind in target.kinds
     if target.scope == TargetScope.ENTRANCE:
-        return target.entrance is not None and entrance == target.entrance
+        return (
+            kind == ObjectKind.APARTMENT
+            and target.entrance is not None
+            and entrance == target.entrance
+        )
     return apartment_id in target.apartment_ids
 
 

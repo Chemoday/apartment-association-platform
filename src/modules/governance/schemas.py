@@ -22,7 +22,7 @@ from pydantic import (
 )
 
 from src.core.validation import optional_safe_text, safe_text
-from src.modules.property.schemas import TargetScope
+from src.modules.property.schemas import ObjectKind, TargetKinds, TargetScope
 
 
 class PollKind(StrEnum):
@@ -138,6 +138,7 @@ class PollDraftRequest(BaseModel):
     target_scope: TargetScope = TargetScope.ALL_BUILDING
     target_entrance: StrictInt | None = Field(default=None, ge=1, le=1000)
     target_apartment_ids: TargetApartmentIds = None
+    target_kinds: TargetKinds = None
     eligibility: Eligibility
     unit: PollUnit
     closes_at: Deadline
@@ -221,6 +222,7 @@ class PollBase(BaseModel):
     target_scope: TargetScope
     target_entrance: int | None
     target_apartment_ids: list[uuid.UUID] | None
+    target_kinds: list[ObjectKind] | None
     eligibility: Eligibility
     unit: PollUnit
     closes_at: datetime

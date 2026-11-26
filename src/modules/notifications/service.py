@@ -460,7 +460,12 @@ class NotificationsSubscriber:
             # Targeting comes from the stored alert, the one source of truth.
             targeted = await properties.resolve_recipients(
                 ref.building_id,
-                TargetDTO.of(ref.target_scope, ref.target_entrance, ref.target_apartment_ids),
+                TargetDTO.of(
+                    ref.target_scope,
+                    ref.target_entrance,
+                    ref.target_apartment_ids,
+                    ref.target_kinds,
+                ),
             )
             board = await properties.users_with_roles(ref.building_id, _EMERGENCY_ROLES)
             recipients = {r.user_id: r for r in (*targeted, *board)}
@@ -473,6 +478,7 @@ class NotificationsSubscriber:
                     "category": ref.category.value,
                     "target_scope": ref.target_scope.value,
                     "target_entrance": ref.target_entrance,
+                    "target_kinds": [kind.value for kind in ref.target_kinds],
                 },
                 "respect_preferences": False,  # mandatory
             }
@@ -789,7 +795,12 @@ class NotificationsSubscriber:
             properties = PropertyService(session)
             residents = await properties.resolve_recipients(
                 event.building_id,
-                TargetDTO.of(event.target_scope, event.target_entrance, event.target_apartment_ids),
+                TargetDTO.of(
+                    event.target_scope,
+                    event.target_entrance,
+                    event.target_apartment_ids,
+                    event.target_kinds,
+                ),
             )
             board = await properties.users_with_roles(event.building_id, _NOTICE_BOARD_ROLES)
             recipients = {r.user_id: r for r in (*residents, *board)}
