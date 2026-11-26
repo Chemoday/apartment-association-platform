@@ -440,7 +440,7 @@ class ConnectionStatus(StrEnum):
 class ConnectionItem(BaseModel):
     apartment_id: uuid.UUID
     apartment_number: str
-    entrance: int
+    entrance: int | None
     status: ConnectionStatus
     owners: int
     tenants: int

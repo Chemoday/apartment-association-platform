@@ -357,8 +357,8 @@ class MatrixMeter(BaseModel):
 class MatrixApartment(BaseModel):
     apartment_id: uuid.UUID
     apartment_number: str
-    entrance: int
-    floor: int
+    entrance: int | None
+    floor: int | None
     status: SubmissionStatus
     meters: list[MatrixMeter]
 

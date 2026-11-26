@@ -582,7 +582,7 @@ class PropertyService:
         if member_only and not user.memberships:
             return false()
         targeted: list[ColumnElement[bool]] = [scope == TargetScope.ALL_BUILDING]
-        if entrances := sorted({membership.entrance for membership in user.memberships}):
+        if entrances := sorted({m.entrance for m in user.memberships if m.entrance is not None}):
             targeted.append(and_(scope == TargetScope.ENTRANCE, entrance.in_(entrances)))
         if ids := sorted(str(apartment_id) for apartment_id in user.apartment_ids):
             targeted.append(
@@ -595,9 +595,12 @@ class PropertyService:
         return or_(*targeted)
 
     async def apartment_areas(self, building_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
-        """The recorded area (m2) of each apartment of a building, for consumption per m2."""
+        """The recorded area (m2) of each object of a building that has one, for consumption per
+        m2 (a parking space may have none)."""
         rows = await self.session.execute(
-            select(Apartment.id, Apartment.area_m2).where(Apartment.building_id == building_id)
+            select(Apartment.id, Apartment.area_m2).where(
+                Apartment.building_id == building_id, Apartment.area_m2.is_not(None)
+            )
         )
         return {apartment_id: area for apartment_id, area in rows}
 

@@ -131,8 +131,9 @@ class ApartmentDTO(BaseModel):
 
     id: uuid.UUID
     number: str
-    entrance: int
-    floor: int
+    # None for an object without an entrance or a floor (a parking space, a garage).
+    entrance: int | None
+    floor: int | None
 
 
 class NewApartment(BaseModel):
@@ -141,9 +142,9 @@ class NewApartment(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     number: str
-    entrance: int
-    floor: int
-    area_m2: Decimal
+    entrance: int | None
+    floor: int | None
+    area_m2: Decimal | None
 
 
 class ApartmentMembershipDTO(BaseModel):
@@ -152,8 +153,8 @@ class ApartmentMembershipDTO(BaseModel):
     membership_id: uuid.UUID
     apartment_id: uuid.UUID
     apartment_number: str
-    entrance: int
-    floor: int
+    entrance: int | None
+    floor: int | None
     relation_type: RelationType
     can_submit_readings: bool
     can_view_bills: bool
@@ -434,9 +435,9 @@ class ApartmentSummary(BaseModel):
 
     apartment_id: uuid.UUID
     apartment_number: str
-    entrance: int
-    floor: int
-    area_m2: AreaAmount
+    entrance: int | None
+    floor: int | None
+    area_m2: AreaAmount | None
     owner_count: int
     tenant_count: int
     resident_count: int
@@ -487,7 +488,7 @@ class ConnectionRowDTO(BaseModel):
 
     apartment_id: uuid.UUID
     number: str
-    entrance: int
+    entrance: int | None
     on_paper: bool
     owners: int
     tenants: int
