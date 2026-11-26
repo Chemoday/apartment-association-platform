@@ -364,9 +364,19 @@ fill the building once (an advisory lock).
   column given twice is refused. Header names are printed printable only, at most 32 characters
   and 10 names.
 - **A row** is one of:
-  - an apartment meter: `apartment` and `resource` filled;
-  - an apartment without meters: `apartment` filled, every meter column empty;
-  - a building meter: `apartment`, `entrance`, `floor` and `area_m2` empty, `resource` filled.
+  - an object's meter: `apartment` and `resource` filled;
+  - an object without meters: `apartment` filled, every meter column empty;
+  - a building meter: `apartment`, `entrance`, `floor`, `area_m2` and `kind` empty, `resource`
+    filled.
+- **The kind of an object** (epic E14): the optional column `kind`, after the meter columns, is
+  `APARTMENT`, `PARKING` or `GARAGE` (case ignored); empty means an apartment, so a file without
+  the column keeps working. A number names an object only together with its kind: `1` and `1`
+  of kind `PARKING` are two objects, and the meters of a row belong to the object of its kind and
+  number. A parking space or a garage has no entrance (an `entrance` on it is a problem of the
+  row), its `floor` is optional and stays empty without one (never 1), and its `area_m2` is
+  optional. Two numbers of one kind whose labels collide are refused, compared without case
+  (`PARKING` `1` and `P1` are both `P1`; `P1` and `p1`). The register check compares the
+  apartments only, and the default limit of a building meter grows with every object.
 - **Apartment columns:**
   - `apartment`: 1 to 32 characters of one line of visible text (the rule of `create-building`);
     every row of one apartment repeats the same `entrance`, `floor` and `area_m2`; two numbers
@@ -374,9 +384,9 @@ fill the building once (an advisory lock).
     and `1`; a zero after a digit or after `.`, `,`, `/` or `-` counts: `1.05` and `1.5` are two
     numbers) are
     an error of the later row, never two apartments;
-  - `entrance`: a whole number from 1 to 99, required;
-  - `floor`: a whole number from -5 to 200, empty means 1;
-  - `area_m2`: required, greater than 0, a decimal point or comma, rounded half up to 2 decimal
+  - `entrance`: a whole number from 1 to 99, required for an apartment;
+  - `floor`: a whole number from -5 to 200, empty means 1 for an apartment;
+  - `area_m2`: required for an apartment, greater than 0, a decimal point or comma, rounded half up to 2 decimal
     places (the output counts how many were rounded), at most 999999.99.
 - **Numbers** (`area_m2`, `initial_value`, `max_monthly_delta`) may group their thousands with
   spaces, as a spreadsheet shows them (`12 345,5`, also with a no-break space); any other
@@ -410,8 +420,9 @@ fill the building once (an advisory lock).
 - **Output and exit codes** (standard output, row numbers and counts only, never cell values
   other than the column name): every problem as `row <n>: <column>: <what is wrong>` (row 1 is
   the header), then `error: <count> problems, nothing written` and 2; refusals as above and 1;
-  success: `checked: <A> apartments, <M> apartment meters, <B> building meters, <R> areas
-  rounded` with `--dry-run`, else `imported: ...` with the same counts, and 0. Before that line,
+  success: `checked: <A> apartments, <P> parking spaces, <G> garages, <M> apartment meters, <B>
+  building meters, <R> areas rounded` with `--dry-run` (the apartment meters are the meters of
+  every object), else `imported: ...` with the same counts, and 0. Before that line,
   warnings that never stop the import: `warning: column(s) ignored: <names>`, and, when the
   building has a register passport block and its provider is enabled, a check against the
   register (owner, 2026-11-21): `warning: the register lists apartments the file does not have:
@@ -419,7 +430,7 @@ fill the building once (an advisory lock).
   added by hand), and `warning: apartment <number>: area <file> m2, the register says
   <register> m2` when they differ by more than 1 m2 and 2 %. At most 10 numbers per line (`and
   <n> more`), at most 20 area lines. A file without
-  any apartment and without other problems is `error: the layout has no apartments`. The command
+  any object and without other problems is `error: the layout has no apartments`. The command
   publishes no events; the period opener has already opened the current month for the building
   (section 2, "Monthly periods"), and its new meters are due a reading in it.
 
@@ -1893,16 +1904,22 @@ request and answer with the same report; the preview changes nothing.
 
 Request `{"text": "..."}`: the list the chairman pasted, or the text of a file the client read.
 It is parsed in memory and never stored, neither in the database nor in the file storage.
-- **One row per line:** `apartment number; e-mail; language`. The separator is `;` when the line
-  has one, else a tab, else `,`. The language may be left out or empty, and its case is
+- **One row per line:** `apartment number; e-mail; language; kind`. The separator is `;` when the
+  line has one, else a tab, else `,`. The language may be left out or empty, and its case is
   ignored (`EN` is `en`); empty cells at the end of a line (a spreadsheet export) are ignored.
+  The kind (epic E14) is `APARTMENT`, `PARKING` or `GARAGE`, its case ignored, and may be left
+  out or empty: an apartment, so a list without it keeps working (`1; a@example.org; ; PARKING`
+  invites the owner of parking space `1`, `1; b@example.org` the owner of Apt. 1). The list stays
+  positional, and a prefix in the number cell is never read as a kind, because a number may itself
+  be `P-2`.
 - Leading and trailing spaces of each cell are ignored, and so are empty lines, lines starting
   with `#`, a byte order mark and a first line that names the columns (its second cell is not an
-  e-mail and contains `mail`). The apartment number must match the number of an object of kind
-  `APARTMENT` exactly, as in `POST` (`14` is not `014`); parking spaces and garages are invited
-  one by one until the list takes a kind (epic E14, K4). Each row of the report has
-  `apartment_kind`, the kind it was looked up as.
-- **Size:** at most 1 MB of UTF-8 and at most twice as many rows as the building has apartments;
+  e-mail and contains `mail`). The number must match the number of an object of the row's kind
+  exactly, as in `POST` (`14` is not `014`); one number under two kinds is two objects, not a
+  duplicate. Each row of the report has `apartment_kind`, the kind it was looked up as (`null`
+  for a row whose kind is not known).
+- **Size:** at most 1 MB of UTF-8 and at most twice as many rows as the building has objects of
+  every kind;
   otherwise `422 BULK_LIST_TOO_LONG` and nothing is read. A `text` of more than 4 194 304
   characters is refused earlier, as `422 VALIDATION_ERROR`, and so is a control character.
 
@@ -1922,11 +1939,13 @@ Response `200 BulkInvitationReport`:
   when it is valid, the language in lower case); the chairman typed them, so they are shown in
   full.
 - **`outcome`,** the first that applies:
-  - `INVALID_ROW`: not two or three cells;
+  - `INVALID_ROW`: not two to four cells;
   - `INVALID_EMAIL`: not the basic shape of an address (below);
-  - `INVALID_LOCALE`: a language that is not offered (see "The language of an invitation");
-  - `APARTMENT_NOT_FOUND`;
-  - `DUPLICATE_IN_LIST`: the same e-mail and apartment on an earlier line (that one counts);
+  - `INVALID_LOCALE`: a language that is not offered (see "The language of an invitation"),
+    also a kind written in the third cell;
+  - `INVALID_KIND`: a fourth cell that is not a kind (epic E14);
+  - `APARTMENT_NOT_FOUND`: no object of that kind and number;
+  - `DUPLICATE_IN_LIST`: the same e-mail and object on an earlier line (that one counts);
   - `ALREADY_PENDING`: an `OWNER` invitation of this e-mail and apartment is already pending,
     from anyone (as `409 INVITATION_ALREADY_PENDING`; an expired one is replaced);
   - `READY` in the preview, `INVITED` in the send.
@@ -1941,7 +1960,7 @@ Response `200 BulkInvitationReport`:
   `429 RATE_LIMITED` with `Retry-After`.
 - **The building limit:** the rows of bulk sends and the invitations of "resend expired" (and,
   with task R4c, confirmed join requests) count against one limit per building in any 24 hours,
-  twice the number of apartments. Single invitations and resends keep their own limit of 10 per
+  twice the number of objects of every kind (apartments, parking spaces and garages). Single invitations and resends keep their own limit of 10 per
   inviter per hour and do not count here.
 - Errors: `403 FORBIDDEN`, `422 BULK_LIST_TOO_LONG`, `422 VALIDATION_ERROR`, `429 RATE_LIMITED`
   (the send only).
