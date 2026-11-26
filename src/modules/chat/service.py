@@ -17,9 +17,11 @@ from src.core.database import DbSession
 from src.core.exceptions import DomainError
 from src.modules.chat.models import ChatMessage
 from src.modules.chat.policies import (
+    BUILDING_ROOM,
     HISTORY,
     MAX_LENGTH,
     RECENT,
+    in_room,
     rate_limit,
     takes_part,
     window_start,
@@ -182,13 +184,14 @@ class ChatService:
 
     @staticmethod
     def _author_apartment(user: CurrentUserDTO, requested: uuid.UUID | None) -> uuid.UUID | None:
-        """An explicit choice must be one of the caller's apartments; without one, the first
-        apartment, or none for a chairman or board member who lives elsewhere."""
+        """An explicit choice must be one of the caller's objects inside the room's target;
+        without one, the first of them (an owner of Apt. 14 and P1 writes as Apt. 14), or none
+        for a chairman or board member without one there."""
         if requested is not None:
-            if user.membership_for(requested) is None:
+            if not in_room(user, BUILDING_ROOM, requested):
                 raise _invalid_author_apartment()
             return requested
-        return first_object_in(user, None)
+        return first_object_in(user, BUILDING_ROOM)
 
     async def _views(self, user: CurrentUserDTO, rows: list[ChatMessage]) -> list[ChatMessageView]:
         badges = await self.property_service.get_masked_author_badges(

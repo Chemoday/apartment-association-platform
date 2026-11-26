@@ -11,9 +11,10 @@ def is_staff(role: BuildingRole) -> bool:
     return role in STAFF_ROLES
 
 
-def may_use_documents(role: BuildingRole, *, has_membership: bool) -> bool:
-    """Residents of the building (an active membership) and the staff."""
-    return has_membership or is_staff(role)
+def may_use_documents(role: BuildingRole, *, shared_access: bool) -> bool:
+    """Members with shared access (not a tenant of a parking space or a garage only, epic E14)
+    and the staff, by their role."""
+    return shared_access or is_staff(role)
 
 
 def visible_audiences(role: BuildingRole) -> frozenset[DocumentAudience]:

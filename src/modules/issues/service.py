@@ -239,7 +239,7 @@ class IssuesService:
         self._require_access(user)
         return IssueForm(
             urgent_enabled=await self.settings.get(user.building_id, URGENT_ENABLED),
-            apartment_ids=[membership.apartment_id for membership in user.memberships],
+            apartment_ids=[m.apartment_id for m in user.memberships if m.shared_access],
             entrances=await self._entrances(user.building_id),
         )
 
@@ -680,8 +680,9 @@ class IssuesService:
 
     @staticmethod
     def _require_access(user: CurrentUserDTO) -> None:
-        """Residents of the building (an active membership), the chairman and the board."""
-        if not user.memberships and not is_board(user.building_role):
+        """Members with shared access (not a tenant of a parking space or a garage only, epic
+        E14), the chairman and the board by their role."""
+        if not user.shared_access and not is_board(user.building_role):
             raise _forbidden()
 
     def _visible_to(self, user: CurrentUserDTO, *, include_old: bool) -> ColumnElement[bool]:
@@ -763,8 +764,10 @@ class IssuesService:
         if board and apartment_id_given and apartment_id is None:
             return None
         try:
+            # Only an object that opens the tracker reports in it (not a rented parking space).
             chosen = chosen_object(
-                [(m.apartment_id, m.apartment_kind) for m in user.memberships], apartment_id
+                [(m.apartment_id, m.apartment_kind) for m in user.memberships if m.shared_access],
+                apartment_id,
             )
         except ObjectNotHeld:
             raise DomainError(

@@ -195,6 +195,7 @@ class PropertyService:
             building_role=current_user.building_role,
             privacy_display_mode=current_user.privacy_display_mode,
             locale=locale,
+            shared_access=current_user.shared_access,
             memberships=[
                 MembershipView(
                     **membership.model_dump(),

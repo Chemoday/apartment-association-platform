@@ -295,7 +295,7 @@ class DocumentsService:
 
     @staticmethod
     def _require_access(user: CurrentUserDTO) -> None:
-        if not may_use_documents(user.building_role, has_membership=bool(user.memberships)):
+        if not may_use_documents(user.building_role, shared_access=user.shared_access):
             raise _forbidden()
 
     async def _visible(

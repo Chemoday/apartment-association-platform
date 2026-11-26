@@ -9,6 +9,7 @@ from src.modules.property.schemas import (
     BuildingRole,
     CurrentUserDTO,
     DisplayMode,
+    ObjectKind,
 )
 
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
@@ -21,7 +22,9 @@ def caller(role: BuildingRole, apartments: int = 0) -> CurrentUserDTO:
         building_role=role,
         privacy_display_mode=DisplayMode.APARTMENT_ONLY,
         memberships=tuple(
-            ApartmentMembershipDTO.model_construct(apartment_id=uuid.uuid4())
+            ApartmentMembershipDTO.model_construct(
+                apartment_id=uuid.uuid4(), apartment_kind=ObjectKind.APARTMENT, entrance=1
+            )
             for _ in range(apartments)
         ),
     )

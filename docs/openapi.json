@@ -17419,6 +17419,10 @@
               }
             ]
           },
+          "shared_access": {
+            "type": "boolean",
+            "title": "Shared Access"
+          },
           "memberships": {
             "items": {
               "$ref": "#/components/schemas/MembershipView"
@@ -17434,6 +17438,7 @@
           "building_role",
           "privacy_display_mode",
           "locale",
+          "shared_access",
           "memberships"
         ],
         "title": "MeResponse"

@@ -189,6 +189,14 @@ class ApartmentMembershipDTO(BaseModel):
     # before it stay hidden from this member (docs/API.md section 4).
     since: datetime
 
+    @property
+    def shared_access(self) -> bool:
+        """Whether it opens the shared spaces (the documents, the issue tracker; epic E14): every
+        membership except a tenant of a parking space or a garage, who has the least access."""
+        return (
+            self.relation_type != RelationType.TENANT or self.apartment_kind == ObjectKind.APARTMENT
+        )
+
 
 class CurrentUserDTO(BaseModel):
     """The authenticated user as seen by every module (returned by core.security)."""
@@ -207,6 +215,12 @@ class CurrentUserDTO(BaseModel):
     @property
     def apartment_ids(self) -> frozenset[uuid.UUID]:
         return frozenset(m.apartment_id for m in self.memberships)
+
+    @property
+    def shared_access(self) -> bool:
+        """Whether any active membership gives shared access (not a tenant of a parking space or
+        a garage only); the staff's role is each module's own clause."""
+        return any(m.shared_access for m in self.memberships)
 
 
 # --- Objects and targets: pure rules every module shares (epic E14, section 2.5) ---------------
@@ -343,6 +357,8 @@ class MeResponse(BaseModel):
     privacy_display_mode: DisplayMode
     # Language of notifications sent outside the app; None = the instance default.
     locale: Locale | None
+    # Whether the memberships open the documents and the issue tracker (epic E14).
+    shared_access: bool
     memberships: list[MembershipView]
 
 
