@@ -111,6 +111,11 @@ async def test_each_apartment_gets_the_first_status_that_applies(
             "PAPER": 1,
             "EXPIRED": 1,
         },
+        "by_kind": {
+            "APARTMENT": {"objects": 7, "connected": 1},
+            "PARKING": {"objects": 0, "connected": 0},
+            "GARAGE": {"objects": 0, "connected": 0},
+        },
     }
     # Entrance first, then the natural order of the numbers.
     assert [item["apartment_number"] for item in body["items"]] == [

@@ -44,6 +44,9 @@ class ReadingExportRow:
     recorded_at: datetime
     # Where previous_value came from: HISTORY, INITIAL, SUBMITTED or START (epic E13 R3b).
     previous_origin: str
+    # APARTMENT, PARKING or GARAGE (epic E14); None for a Building Master Meter. A default, so
+    # an exporter written before the kinds keeps working.
+    apartment_kind: str | None = None
 
 
 class ReadingExporter(Protocol):

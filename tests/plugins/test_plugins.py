@@ -55,7 +55,7 @@ def test_csv_has_bom_header_and_canonical_values() -> None:
     assert parsed[1] == [
         "2026-10", "2", "14", str(uuid.UUID(int=1)), "COLD_WATER", "SN-1", "Bathroom", "m3",
         "115.000", "120.000", "5.000", "RESIDENT", "false", "2026-10-25T10:00:00+00:00",
-        "HISTORY",
+        "HISTORY", "",  # no kind given: an exporter row of before epic E14
     ]  # fmt: skip
     assert parsed[2][1:3] == ["", "MASTER"]
     assert parsed[2][12] == "true"
@@ -176,3 +176,14 @@ async def test_fcm_push_stub_does_not_send() -> None:
         await channel.send(message())
     with pytest.raises(NotImplementedError):
         channel.build_message(message())
+
+
+def test_an_exporter_row_without_a_kind_keeps_working() -> None:
+    import dataclasses
+
+    from src.plugins.registry import ReadingExportRow
+
+    defaults = {f.name: f.default for f in dataclasses.fields(ReadingExportRow)}
+
+    assert defaults["apartment_kind"] is None
+    assert COLUMNS[-1] == "apartment_kind"

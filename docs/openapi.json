@@ -4859,6 +4859,24 @@
               ],
               "title": "Period Code"
             }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ObjectKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only the objects of this kind (the balances stay the building's).",
+              "title": "Kind"
+            },
+            "description": "Only the objects of this kind (the balances stay the building's)."
           }
         ],
         "responses": {
@@ -14320,13 +14338,24 @@
             },
             "type": "object",
             "title": "By Status"
+          },
+          "by_kind": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/KindSummary"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/ObjectKind"
+            },
+            "type": "object",
+            "title": "By Kind"
           }
         },
         "type": "object",
         "required": [
           "apartments",
           "connected",
-          "by_status"
+          "by_status",
+          "by_kind"
         ],
         "title": "ConnectionSummary"
       },
@@ -16961,6 +16990,24 @@
           "country_code"
         ],
         "title": "JoinTarget"
+      },
+      "KindSummary": {
+        "properties": {
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "connected": {
+            "type": "integer",
+            "title": "Connected"
+          }
+        },
+        "type": "object",
+        "required": [
+          "objects",
+          "connected"
+        ],
+        "title": "KindSummary"
       },
       "LinkCodeResponse": {
         "properties": {

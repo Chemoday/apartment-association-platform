@@ -583,3 +583,20 @@ def test_the_url_setting_refuses_userinfo_bad_ports_and_format_characters(value:
     from src.modules.auth.settings import PRIVACY_NOTICE_URL
 
     assert PRIVACY_NOTICE_URL.problem(value) is not None
+
+
+async def test_the_sheet_and_the_join_page_name_a_garage_by_its_kind(
+    client: AsyncClient, db_session: AsyncSession, world: World
+) -> None:
+    from src.modules.property.schemas import ObjectKind
+    from tests.factories import create_object
+
+    garage = await create_object(db_session, world.building, ObjectKind.GARAGE, "21")
+
+    (issued,) = (await issue(client, world, [garage.id]))["codes"]
+    lookup = await client.post(f"{API}/join/lookup", json={"join_code": issued["join_code"]})
+
+    # One number under two kinds: Apt. 21 and garage 21 are told apart on the sheet and the page.
+    assert (issued["apartment_number"], issued["apartment_kind"]) == ("21", "GARAGE")
+    assert lookup.status_code == 200, lookup.text
+    assert (lookup.json()["apartment_number"], lookup.json()["apartment_kind"]) == ("21", "GARAGE")
