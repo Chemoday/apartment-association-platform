@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from src.core.filling.draft import DraftApartmentRow
 from src.core.filling.layout import BuildingLayout, round_area, same_number
+from src.modules.property.schemas import ObjectKind
 
 MAX_NUMBERS = 10
 MAX_AREA_LINES = 20
@@ -25,7 +26,10 @@ def _numbers(numbers: list[str]) -> str:
 def register_warnings(layout: BuildingLayout, register: list[DraftApartmentRow]) -> list[str]:
     """Apartments the file or the register lacks, and areas that differ by more than 1 m2 and
     2 % (both, so rounding and small measuring differences never warn)."""
-    in_file = {same_number(a.number): a for a in layout.apartments}
+    # The register lists apartments; parking spaces and garages are compared later (epic E12 X3).
+    in_file = {
+        same_number(a.number): a for a in layout.apartments if a.kind == ObjectKind.APARTMENT
+    }
     in_register = {same_number(a.number): a for a in register}
     warnings: list[str] = []
     lacking = [a.number for key, a in in_register.items() if key not in in_file]

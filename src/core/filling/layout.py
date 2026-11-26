@@ -12,6 +12,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from src.core.csv_safety import neutralize_formula
 from src.modules.meters.schemas import METER_VALUE_MAX, MeterUnit, ResourceType
+from src.modules.property.schemas import ObjectKind, ObjectRef, object_label, parse_object_ref
 
 COLUMNS = (
     "apartment",
@@ -24,10 +25,13 @@ COLUMNS = (
     "location",
     "initial_value",
     "max_monthly_delta",
+    # Epic E14: after the meter columns, which older tooling may take by position; optional.
+    "kind",
 )
 APARTMENT_COLUMNS = ("apartment", "entrance", "floor", "area_m2")
 REQUIRED_COLUMNS = ("apartment", "entrance", "area_m2", "resource")
-METER_COLUMNS = COLUMNS[4:]
+METER_COLUMNS = COLUMNS[4:10]
+KINDS = ", ".join(kind.value for kind in ObjectKind)
 
 NUMBER_MAX_LENGTH = 32  # property_apartments.number
 TEXT_MAX_LENGTH = 100  # serial_number, location_label
@@ -89,15 +93,23 @@ class Problem:
 
 @dataclass(frozen=True)
 class LayoutApartment:
+    """An object of any kind (epic E14): only an apartment has an entrance, and a floor and an
+    area are required for it only."""
+
     number: str
-    entrance: int
-    floor: int
-    area_m2: Decimal
+    entrance: int | None
+    floor: int | None
+    area_m2: Decimal | None
+    kind: ObjectKind = ObjectKind.APARTMENT
+
+    @property
+    def ref(self) -> ObjectRef:
+        return ObjectRef(self.kind, self.number)
 
 
 @dataclass(frozen=True)
 class LayoutMeter:
-    apartment: str | None  # None: a building meter
+    apartment: ObjectRef | None  # None: a building meter
     resource: ResourceType
     unit: MeterUnit
     serial_number: str | None
@@ -111,6 +123,9 @@ class BuildingLayout:
     apartments: list[LayoutApartment] = field(default_factory=list)
     meters: list[LayoutMeter] = field(default_factory=list)
     rounded_areas: int = 0
+
+    def objects_of(self, kind: ObjectKind) -> int:
+        return sum(1 for apartment in self.apartments if apartment.kind == kind)
 
     @property
     def apartment_meters(self) -> int:
@@ -160,14 +175,18 @@ class _Checker:
     def __init__(self) -> None:
         self.problems: list[Problem] = []
         self.layout = BuildingLayout()
-        self._apartments: dict[str, tuple[int, LayoutApartment]] = {}
-        self._meter_keys: dict[tuple[str | None, ResourceType, str], int] = {}
-        self._spellings: dict[str, tuple[int, str]] = {}  # same_number() -> its first row
+        self._apartments: dict[ObjectRef, tuple[int, LayoutApartment]] = {}
+        self._meter_keys: dict[tuple[ObjectRef | None, ResourceType, str], int] = {}
+        # (kind, same_number()) -> its first row: two spellings are one object within a kind.
+        self._spellings: dict[tuple[ObjectKind, str], tuple[int, str]] = {}
+        # (kind, same_number(label)) -> its first row: "1", "P1" and "P 01" are all P1.
+        self._labels: dict[tuple[ObjectKind, str], int] = {}
         self._scaled: list[int] = []  # building meters whose limit took the default
 
     def scale_building_limits(self) -> None:
         """A building meter carries the whole building: its default limit grows with the count
-        of apartments, so a large building is not flagged as an anomaly every month."""
+        of objects of every kind (the master meter measures them all), so a large building is
+        not flagged as an anomaly every month."""
         count = len(self.layout.apartments)
         for index in self._scaled:
             meter = self.layout.meters[index]
@@ -235,61 +254,83 @@ class _Checker:
         if number:
             placed = self.apartment(row.ref, cells)
             if has_meter:
-                self.meter(row.ref, cells, number, add=placed)
+                self.meter(row.ref, cells, placed, add=placed is not None)
             return
-        for column in ("entrance", "floor", "area_m2"):
+        for column in ("entrance", "floor", "area_m2", "kind"):
             if cells[column]:
                 self.problem(row.ref, column, "must be empty for a building meter")
         self.meter(row.ref, cells, None, add=True)
 
-    def apartment(self, ref: int, cells: dict[str, str]) -> bool:
+    def apartment(self, ref: int, cells: dict[str, str]) -> ObjectRef | None:
+        """The object of the row, or None when the row has a problem (every cell is checked)."""
+        before = len(self.problems)
         number = self.text(ref, "apartment", cells["apartment"], NUMBER_MAX_LENGTH)
-        entrance = (
-            self.integer(ref, "entrance", cells["entrance"], ENTRANCE_RANGE)
-            if cells["entrance"]
-            else self.problem(ref, "entrance", "required")
-        )
+        try:
+            kind: ObjectKind | None = parse_object_ref(cells["kind"], "").kind
+        except ValueError:
+            self.problem(ref, "kind", f"one of {KINDS}")
+            kind = None
+        # An unknown kind reports only itself: what the row would need depends on the kind.
+        flat = kind == ObjectKind.APARTMENT
+        entrance = None
+        if cells["entrance"]:
+            if kind in (ObjectKind.APARTMENT, None):
+                entrance = self.integer(ref, "entrance", cells["entrance"], ENTRANCE_RANGE)
+            else:
+                self.problem(ref, "entrance", "a parking space or a garage has no entrance")
+        elif flat:
+            self.problem(ref, "entrance", "required")
         floor = (
             self.integer(ref, "floor", cells["floor"], FLOOR_RANGE)
             if cells["floor"]
-            else DEFAULT_FLOOR
+            else (DEFAULT_FLOOR if flat else None)  # another kind's empty floor stays empty
         )
-        area = None
+        area = raw = None
         if not cells["area_m2"]:
-            self.problem(ref, "area_m2", "required")
+            if flat:
+                self.problem(ref, "area_m2", "required")
         else:
             raw = self.decimal(ref, "area_m2", cells["area_m2"])
             if raw is not None:
                 area = round_area(raw)
                 if area <= 0:
                     self.problem(ref, "area_m2", "must be greater than 0")
-                    area = None
                 elif area > AREA_MAX:
                     self.problem(ref, "area_m2", f"at most {AREA_MAX}")
-                    area = None
-        if number is None or entrance is None or floor is None or area is None:
-            return False
-        apartment = LayoutApartment(number=number, entrance=entrance, floor=floor, area_m2=area)
-        first = self._apartments.get(number)
+        if len(self.problems) > before or number is None or kind is None:
+            return None
+        apartment = LayoutApartment(
+            number=number, entrance=entrance, floor=floor, area_m2=area, kind=kind
+        )
+        first = self._apartments.get(apartment.ref)
         if first is None:
-            other = self._spellings.get(same_number(number))
+            other = self._spellings.get((kind, same_number(number)))
             if other is not None:
                 self.problem(
                     ref, "apartment", f"the same number as row {other[0]}, written differently"
                 )
-                return False
-            self._spellings[same_number(number)] = (ref, number)
-            self._apartments[number] = (ref, apartment)
+                return None
+            label = object_label(kind, number)
+            # Compared as two spellings are: "P 1" and "P01" are P1 too.
+            clash = self._labels.get((kind, same_number(label)))
+            if clash is not None and kind != ObjectKind.APARTMENT:
+                self.problem(ref, "apartment", f"the same label {label} as row {clash}")
+                return None
+            self._spellings[(kind, same_number(number))] = (ref, number)
+            self._labels[(kind, same_number(label))] = ref
+            self._apartments[apartment.ref] = (ref, apartment)
             self.layout.apartments.append(apartment)
             if area != raw:
                 self.layout.rounded_areas += 1
-            return True
+            return apartment.ref
         if first[1] != apartment:
             self.problem(ref, "apartment", f"entrance, floor or area differ from row {first[0]}")
-            return False
-        return True
+            return None
+        return apartment.ref
 
-    def meter(self, ref: int, cells: dict[str, str], apartment: str | None, add: bool) -> None:
+    def meter(
+        self, ref: int, cells: dict[str, str], apartment: ObjectRef | None, add: bool
+    ) -> None:
         """Checks every meter cell; adds the meter only when they and its apartment are right."""
         before = len(self.problems)
         resource = None

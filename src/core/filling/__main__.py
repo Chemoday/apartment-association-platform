@@ -43,6 +43,7 @@ from src.core.filling.template import (
 )
 from src.core.telemetry import configure_logging
 from src.modules.property.registry import BuildingRegistryService
+from src.modules.property.schemas import ObjectKind
 from src.plugins.registry import (
     RegistryBuildingNotFound,
     RegistryUnavailable,
@@ -245,7 +246,10 @@ async def import_building(
     for warning in warnings:
         print(warning, file=out)
     counts = (
-        f"{len(layout.apartments)} apartments, {layout.apartment_meters} apartment meters, "
+        f"{layout.objects_of(ObjectKind.APARTMENT)} apartments, "
+        f"{layout.objects_of(ObjectKind.PARKING)} parking spaces, "
+        f"{layout.objects_of(ObjectKind.GARAGE)} garages, "
+        f"{layout.apartment_meters} apartment meters, "
         f"{layout.building_meters} building meters, {layout.rounded_areas} areas rounded"
     )
     print(f"{'checked' if dry_run else 'imported'}: {counts}", file=out)
