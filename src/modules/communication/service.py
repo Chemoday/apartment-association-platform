@@ -82,6 +82,7 @@ from src.modules.property.schemas import (
     CurrentUserDTO,
     ObjectKind,
     TargetDTO,
+    apartment_in_target,
     first_object_in,
 )
 from src.modules.property.service import AuthorKey, PropertyService, get_property_service
@@ -100,7 +101,13 @@ def _invalid_author_apartment() -> DomainError:
     return DomainError(
         status_code=422,
         error_code="INVALID_AUTHOR_APARTMENT",
-        message="You can only write on behalf of an apartment you belong to.",
+        message="You can only write on behalf of your own object inside the post's target.",
+    )
+
+
+def _target_of(post: Post) -> TargetDTO:
+    return TargetDTO.of(
+        post.target_scope, post.target_entrance, post.target_apartment_ids, post.target_kinds
     )
 
 
@@ -399,6 +406,7 @@ class CommunicationService:
             author_apartment_id = self._author_apartment(
                 user,
                 request.author_apartment_id,
+                target,
                 default_to_membership=request.post_type == PostType.FORUM_TOPIC,
             )
 
@@ -478,7 +486,7 @@ class CommunicationService:
             author_apartment_id = self._as_themselves(request.author_apartment_id)
         else:
             author_apartment_id = self._author_apartment(
-                user, request.author_apartment_id, default_to_membership=True
+                user, request.author_apartment_id, _target_of(post), default_to_membership=True
             )
         comment = Comment(
             post_id=post.id,
@@ -812,19 +820,31 @@ class CommunicationService:
 
     @staticmethod
     def _author_apartment(
-        user: CurrentUserDTO, requested: uuid.UUID | None, default_to_membership: bool
+        user: CurrentUserDTO,
+        requested: uuid.UUID | None,
+        target: TargetDTO,
+        *,
+        default_to_membership: bool,
     ) -> uuid.UUID | None:
-        """The apartment whose privacy mode decides the author's badge.
+        """The object whose privacy mode decides the author's badge, always inside the post's
+        target (epic E14, section 3.2): a comment signed "Apt. 14" under a notice for the garages
+        would tell everyone that Apt. 14 holds a garage.
 
-        An explicit choice must be one of the caller's own apartments. Without one, forum
-        topics and comments use the caller's first apartment, and board posts none (the board
-        speaks as the board).
+        An explicit choice must be one of the caller's own objects inside the target. Without
+        one, forum topics and comments use the caller's first object inside it (none for a board
+        member without one there), and board posts none (the board speaks as the board).
         """
         if requested is not None:
-            if user.membership_for(requested) is None:
+            membership = user.membership_for(requested)
+            if membership is None or not apartment_in_target(
+                target,
+                apartment_id=membership.apartment_id,
+                kind=membership.apartment_kind,
+                entrance=membership.entrance,
+            ):
                 raise _invalid_author_apartment()
             return requested
-        return first_object_in(user, None) if default_to_membership else None
+        return first_object_in(user, target) if default_to_membership else None
 
     async def _check_new_thread(
         self, user: CurrentUserDTO, request: PostCreateRequest

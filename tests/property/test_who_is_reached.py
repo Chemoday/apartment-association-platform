@@ -273,3 +273,93 @@ async def test_no_in_app_row_reaches_a_person_outside_a_whole_building_target(
         assert types(feed) == set(), name
     feed = await api_client.get("/api/v1/notifications/feed", headers=as_user(mixed.x))
     assert types(feed) == {"EMERGENCY_PUBLISHED", "POLL_OPENED"}
+
+
+# --- The badge stays inside the target (section 3.2) --------------------------------------------
+
+
+async def notice(client: AsyncClient, mixed: MixedBuilding, **target) -> str:
+    published = await client.post(
+        POSTS,
+        json={"post_type": "OFFICIAL_NOTICE", "title": "Notice", "body": "Read me.", **target},
+        headers=as_user(mixed.chairman),
+    )
+    assert published.status_code == 201, published.text
+    return published.json()["id"]
+
+
+async def comment(client: AsyncClient, user: User, post_id: str, **extra):
+    return await client.post(
+        f"{POSTS}/{post_id}/comments", json={"body": "Noted.", **extra}, headers=as_user(user)
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "label"),
+    [
+        ({"target_scope": "KINDS", "target_kinds": ["PARKING"]}, "P1"),
+        ({"target_scope": "KINDS", "target_kinds": ["PARKING", "GARAGE"]}, "P1"),
+        ({"target_scope": "ALL_BUILDING"}, "Apt. 14"),
+        ({"target_scope": "ALL_OBJECTS"}, "Apt. 14"),  # the first object in list order
+    ],
+)
+async def test_a_comment_is_signed_by_the_first_object_inside_the_target(
+    api_client: AsyncClient, mixed: MixedBuilding, target: dict, label: str
+) -> None:
+    post_id = await notice(api_client, mixed, **target)
+
+    response = await comment(api_client, mixed.a, post_id)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["author_badge"]["display_label"] == label
+
+
+async def test_an_object_outside_the_target_cannot_sign(
+    api_client: AsyncClient, mixed: MixedBuilding
+) -> None:
+    parking = await notice(api_client, mixed, target_scope="KINDS", target_kinds=["PARKING"])
+    entrance = await notice(api_client, mixed, target_scope="ENTRANCE", target_entrance=1)
+
+    outside = await comment(api_client, mixed.a, parking, author_apartment_id=str(mixed.apt_14.id))
+    inside = await comment(api_client, mixed.a, parking, author_apartment_id=str(mixed.p_1.id))
+    # Before epic E14 an object outside an ENTRANCE target was accepted; not any more.
+    other_entrance = await comment(
+        api_client, mixed.x, entrance, author_apartment_id=str(mixed.p_2.id)
+    )
+    board = await comment(api_client, mixed.board_member, entrance)
+
+    assert (outside.status_code, outside.json()["error_code"]) == (422, "INVALID_AUTHOR_APARTMENT")
+    assert inside.status_code == 201, inside.text
+    assert other_entrance.status_code == 422, other_entrance.text
+    # A board member without an object in the entrance writes as the board.
+    assert board.json()["author_badge"] == {"display_label": "Board", "role_badge": "BOARD"}
+
+
+async def test_a_resolved_emergency_by_kind_keeps_its_kinds(
+    api_client: AsyncClient, mixed: MixedBuilding
+) -> None:
+    published = await api_client.post(
+        POSTS,
+        json={
+            "post_type": "EMERGENCY",
+            "category": "GENERAL",
+            "title": "Gate",
+            "body": "Stuck.",
+            "target_scope": "KINDS",
+            "target_kinds": ["GARAGE", "PARKING"],
+        },
+        headers=as_user(mixed.chairman),
+    )
+    resolved = await api_client.post(
+        f"/api/v1/communication/emergencies/{published.json()['id']}/resolve",
+        headers=as_user(mixed.chairman),
+    )
+    assert resolved.status_code == 200, resolved.text
+
+    feed = await api_client.get("/api/v1/notifications/feed", headers=as_user(mixed.b))
+
+    kinds = {item["event_type"]: item["params"]["target_kinds"] for item in feed.json()}
+    assert kinds == {
+        "EMERGENCY_PUBLISHED": ["PARKING", "GARAGE"],
+        "EMERGENCY_RESOLVED": ["PARKING", "GARAGE"],
+    }
