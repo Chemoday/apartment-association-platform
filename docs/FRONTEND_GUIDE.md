@@ -246,6 +246,16 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
 
 ## 8. Emergencies and the forum
 
+- **Targets by kind** (epic E14, docs/API.md section 4): the board's choice of a target for
+  emergencies, notices, polls and maintenance notices offers "the whole building" (`ALL_BUILDING`,
+  the apartments only, and say that it leaves the parking spaces and garages out), "everything"
+  (`ALL_OBJECTS`), by kind (`KINDS` with `target_kinds`; offer only the kinds the building has,
+  `GET /property/building` `object_counts`), an entrance and a list of objects. Render the new
+  scopes wherever a target is shown (the feed, the banner, polls, a task's notice, and
+  `params.target_kinds` of `EMERGENCY_*` notifications). A resident's forum topic needs an
+  apartment (`403` otherwise): hide "new topic" for a person without one. A comment's author
+  object defaults to one inside the post's target, and an explicit one outside it is
+  `422 INVALID_AUTHOR_APARTMENT`: offer only objects inside the target.
 - **Banner:** `GET /communication/emergencies/active` returns the alerts that target the caller.
   Show the sticky red banner for items with `acknowledged_at: null`; "Acknowledge" is
   `POST /emergencies/{id}/acknowledge` (idempotent, per user). Poll the endpoint (e.g. every

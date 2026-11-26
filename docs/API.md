@@ -915,26 +915,34 @@ Executes plugins/common/csv_export and streams a CSV file of the period's readin
 
 ### Who sees which post
 - Every post belongs to one building. Users of another building never see it: `404 POST_NOT_FOUND`.
-- **Targeting** (`target_scope`): `ALL_BUILDING` reaches everyone in the building; `ENTRANCE` reaches users with an apartment in `target_entrance`; `APARTMENT_LIST` reaches members of the apartments in `target_apartment_ids`. A user with several apartments sees the posts targeted at any of them.
-- `CHAIRMAN` and `BOARD` see every post of the building, including alerts targeted elsewhere (they publish and resolve them). `ACCOUNTANT` and `USER` see only what targets them, so an accountant without an apartment sees only `ALL_BUILDING` posts.
+- **Targeting** (`target_scope`, epic E14): the rule is per object, so a person is reached through each of their objects that the target holds, and only through those (section 0, "Objects of several kinds"):
+  - `ALL_BUILDING` ("the whole building"): every apartment (objects of kind `APARTMENT`); an owner or a tenant of a parking space or a garage without an apartment is not reached;
+  - `ALL_OBJECTS` ("everything"): every object of every kind;
+  - `KINDS`: every object of the kinds in `target_kinds` (`APARTMENT`, `PARKING`, `GARAGE`);
+  - `ENTRANCE`: the apartments of `target_entrance` (other kinds have no entrance);
+  - `APARTMENT_LIST`: the objects in `target_apartment_ids`, of any kind.
+  A user with several objects sees the posts targeted at any of them.
+- `CHAIRMAN` and `BOARD` see every post of the building, including alerts targeted elsewhere (they publish and resolve them). An `ACCOUNTANT` sees, by the role, the posts to `ALL_BUILDING`, `ALL_OBJECTS` and to `KINDS` that include `APARTMENT`, and on top what targets their own objects. A `USER` sees only what targets their objects.
 - **Each post type has one visibility rule**, used by the feed, the post, its comments and the acknowledgement:
   - `EMERGENCY`, `OFFICIAL_NOTICE`: the target, as above;
-  - `FORUM_TOPIC`: the whole building;
+  - `FORUM_TOPIC`: its target, as above (today always `ALL_BUILDING`);
   - `BOARD_TOPIC` (the board's micro-forum, epic E8): the chairman and the board only, never the accountant or residents; whoever leaves the board loses access at once;
   - `APARTMENT_THREAD`: the chairman and the board see every thread. A member of the thread's apartment sees the threads started no earlier than their membership (`since <= created_at`, see `GET /property/me`), so a new tenant does not read the previous tenant's conversations. A member who wrote in a thread from that apartment (started it or commented) keeps seeing it with any active membership in that apartment; writing as the board does not count. Nobody else: not former members, not other residents, not an accountant who is not a member.
 - A post that exists but is not visible to you returns the same `404 POST_NOT_FOUND` as an unknown one, so ids cannot be probed.
-- Forum topics and board topics are always `ALL_BUILDING`. Targeting is meant for `EMERGENCY` and `OFFICIAL_NOTICE`; a thread targets exactly one apartment.
+- Forum topics and board topics are always `ALL_BUILDING`. Targeting is meant for `EMERGENCY` and `OFFICIAL_NOTICE`; a thread targets exactly one object.
 
 ### Who may publish
 | `post_type` | Who | Badge context when `author_apartment_id` is omitted |
 | :--- | :--- | :--- |
 | `EMERGENCY` | `CHAIRMAN`, `BOARD` | none: the board speaks as the board (`Chairman` / `Board`) |
 | `OFFICIAL_NOTICE` | `CHAIRMAN`, `BOARD` | none |
-| `FORUM_TOPIC` | everyone in the building | the author's first apartment (entrance, then natural number order) |
+| `FORUM_TOPIC` | the board, and everyone with an active membership of an apartment (a topic to the whole building) | the author's first object inside the target, in the order of objects; none for a board member without one there |
 | `APARTMENT_THREAD` | `CHAIRMAN`, `BOARD` to any apartment; anyone else to an apartment they are a member of | decided by the server (see "Board <-> apartment threads") |
 | `BOARD_TOPIC` | `CHAIRMAN`, `BOARD` | none, and none may be given: the author is shown by name (see "The board's micro-forum") |
 
-Anyone else gets `403 FORBIDDEN`. Comments use the commenter's first apartment unless `author_apartment_id` says otherwise; in a thread the server decides.
+Anyone else gets `403 FORBIDDEN`, before any check of the target (`422`), so a resident learns nothing about objects they do not hold. `ALL_OBJECTS` and `KINDS` are for the board (emergencies and notices). Comments use the commenter's first object inside the post's target unless `author_apartment_id` says otherwise; in a thread the server decides.
+
+**The badge stays inside the target** (privacy, epic E14): an `author_apartment_id` of a post or a comment must be one of the author's objects inside the post's target, else `422 INVALID_AUTHOR_APARTMENT` (a comment signed `Apt. 14` under a notice for the garages would tell everyone that Apt. 14 holds a garage). This also applies to `ENTRANCE` and `APARTMENT_LIST` posts, where an object outside the target was accepted before. A thread and a board topic keep their own rules.
 
 ### Author badges
 - Authors are resolved on every read through `PropertyService.get_masked_author_badges` (one batched call per page), following the badge rules in section 0. So a later change of the privacy mode also changes the badge of old posts.
@@ -957,6 +965,7 @@ Anyone else gets `403 FORBIDDEN`. Comments use the commenter's first apartment u
   "target_scope": "ALL_BUILDING",
   "target_entrance": null,
   "target_apartment_ids": null,
+  "target_kinds": null,
   "is_active": true,
   "comments_enabled": true,
   "comments_count": 3,
@@ -1033,14 +1042,17 @@ Creates a post. Response `201 Created` with the post object.
   "target_scope": "ENTRANCE",
   "target_entrance": 2,
   "target_apartment_ids": null,
+  "target_kinds": null,
   "comments_enabled": true,
   "author_apartment_id": null
 }
 ```
 - Defaults: `category` `GENERAL`, `target_scope` `ALL_BUILDING`, `comments_enabled` `true`. Unknown fields are rejected.
 - **Target rules** (`422 INVALID_TARGET`, with a `message` that names the problem):
-  - `ALL_BUILDING` takes neither `target_entrance` nor `target_apartment_ids`;
+  - `ALL_BUILDING` and `ALL_OBJECTS` take neither `target_entrance` nor `target_apartment_ids` nor `target_kinds`;
   - `ENTRANCE` needs `target_entrance`, and the building must have an apartment in that entrance;
+  - `KINDS` needs `target_kinds`, 1..3 different kinds (duplicates are dropped), and the building must have an object of every kind named (`unknown_kinds` lists the others); reading or filtering by such a kind simply finds nothing;
+  - only `KINDS` takes `target_kinds`;
   - `APARTMENT_LIST` needs 1..500 different apartment ids (duplicates are dropped before counting), all in the caller's building; unknown ones are listed in `unknown_apartment_ids`. An empty list counts as not given;
   - a `FORUM_TOPIC` must be `ALL_BUILDING`;
   - an `APARTMENT_THREAD` must be `APARTMENT_LIST` with exactly one apartment.
@@ -1122,7 +1134,7 @@ deleted, and can be shown again.
 
 ### Domain events
 Published on the event bus **after** the request's transaction commits (never for a rolled-back change). Payloads carry ids, codes and the target only, no titles, bodies or names; a notifier reads the text through `CommunicationService`.
-- `EmergencyAlertPublished`: `post_id`, `building_id`, `category`, `target_scope`, `target_entrance`, `target_apartment_ids`, `published_by_user_id`.
+- `EmergencyAlertPublished`: `post_id`, `building_id`, `category`, `target_scope`, `target_entrance`, `target_apartment_ids`, `target_kinds` (empty unless `KINDS`; absent in events stored before epic E14), `published_by_user_id`.
 - `EmergencyAlertResolved`: `post_id`, `building_id`, `resolved_by_user_id`.
 - `PostDeleted` (E8/P4): a forum topic or a board topic was deleted. `post_id`, `building_id`, `post_type`, `deleted_by_user_id`. Nobody subscribes to it; it is the record of the deletion.
 - `PostHidden`, `PostUnhidden` (moderation, #18): a forum topic was hidden or shown again.
@@ -1131,7 +1143,7 @@ Published on the event bus **after** the request's transaction commits (never fo
   subscribes; they are the moderation record in the building's event history. Edits emit no event.
 - `OfficialNoticePublished` (E10/M2): every new `OFFICIAL_NOTICE`, written by hand or published
   by the maintenance calendar. `post_id`, `building_id`, `target_scope`, `target_entrance`,
-  `target_apartment_ids`, `published_by_user_id`; drives `NOTICE_PUBLISHED` (section 6, task M3).
+  `target_apartment_ids`, `target_kinds` (as above), `published_by_user_id`; drives `NOTICE_PUBLISHED` (section 6, task M3).
 - `ApartmentMessagePosted` (E8/P3): a new `APARTMENT_THREAD` or a comment on one. `post_id`, `comment_id` (`null` for the thread itself), `building_id`, `apartment_id`, `author_user_id`, `from_board` (the author wrote as the board, without an apartment).
 
 Further moderation (authors deleting their own posts and comments, reports by residents, a readable moderation log, edit history, purging deleted content) is in the backlog, docs/BACKLOG.md B-2.
@@ -1325,7 +1337,7 @@ reports, but not for urgent ones (epic E9).
   to `GET /api/v1/files/usage`; `building` (the subject is the building) links to the building
   passport (`registry_facts` of `GET /api/v1/property/building`); `join_request` links to the
   waiting join requests (`GET /api/v1/auth/join-requests`; the request may be decided already).
-- `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`;
+- `params` by `event_type`: emergencies `category`, `target_scope`, `target_entrance`, `target_kinds` (the kinds of a `KINDS` target, an empty list otherwise; absent in rows stored before epic E14);
   `READING_DEADLINE` `period_code`, `due_date`; `PERIOD_REVIEW` `period_code`;
   `APARTMENT_MESSAGE` and `APARTMENT_MESSAGE_TO_BOARD` `apartment_id`, `apartment_number`,
   `apartment_kind` (absent in rows stored before epic E14: an apartment) and `from_board` (`true`: the board wrote; `false`: a resident of the apartment wrote). The subject
@@ -2342,6 +2354,7 @@ Every endpoint needs a signed-in user;
   "target_scope": "ALL_BUILDING",
   "target_entrance": null,
   "target_apartment_ids": null,
+  "target_kinds": null,
   "eligibility": "RESIDENTS",
   "unit": "APARTMENT",
   "closes_at": "2026-11-12T21:59:59Z",
@@ -2371,10 +2384,15 @@ Every endpoint needs a signed-in user;
 - `kind`: `INFORMATIVE` only (official decisions come later). `status`: `DRAFT`, `OPEN`,
   `CLOSED`, `CANCELLED`. An open poll whose `closes_at` has passed is `CLOSED` (with `closed_at`
   `null`); one the board closed early has `closed_at`.
-- Target fields as for posts (section 4): `ALL_BUILDING`, `ENTRANCE` with `target_entrance`, or
-  `APARTMENT_LIST` with `target_apartment_ids`.
-- `eligibility`: `RESIDENTS` (every active member of a targeted apartment) or `OWNERS` (active
-  owners only). `unit`: `APARTMENT` (one answer per apartment) or `PERSON` (one per person).
+- Target fields as for posts (section 4): `ALL_BUILDING` (the apartments), `ALL_OBJECTS` (every
+  object), `KINDS` with `target_kinds`, `ENTRANCE` with `target_entrance`, or `APARTMENT_LIST`
+  with `target_apartment_ids`. The electorate fixed when the poll opens holds the objects of the
+  target only: a tenant of Apt. 1 who also rents a parking space answers a whole-building poll
+  for Apt. 1 only, and a tenant of a parking space alone is neither offered it nor notified. A
+  poll every owner must answer, also of garages without an apartment, is addressed to
+  `ALL_OBJECTS`.
+- `eligibility`: `RESIDENTS` (every active member of a targeted object) or `OWNERS` (active
+  owners only); with unit `PERSON` a person counts once, even with an apartment and a garage. `unit`: `APARTMENT` (one answer per apartment) or `PERSON` (one per person).
 - **Questions:** `answer_mode` is `SINGLE_CHOICE`, `MULTIPLE_CHOICE` or `OWN_VALUE`; `value_type`
   is `TEXT`, `NUMBER` or `DATE`. Option values and own values are strings: text as written, a
   number as a decimal string (`"2"`, `"2.5"`, no exponent), a date as `YYYY-MM-DD`. Render numbers
@@ -2393,7 +2411,7 @@ Every endpoint needs a signed-in user;
 
 ### Who sees a poll
 - The board: every poll of the building, drafts included.
-- Everyone else: an open, closed or cancelled poll whose target includes one of their apartments
+- Everyone else: an open, closed or cancelled poll whose target includes one of their objects
   (also when not eligible: a tenant sees an owners-only poll with `can_answer: false`). Drafts,
   other polls and other buildings: `404 POLL_NOT_FOUND`.
 
@@ -2874,6 +2892,8 @@ time zone (`INSTANCE_TIMEZONE`).
     "target_scope": "ALL_BUILDING",
     "target_entrance": null,
     "target_apartment_ids": null,
+    "target_kinds": null,
+  "target_kinds": null,
     "comments_enabled": false
   },
   "current": {
@@ -2965,8 +2985,11 @@ Creates a task; `201` with the `TaskView`.
 ```
 - `first_due_date` becomes the anchor and the first occurrence. It may be up to 366 days in the
   past (the task is then overdue at once) and at most 10 years ahead, else `422 VALIDATION_ERROR`.
-- A notice target that does not fit the building (an unknown entrance or apartment):
-  `422 INVALID_TARGET` (with `unknown_apartment_ids` for unknown apartments, as for posts). Other problems: `422 VALIDATION_ERROR` (unknown fields are rejected).
+- A notice target that does not fit the building (an unknown entrance or apartment, or a kind
+  the building has no object of): `422 INVALID_TARGET` (with `unknown_apartment_ids` or
+  `unknown_kinds`, as for posts). A stored target checked again when an occurrence is published
+  (an object removed since, a kind the building no longer has) leaves that notice failed
+  (`notice_failed`). Other problems: `422 VALIDATION_ERROR` (unknown fields are rejected).
 
 ### `GET /api/v1/maintenance/tasks/{task_id}`
 The `TaskView`.
