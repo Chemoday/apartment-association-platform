@@ -252,8 +252,8 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
   (`ALL_OBJECTS`), by kind (`KINDS` with `target_kinds`; offer only the kinds the building has,
   `GET /property/building` `object_counts`), an entrance and a list of objects. Render the new
   scopes wherever a target is shown (the feed, the banner, polls, a task's notice, and
-  `params.target_kinds` of `EMERGENCY_*` notifications). A resident's forum topic needs an
-  apartment (`403` otherwise): hide "new topic" for a person without one. A comment's author
+  `params.target_kinds` of `EMERGENCY_*` notifications). A resident's forum topic to the whole
+  building needs an apartment, to kinds an object of each kind (`403` otherwise). A comment's author
   object defaults to one inside the post's target, and an explicit one outside it is
   `422 INVALID_AUTHOR_APARTMENT`: offer only objects inside the target.
 - **Banner:** `GET /communication/emergencies/active` returns the alerts that target the caller.
@@ -265,8 +265,10 @@ any level ──► 422 READING_BELOW_PREVIOUS  → show previous_value, no popu
 - **Resolve** (`POST /emergencies/{id}/resolve`, board) ends it for everyone; it stays readable in
   the feed with `is_active: false`.
 - **Publishing:** `target_scope` `ALL_BUILDING` (no other target fields), `ENTRANCE`
-  (`target_entrance`) or `APARTMENT_LIST` (`target_apartment_ids`, 1..500). Forum topics are
-  always `ALL_BUILDING`. Apartment ids and entrances come from `GET /property/apartments`
+  (`target_entrance`) or `APARTMENT_LIST` (`target_apartment_ids`, 1..500), and by kind (section
+  8, "Targets by kind"). A forum topic goes to the whole building, to everything (the board only)
+  or to kinds: a resident's composer offers the whole building only with an apartment, and only
+  the kinds of their own objects (`GET /property/me` memberships). Apartment ids and entrances come from `GET /property/apartments`
   (chairman, board) or the chairman matrix (`apartments[].apartment_id`, `entrance`, `floor`).
 - **Author badges** are already masked by the backend. Render
   `"<display_label> • <role_badge>"` (`"Apt. 14 • OWNER"`). `display_label` is English text that

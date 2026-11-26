@@ -927,18 +927,18 @@ Executes plugins/common/csv_export and streams a CSV file of the period's readin
 - `CHAIRMAN` and `BOARD` see every post of the building, including alerts targeted elsewhere (they publish and resolve them). An `ACCOUNTANT` sees, by the role, the posts to `ALL_BUILDING`, `ALL_OBJECTS` and to `KINDS` that include `APARTMENT`, and on top what targets their own objects. A `USER` sees only what targets their objects.
 - **Each post type has one visibility rule**, used by the feed, the post, its comments and the acknowledgement:
   - `EMERGENCY`, `OFFICIAL_NOTICE`: the target, as above;
-  - `FORUM_TOPIC`: its target, as above (today always `ALL_BUILDING`);
+  - `FORUM_TOPIC`: its target, as above (`ALL_BUILDING`, `ALL_OBJECTS` or `KINDS`);
   - `BOARD_TOPIC` (the board's micro-forum, epic E8): the chairman and the board only, never the accountant or residents; whoever leaves the board loses access at once;
   - `APARTMENT_THREAD`: the chairman and the board see every thread. A member of the thread's apartment sees the threads started no earlier than their membership (`since <= created_at`, see `GET /property/me`), so a new tenant does not read the previous tenant's conversations. A member who wrote in a thread from that apartment (started it or commented) keeps seeing it with any active membership in that apartment; writing as the board does not count. Nobody else: not former members, not other residents, not an accountant who is not a member.
 - A post that exists but is not visible to you returns the same `404 POST_NOT_FOUND` as an unknown one, so ids cannot be probed.
-- Forum topics and board topics are always `ALL_BUILDING`. Targeting is meant for `EMERGENCY` and `OFFICIAL_NOTICE`; a thread targets exactly one object.
+- A forum topic goes to the whole building, to everything or to kinds (epic E14 K3: a topic about the garage gate for the garages); a board topic is always `ALL_BUILDING`. Entrances and lists are for `EMERGENCY` and `OFFICIAL_NOTICE`; a thread targets exactly one object.
 
 ### Who may publish
 | `post_type` | Who | Badge context when `author_apartment_id` is omitted |
 | :--- | :--- | :--- |
 | `EMERGENCY` | `CHAIRMAN`, `BOARD` | none: the board speaks as the board (`Chairman` / `Board`) |
 | `OFFICIAL_NOTICE` | `CHAIRMAN`, `BOARD` | none |
-| `FORUM_TOPIC` | the board, and everyone with an active membership of an apartment (a topic to the whole building) | the author's first object inside the target, in the order of objects; none for a board member without one there |
+| `FORUM_TOPIC` | the board to any of its targets; anyone else to the whole building only with an active membership of an apartment, and to kinds only of which they hold an active membership (an owner of a garage writes to the garages); everything (`ALL_OBJECTS`) is for the board | the author's first object inside the target, in the order of objects; none for a board member without one there |
 | `APARTMENT_THREAD` | `CHAIRMAN`, `BOARD` to any apartment; anyone else to an apartment they are a member of | decided by the server (see "Board <-> apartment threads") |
 | `BOARD_TOPIC` | `CHAIRMAN`, `BOARD` | none, and none may be given: the author is shown by name (see "The board's micro-forum") |
 
@@ -1056,7 +1056,7 @@ Creates a post. Response `201 Created` with the post object.
   - `KINDS` needs `target_kinds`, 1..3 different kinds (duplicates are dropped), and the building must have an object of every kind named (`unknown_kinds` lists the others); reading or filtering by such a kind simply finds nothing;
   - only `KINDS` takes `target_kinds`;
   - `APARTMENT_LIST` needs 1..500 different apartment ids (duplicates are dropped before counting), all in the caller's building; unknown ones are listed in `unknown_apartment_ids`. An empty list counts as not given;
-  - a `FORUM_TOPIC` must be `ALL_BUILDING`;
+  - a `FORUM_TOPIC` is `ALL_BUILDING`, `ALL_OBJECTS` or `KINDS` (not an entrance or a list);
   - an `APARTMENT_THREAD` must be `APARTMENT_LIST` with exactly one apartment.
 - Creating an `EMERGENCY` emits `EmergencyAlertPublished` after the request commits.
 
