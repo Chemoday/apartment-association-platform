@@ -17891,6 +17891,10 @@
             "maxLength": 32,
             "title": "Apartment Number"
           },
+          "apartment_kind": {
+            "$ref": "#/components/schemas/ObjectKind",
+            "default": "APARTMENT"
+          },
           "locale": {
             "anyOf": [
               {

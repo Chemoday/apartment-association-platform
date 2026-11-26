@@ -867,7 +867,16 @@ class PropertyService:
         privacy_display_mode: DisplayMode,
     ) -> uuid.UUID | None:
         """Create the membership, or reopen an ended one (a new start, the given relation and
-        mode). Returns its id, or None without any change when an active one already exists."""
+        mode). Returns its id, or None without any change when an active one already exists.
+
+        A RESIDENT (a family member) lives in an apartment: another kind refuses it (ValueError;
+        nothing invites a RESIDENT today, so this only guards the rule)."""
+        if relation_type == RelationType.RESIDENT:
+            kind = await self.session.scalar(
+                select(Apartment.kind).where(Apartment.id == apartment_id)
+            )
+            if kind is not None and kind != ObjectKind.APARTMENT:
+                raise ValueError(f"a RESIDENT membership needs an apartment, not a {kind}")
         await self._lock_person(user_id)
         existing = await self.session.scalar(
             select(ApartmentMembership)

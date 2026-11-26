@@ -272,17 +272,24 @@ class ObjectNotChosen(ValueError):
     """No object was named and there are several to choose from."""
 
 
-def chosen_object(candidates: Sequence[uuid.UUID], requested: uuid.UUID | None) -> uuid.UUID | None:
+def chosen_object(
+    candidates: Sequence[tuple[uuid.UUID, ObjectKind]], requested: uuid.UUID | None
+) -> uuid.UUID | None:
     """The object an issue report or a ballot is made from: the requested one, which must be a
-    candidate (else ObjectNotHeld); without one the only candidate, None without candidates, and
-    ObjectNotChosen with several. Each caller answers the errors in its own words."""
+    candidate (else ObjectNotHeld); without one the only candidate; with several the only
+    apartment among them (an owner of Apt. 14 who also gets a parking space keeps working with a
+    client that leaves the object out), else ObjectNotChosen; None without candidates. Each
+    caller answers the errors in its own words."""
     if requested is not None:
-        if requested not in candidates:
+        if requested not in {object_id for object_id, _ in candidates}:
             raise ObjectNotHeld
         return requested
-    if len(candidates) > 1:
-        raise ObjectNotChosen
-    return candidates[0] if candidates else None
+    if len(candidates) <= 1:
+        return candidates[0][0] if candidates else None
+    apartments = [object_id for object_id, kind in candidates if kind == ObjectKind.APARTMENT]
+    if len(apartments) == 1:
+        return apartments[0]
+    raise ObjectNotChosen
 
 
 class MembershipView(ApartmentMembershipDTO):

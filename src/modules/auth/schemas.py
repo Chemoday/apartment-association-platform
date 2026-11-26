@@ -213,6 +213,8 @@ class OwnerInvitationCreate(BaseModel):
     kind: Literal[InvitationKind.OWNER]
     email: EmailAddress
     apartment_number: safe_text(32)  # type: ignore[valid-type]
+    # A number repeats across kinds (epic E14): an apartment unless the chairman says otherwise.
+    apartment_kind: ObjectKind = ObjectKind.APARTMENT
     # The instance default or en (checked by the service, which knows the default).
     locale: Locale | None = None
 

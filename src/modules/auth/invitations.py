@@ -175,7 +175,7 @@ class InvitationService:
                 raise forbidden()
         if isinstance(body, OwnerInvitationCreate):
             apartment = await self.properties.apartment_by_ref(
-                caller.building_id, ObjectKind.APARTMENT, body.apartment_number
+                caller.building_id, body.apartment_kind, body.apartment_number
             )
             if apartment is None:
                 raise apartment_not_found()

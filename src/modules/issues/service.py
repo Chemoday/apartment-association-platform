@@ -764,7 +764,7 @@ class IssuesService:
             return None
         try:
             chosen = chosen_object(
-                [membership.apartment_id for membership in user.memberships], apartment_id
+                [(m.apartment_id, m.apartment_kind) for m in user.memberships], apartment_id
             )
         except ObjectNotHeld:
             raise DomainError(
