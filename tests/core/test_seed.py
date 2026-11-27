@@ -60,8 +60,9 @@ async def test_the_demo_building_is_seeded_exactly_once(seeded: AsyncSession) ->
     assert await count(seeded, Building) == 1
     building = await seeded.get(Building, DEMO_BUILDING_ID)
     assert building.name == "KÜ Sõpruse 12"
-    assert await count(seeded, Apartment) == 6
-    assert {a.entrance for a in await seeded.scalars(select(Apartment))} == {1, 2}
+    # Six apartments, two parking spaces and a garage (src/core/seed_completion.py).
+    assert await count(seeded, Apartment) == 9
+    assert {a.entrance for a in await seeded.scalars(select(Apartment))} == {1, 2, None}
     assert await count(seeded, User) == len(DEMO_USERS)
     assert await count(seeded, ReadingPeriod) == 4
 
@@ -74,7 +75,7 @@ async def test_the_demo_building_has_its_association_details(
     )
 
     body = response.json()
-    apartments = list(await seeded.scalars(select(Apartment)))
+    apartments = list(await seeded.scalars(select(Apartment).where(Apartment.kind == "APARTMENT")))
     assert body["registry_code"] == "80123456"
     assert body["address"] == "Sõpruse pst 12, Kristiine, 10615 Tallinn"
     assert (body["apartment_count"], body["entrance_count"]) == (6, 2)
@@ -120,10 +121,10 @@ async def test_history_is_locked_and_complete_and_october_is_open(seeded: AsyncS
     meters = await count(seeded, MeterDevice)
     periods = {p.period_code: p for p in await seeded.scalars(select(ReadingPeriod))}
 
-    assert meters == 14  # 6 apartments x (cold + hot) + 2 master meters
+    assert meters == 15  # 6 apartments x (cold + hot) + 2 master meters + the garage
     for code in HISTORY_PERIODS:
         assert periods[code].status == PeriodStatus.LOCKED
-        assert await count(seeded, MeterReading, MeterReading.period_id == periods[code].id) == 14
+        assert await count(seeded, MeterReading, MeterReading.period_id == periods[code].id) == 15
     assert periods[OPEN_PERIOD].status == PeriodStatus.OPEN_FOR_RESIDENTS
 
 
@@ -180,7 +181,8 @@ async def test_owner_14_can_submit_a_normal_reading_right_away(
     dashboard = await api_client.get(
         "/api/v1/meters/my-dashboard", headers=as_demo(DemoUserKey.OWNER_14)
     )
-    (apartment,) = dashboard.json()["apartments"]
+    apartment, parking = dashboard.json()["apartments"]  # Apt. 14 and parking space 1
+    assert (parking["apartment_kind"], parking["meters"]) == ("PARKING", [])
     cold = next(m for m in apartment["meters"] if m["resource_type"] == "COLD_WATER")
     value = Decimal(cold["previous_value"]) + Decimal("4.800")
 
@@ -219,7 +221,9 @@ async def test_the_emergency_reaches_entrance_2_only(
     apt_14 = await api_client.get(url, headers=as_demo(DemoUserKey.OWNER_14))
     apt_2 = await api_client.get(url, headers=as_demo(DemoUserKey.TENANT_2))
 
-    assert [e["category"] for e in apt_14.json()] == ["WATER_SHUTOFF"]
+    # The other one is for the parking spaces (src/core/seed_completion.py): P1 is Apt. 14's.
+    by_scope = {e["target_scope"]: e["category"] for e in apt_14.json()}
+    assert by_scope == {"ENTRANCE": "WATER_SHUTOFF", "KINDS": "GENERAL"}
     assert apt_2.json() == []
 
 
@@ -273,6 +277,10 @@ async def test_demo_users_list_the_switcher_without_names(
         "building_role": "USER",
         "apartment_number": "14",
         "relation_type": "OWNER",
+        "objects": [
+            {"kind": "APARTMENT", "number": "14", "relation": "OWNER"},
+            {"kind": "PARKING", "number": "1", "relation": "OWNER"},
+        ],
     }
     for demo in DEMO_USERS:
         assert demo.full_name not in response.text

@@ -12,18 +12,25 @@ from pydantic import BaseModel
 from src.core.config import Settings, get_settings
 from src.core.exceptions import DomainError, error_responses
 from src.core.seed import DEMO_USERS
-from src.modules.property.schemas import BuildingRole, RelationType
+from src.modules.property.schemas import BuildingRole, ObjectKind, RelationType
 from src.modules.property.service import PropertyService, get_property_service
 
 router = APIRouter(prefix="/api/v1/demo", tags=["demo"])
+
+
+class DemoObjectView(BaseModel):
+    kind: ObjectKind
+    number: str
+    relation: RelationType
 
 
 class DemoUserView(BaseModel):
     user_id: uuid.UUID  # send it as X-Demo-User-Id
     label: str  # e.g. "Owner Apt 14"
     building_role: BuildingRole
-    apartment_number: str | None
+    apartment_number: str | None  # the apartment only: null for the owner of a garage
     relation_type: RelationType | None
+    objects: list[DemoObjectView]  # what the user holds in the demo, by kind (epic E14)
 
 
 @router.get(
@@ -48,6 +55,10 @@ async def demo_users(
             building_role=demo.building_role,
             apartment_number=demo.apartment_number,
             relation_type=demo.relation_type,
+            objects=[
+                DemoObjectView(kind=obj.kind, number=obj.number, relation=obj.relation)
+                for obj in demo.objects
+            ],
         )
         for demo in DEMO_USERS
         if await property_service.get_current_user(demo.user_id) is not None

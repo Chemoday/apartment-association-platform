@@ -475,8 +475,9 @@ was added after migration 004): it adds what is missing and never duplicates.
 - **Content:**
   - an `OFFICIAL_NOTICE` to `GARAGE` ("the gate code changes on Friday"): the owner of `G12` sees
     it, the owner of Apt. 14 does not;
-  - a `FORUM_TOPIC` to `PARKING` and `GARAGE` by the owner of `G12`, with a comment by the owner
-    of Apt. 14, signed `P1` by default;
+  - a `FORUM_TOPIC` to `PARKING` and `GARAGE` by the board member (the CTO review of K6: the owner
+    of `G12` holds no parking space, so K3 forbids that target to them), with comments by the
+    owner of Apt. 14, signed `P1` by default, and by the owner of `G12`, signed `T. K. (G12)`;
   - a poll to `PARKING` ("repaint the lines"), unit `APARTMENT`, `RESIDENTS`: the owner of Apt. 14
     answers for `P1`, the tenant of `P-2` for `P-2`;
   - the existing clean-up poll stays a whole-building poll of the apartments, so the owner of
@@ -487,7 +488,8 @@ was added after migration 004): it adds what is missing and never duplicates.
     and the tenant of `P-2`, not for the owner of `G12`.
 - `DemoUserView` gains `objects: [{kind, number, relation}]`; `apartment_number` stays for the
   existing users and is `null` for a user without an apartment (the frontend would read `12` as
-  Apt. 12).
+  Apt. 12); `relation_type` goes with it. The parking poll is seeded without answers, so
+  the demo can show answering for `P1` and for `P-2`.
 
 ### 6.2 Tests
 **A mixed building** (one fixture shared by the tests of the epic; the factory gets
