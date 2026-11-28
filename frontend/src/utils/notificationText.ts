@@ -1,5 +1,6 @@
 import type { NotificationView } from '@/api/schema.js'
 import { formatCalendarDate, formatDate, formatPeriodLabel, formatShortDate } from './dates.js'
+import { formatTargetKindsList, normalizeObjectKind } from './objectName.js'
 
 export type NotificationDescriptorVariant =
   | 'emergency'
@@ -10,7 +11,7 @@ export type NotificationDescriptorVariant =
 
 export interface NotificationDescriptor {
   key: string
-  values: Record<string, string | number | boolean | null | undefined>
+  values: Record<string, string | number | boolean | null | undefined | string[]>
   icon: string
   variant: NotificationDescriptorVariant
   route: string | null
@@ -33,6 +34,9 @@ export function buildNotificationDescriptor(
 
   if (eventType === 'EMERGENCY_PUBLISHED') {
     const entranceVal = params.target_entrance
+    const rawKinds = Array.isArray(params.target_kinds)
+      ? params.target_kinds.map((k) => String(k))
+      : []
     return {
       key: 'notifications.events.EMERGENCY_PUBLISHED',
       values: {
@@ -40,6 +44,7 @@ export function buildNotificationDescriptor(
         target_scope: String(params.target_scope || 'ALL_BUILDING'),
         target_entrance:
           typeof entranceVal === 'number' || typeof entranceVal === 'string' ? entranceVal : '',
+        target_kinds: rawKinds,
       },
       icon: 'warning',
       variant: 'emergency',
@@ -49,6 +54,9 @@ export function buildNotificationDescriptor(
 
   if (eventType === 'EMERGENCY_RESOLVED') {
     const entranceVal = params.target_entrance
+    const rawKinds = Array.isArray(params.target_kinds)
+      ? params.target_kinds.map((k) => String(k))
+      : []
     return {
       key: 'notifications.events.EMERGENCY_RESOLVED',
       values: {
@@ -56,6 +64,7 @@ export function buildNotificationDescriptor(
         target_scope: String(params.target_scope || 'ALL_BUILDING'),
         target_entrance:
           typeof entranceVal === 'number' || typeof entranceVal === 'string' ? entranceVal : '',
+        target_kinds: rawKinds,
       },
       icon: 'check_circle',
       variant: 'resolved',
@@ -94,13 +103,19 @@ export function buildNotificationDescriptor(
 
   if (eventType === 'APARTMENT_MESSAGE') {
     const fromBoard = Boolean(params.from_board)
+    const kind = normalizeObjectKind(params.apartment_kind)
+    const peerKey =
+      kind === 'PARKING'
+        ? 'notifications.events.APARTMENT_MESSAGE_PEER_PARKING'
+        : kind === 'GARAGE'
+          ? 'notifications.events.APARTMENT_MESSAGE_PEER_GARAGE'
+          : 'notifications.events.APARTMENT_MESSAGE_PEER'
     return {
-      key: fromBoard
-        ? 'notifications.events.APARTMENT_MESSAGE_FROM_BOARD'
-        : 'notifications.events.APARTMENT_MESSAGE_PEER',
+      key: fromBoard ? 'notifications.events.APARTMENT_MESSAGE_FROM_BOARD' : peerKey,
       values: {
         apartment_id: String(params.apartment_id || ''),
         apartment_number: String(params.apartment_number || ''),
+        apartment_kind: kind,
         from_board: fromBoard,
       },
       icon: 'mail',
@@ -110,15 +125,43 @@ export function buildNotificationDescriptor(
   }
 
   if (eventType === 'APARTMENT_MESSAGE_TO_BOARD') {
+    const kind = normalizeObjectKind(params.apartment_kind)
+    const key =
+      kind === 'PARKING'
+        ? 'notifications.events.APARTMENT_MESSAGE_TO_BOARD_PARKING'
+        : kind === 'GARAGE'
+          ? 'notifications.events.APARTMENT_MESSAGE_TO_BOARD_GARAGE'
+          : 'notifications.events.APARTMENT_MESSAGE_TO_BOARD'
     return {
-      key: 'notifications.events.APARTMENT_MESSAGE_TO_BOARD',
+      key,
       values: {
         apartment_id: String(params.apartment_id || ''),
         apartment_number: String(params.apartment_number || ''),
+        apartment_kind: kind,
       },
       icon: 'mark_email_unread',
       variant: 'neutral',
       route: subjectId ? `/messages/${subjectId}` : '/messages',
+    }
+  }
+
+  if (eventType === 'JOIN_REQUEST_SUBMITTED') {
+    const kind = normalizeObjectKind(params.apartment_kind)
+    const key =
+      kind === 'PARKING'
+        ? 'notifications.events.JOIN_REQUEST_SUBMITTED_PARKING'
+        : kind === 'GARAGE'
+          ? 'notifications.events.JOIN_REQUEST_SUBMITTED_GARAGE'
+          : 'notifications.events.JOIN_REQUEST_SUBMITTED'
+    return {
+      key,
+      values: {
+        apartment_number: String(params.apartment_number || ''),
+        apartment_kind: kind,
+      },
+      icon: 'person_add',
+      variant: 'neutral',
+      route: '/people',
     }
   }
 
@@ -306,7 +349,18 @@ export function formatNotificationText(
     const categoryLabel =
       t(catKey) !== catKey ? t(catKey).toLowerCase() : categoryStr.toLowerCase()
     let targetLabel = t('notifications.targets.ALL_BUILDING')
-    if (desc.values.target_scope === 'ENTRANCE') {
+    if (desc.values.target_scope === 'ALL_OBJECTS') {
+      targetLabel = t('notifications.targets.ALL_OBJECTS')
+    } else if (desc.values.target_scope === 'KINDS') {
+      const kindsList = formatTargetKindsList(
+        Array.isArray(desc.values.target_kinds) ? desc.values.target_kinds : [],
+        t,
+        { lowercase: true },
+      )
+      targetLabel = kindsList
+        ? t('notifications.targets.KINDS', { kinds: kindsList })
+        : t('notifications.targets.KINDS_FALLBACK')
+    } else if (desc.values.target_scope === 'ENTRANCE') {
       targetLabel = t('notifications.targets.ENTRANCE', {
         entrance: desc.values.target_entrance,
       })

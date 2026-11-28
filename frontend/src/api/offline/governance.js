@@ -16,6 +16,7 @@ import {
 import {
   computeMockPollElectorateCount,
 } from '../../mocks/domains/index.js'
+import { resolveAutoPickedObjectId } from '../../utils/objectName.js'
 
 export async function handleOfflineGovernance(ctx) {
   const { urlObj, pathname, method, body, user } = ctx
@@ -225,10 +226,16 @@ export async function handleOfflineGovernance(ctx) {
           throw makeOfflineError(403, 'NOT_ELIGIBLE', 'You cannot answer for this apartment.')
         }
         targetApartmentId = String(reqBody.apartment_id)
-      } else if (answerableApartmentIds.length === 1) {
-        targetApartmentId = answerableApartmentIds[0]
       } else {
-        throw makeOfflineError(422, 'VALIDATION_ERROR', 'Select which apartment is answering.')
+        const autoPicked = resolveAutoPickedObjectId(
+          answerableApartmentIds,
+          OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || [],
+        )
+        if (autoPicked) {
+          targetApartmentId = autoPicked
+        } else {
+          throw makeOfflineError(422, 'VALIDATION_ERROR', 'Select which apartment is answering.')
+        }
       }
     }
 

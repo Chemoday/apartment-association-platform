@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session.js'
+import { objectName } from '@/utils/objectName.js'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
@@ -46,7 +47,11 @@ const roleIcon = computed(() => {
           {{ user.label }}
         </h3>
         <p class="text-xs text-on-surface-variant font-mono mt-0.5">
-          {{ user.apartment_number ? `Apartment ${user.apartment_number} (${user.relation_type})` : session.t('welcome.wholeBuildingAccess') }}
+          {{
+            user.apartment_number
+              ? `${objectName(user.apartment_kind, user.apartment_number, session.t)} (${user.relation_type})`
+              : session.t('welcome.wholeBuildingAccess')
+          }}
         </p>
       </div>
     </div>

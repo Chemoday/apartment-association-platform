@@ -15,6 +15,8 @@ declare module 'vue-router' {
     icon?: string
     titleKey?: string
     requiresApartmentOrBoard?: boolean
+    requiresSharedAccess?: 'documents' | 'issues'
+    requiresChatAccess?: boolean
     requiresChatEnabled?: boolean
   }
 }
@@ -141,6 +143,7 @@ export const APP_ROUTES: RouteRecordRaw[] = [
     meta: {
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
+      requiresChatAccess: true,
       requiresChatEnabled: true,
       navKey: 'chat',
       navGroup: 'community',
@@ -202,7 +205,7 @@ export const APP_ROUTES: RouteRecordRaw[] = [
     meta: {
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
-      requiresApartmentOrBoard: true,
+      requiresSharedAccess: 'issues',
       navKey: 'issues',
       navGroup: 'services',
       icon: 'report_problem',
@@ -215,7 +218,7 @@ export const APP_ROUTES: RouteRecordRaw[] = [
     meta: {
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
-      requiresApartmentOrBoard: true,
+      requiresSharedAccess: 'issues',
     },
   },
   {
@@ -225,6 +228,7 @@ export const APP_ROUTES: RouteRecordRaw[] = [
     meta: {
       layout: 'AppLayout',
       roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'],
+      requiresSharedAccess: 'documents',
       navKey: 'documents',
       navGroup: 'services',
       icon: 'folder_open',
@@ -294,6 +298,49 @@ export const APP_ROUTES: RouteRecordRaw[] = [
       navKey: 'people',
       navGroup: 'management',
       icon: 'group',
+    },
+  },
+  {
+    path: '/people/bulk-invitations',
+    name: 'bulk-invitations',
+    component: () => import('@/views/people/BulkInvitationsView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['CHAIRMAN'],
+    },
+  },
+  {
+    path: '/people/connections',
+    name: 'connections',
+    component: () => import('@/views/people/ConnectionsView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['CHAIRMAN'],
+      navKey: 'connections',
+      navGroup: 'management',
+      icon: 'hub',
+    },
+  },
+  {
+    path: '/people/join-codes',
+    name: 'join-codes',
+    component: () => import('@/views/people/JoinCodesView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['CHAIRMAN'],
+    },
+  },
+  {
+    path: '/people/join-decisions',
+    name: 'join-decisions',
+    component: () => import('@/views/people/JoinDecisionsView.vue'),
+    meta: {
+      layout: 'AppLayout',
+      roles: ['CHAIRMAN', 'BOARD'],
+      navRoles: ['BOARD'],
+      navKey: 'joinDecisions',
+      navGroup: 'management',
+      icon: 'fact_check',
     },
   },
   {
@@ -392,6 +439,15 @@ export const APP_ROUTES: RouteRecordRaw[] = [
     path: '/unsubscribe',
     name: 'unsubscribe',
     component: () => import('@/views/entry/UnsubscribeView.vue'),
+    meta: {
+      layout: 'PublicLayout',
+      public: true,
+    },
+  },
+  {
+    path: '/join',
+    name: 'join',
+    component: () => import('@/views/entry/JoinView.vue'),
     meta: {
       layout: 'PublicLayout',
       public: true,

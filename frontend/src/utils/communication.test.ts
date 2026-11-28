@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildPostEditPayload,
+  canAuthorForumTopicTarget,
   canCommentOnPost,
   canDeleteForumTopicForRole,
   canEditComment,
@@ -12,7 +13,9 @@ import {
   COMMENT_BODY_MAX_LENGTH,
   EDIT_WINDOW_MS,
   formatHiddenByBoardBanner,
+  getAllowedForumTopicTargets,
   getEditWindowDeadlineMs,
+  getEligibleAuthorMemberships,
   getNextEditExpiryDelayMs,
   getSafeBodyText,
   HIDE_REASON_MAX_LENGTH,
@@ -30,6 +33,7 @@ import {
   POST_TITLE_MAX_LENGTH,
   projectCommentForViewer,
   replaceCommentInDetail,
+  resolveAuthorApartmentForTarget,
   validateCommentEdit,
   validateHideReason,
   validatePostEdit,
@@ -687,6 +691,189 @@ test('#027 editPost and editComment endpoint wrappers call PATCH with encoded ID
     globalThis.fetch = originalFetch
   }
 })
+
+test('#065 canViewerSeePost enforces ALL_BUILDING=apartments-only, ALL_OBJECTS, and KINDS across roles', () => {
+  const allBuildingPost = { id: 'p-ab', post_type: 'OFFICIAL_NOTICE', target_scope: 'ALL_BUILDING' }
+  const allObjectsPost = { id: 'p-ao', post_type: 'OFFICIAL_NOTICE', target_scope: 'ALL_OBJECTS' }
+  const garageOnlyPost = {
+    id: 'p-gar',
+    post_type: 'OFFICIAL_NOTICE',
+    target_scope: 'KINDS',
+    target_kinds: ['GARAGE'],
+  }
+  const aptAndParkingPost = {
+    id: 'p-ap',
+    post_type: 'OFFICIAL_NOTICE',
+    target_scope: 'KINDS',
+    target_kinds: ['APARTMENT', 'PARKING'],
+  }
+
+  const parkingOnlyMems = [{ apartment_id: 'park-1', apartment_kind: 'PARKING' as const, entrance: null }]
+  const garageOnlyMems = [{ apartment_id: 'gar-12', apartment_kind: 'GARAGE' as const, entrance: null }]
+  const aptOnlyMems = [{ apartment_id: 'apt-1', apartment_kind: 'APARTMENT' as const, entrance: 1 }]
+
+  // Parking-only resident: misses ALL_BUILDING & garage-only, sees ALL_OBJECTS & apt+parking
+  assert.equal(canViewerSeePost(allBuildingPost, { viewerUserId: 'u-p', viewerRole: 'USER', memberships: parkingOnlyMems }), false)
+  assert.equal(canViewerSeePost(allObjectsPost, { viewerUserId: 'u-p', viewerRole: 'USER', memberships: parkingOnlyMems }), true)
+  assert.equal(canViewerSeePost(garageOnlyPost, { viewerUserId: 'u-p', viewerRole: 'USER', memberships: parkingOnlyMems }), false)
+  assert.equal(canViewerSeePost(aptAndParkingPost, { viewerUserId: 'u-p', viewerRole: 'USER', memberships: parkingOnlyMems }), true)
+
+  // Garage-only resident: sees ALL_OBJECTS & garage-only, misses ALL_BUILDING
+  assert.equal(canViewerSeePost(allBuildingPost, { viewerUserId: 'u-g', viewerRole: 'USER', memberships: garageOnlyMems }), false)
+  assert.equal(canViewerSeePost(garageOnlyPost, { viewerUserId: 'u-g', viewerRole: 'USER', memberships: garageOnlyMems }), true)
+
+  // Apartment-only resident: sees ALL_BUILDING, ALL_OBJECTS, apt+parking; misses garage-only
+  assert.equal(canViewerSeePost(allBuildingPost, { viewerUserId: 'u-a', viewerRole: 'USER', memberships: aptOnlyMems }), true)
+  assert.equal(canViewerSeePost(garageOnlyPost, { viewerUserId: 'u-a', viewerRole: 'USER', memberships: aptOnlyMems }), false)
+
+  // Accountant without memberships: sees ALL_BUILDING, ALL_OBJECTS, KINDS with APARTMENT; misses garage-only
+  assert.equal(canViewerSeePost(allBuildingPost, { viewerUserId: 'u-acc', viewerRole: 'ACCOUNTANT', memberships: [] }), true)
+  assert.equal(canViewerSeePost(allObjectsPost, { viewerUserId: 'u-acc', viewerRole: 'ACCOUNTANT', memberships: [] }), true)
+  assert.equal(canViewerSeePost(aptAndParkingPost, { viewerUserId: 'u-acc', viewerRole: 'ACCOUNTANT', memberships: [] }), true)
+  assert.equal(canViewerSeePost(garageOnlyPost, { viewerUserId: 'u-acc', viewerRole: 'ACCOUNTANT', memberships: [] }), false)
+
+  // Board / Chairman without memberships: sees all scopes including garage-only
+  assert.equal(canViewerSeePost(garageOnlyPost, { viewerUserId: 'u-b', viewerRole: 'BOARD', memberships: [] }), true)
+  assert.equal(canViewerSeePost(garageOnlyPost, { viewerUserId: 'u-c', viewerRole: 'CHAIRMAN', memberships: [] }), true)
+})
+
+test('#067 forum topic target choices, 403 authorization, and target-safe author_apartment_id', () => {
+  const aptMem = { apartment_id: 'apt-14', apartment_kind: 'APARTMENT', entrance: 2 }
+  const parkMem = { apartment_id: 'park-1', apartment_kind: 'PARKING', entrance: null }
+  const garMem = { apartment_id: 'gar-12', apartment_kind: 'GARAGE', entrance: null }
+
+  // 1. Target choices by persona
+  const boardChoices = getAllowedForumTopicTargets({
+    role: 'BOARD',
+    memberships: [],
+    buildingKinds: ['APARTMENT', 'PARKING', 'GARAGE'],
+  })
+  assert.equal(boardChoices.canCreate, true)
+  assert.deepEqual(boardChoices.allowedScopes, [
+    'ALL_BUILDING',
+    'ALL_OBJECTS',
+    'KINDS',
+  ])
+  assert.deepEqual(boardChoices.availableKinds, ['APARTMENT', 'PARKING', 'GARAGE'])
+
+  const aptAndParkChoices = getAllowedForumTopicTargets({
+    role: 'USER',
+    memberships: [aptMem, parkMem],
+    buildingKinds: ['APARTMENT', 'PARKING', 'GARAGE'],
+  })
+  assert.equal(aptAndParkChoices.canCreate, true)
+  assert.deepEqual(aptAndParkChoices.allowedScopes, ['ALL_BUILDING', 'KINDS'])
+  assert.deepEqual(aptAndParkChoices.availableKinds, ['APARTMENT', 'PARKING'])
+  assert.equal(aptAndParkChoices.defaultScope, 'ALL_BUILDING')
+
+  const garageOnlyChoices = getAllowedForumTopicTargets({
+    role: 'USER',
+    memberships: [garMem],
+    buildingKinds: ['APARTMENT', 'PARKING', 'GARAGE'],
+  })
+  assert.equal(garageOnlyChoices.canCreate, true)
+  assert.deepEqual(garageOnlyChoices.allowedScopes, ['KINDS'])
+  assert.deepEqual(garageOnlyChoices.availableKinds, ['GARAGE'])
+  assert.equal(garageOnlyChoices.defaultScope, 'KINDS')
+  assert.deepEqual(garageOnlyChoices.defaultKinds, ['GARAGE'])
+
+  const accountantNoMems = getAllowedForumTopicTargets({
+    role: 'ACCOUNTANT',
+    memberships: [],
+    buildingKinds: ['APARTMENT', 'GARAGE'],
+  })
+  assert.equal(accountantNoMems.canCreate, false)
+
+  // 2. Authorization (403 before 422)
+  assert.equal(
+    canAuthorForumTopicTarget({ role: 'USER', memberships: [garMem], targetScope: 'ALL_BUILDING' }),
+    false,
+  )
+  assert.equal(
+    canAuthorForumTopicTarget({ role: 'USER', memberships: [garMem], targetScope: 'ALL_OBJECTS' }),
+    false,
+  )
+  assert.equal(
+    canAuthorForumTopicTarget({
+      role: 'USER',
+      memberships: [garMem],
+      targetScope: 'KINDS',
+      targetKinds: ['GARAGE'],
+    }),
+    true,
+  )
+  assert.equal(
+    canAuthorForumTopicTarget({
+      role: 'USER',
+      memberships: [garMem],
+      targetScope: 'KINDS',
+      targetKinds: ['PARKING'],
+    }),
+    false,
+  )
+  assert.equal(
+    canAuthorForumTopicTarget({ role: 'BOARD', memberships: [], targetScope: 'ALL_OBJECTS' }),
+    true,
+  )
+
+  // 3. Privacy: author object must stay inside target (never leak Apt 14 under a garage/parking/entrance-1 post)
+  const katiMems = [aptMem, parkMem]
+  assert.deepEqual(
+    getEligibleAuthorMemberships(katiMems, { target_scope: 'KINDS', target_kinds: ['PARKING'] }).map(
+      (m) => m.apartment_id,
+    ),
+    ['park-1'],
+  )
+  assert.deepEqual(
+    getEligibleAuthorMemberships(katiMems, { target_scope: 'ALL_BUILDING' }).map((m) => m.apartment_id),
+    ['apt-14'],
+  )
+  assert.deepEqual(
+    getEligibleAuthorMemberships(katiMems, { target_scope: 'ALL_OBJECTS' }).map((m) => m.apartment_id),
+    ['apt-14', 'park-1'],
+  )
+
+  // Explicit Apt 14 on a PARKING-only post -> 422 INVALID_AUTHOR_APARTMENT
+  const rejectedOnParking = resolveAuthorApartmentForTarget({
+    memberships: katiMems,
+    target: { target_scope: 'KINDS', target_kinds: ['PARKING'] },
+    requestedApartmentId: 'apt-14',
+  })
+  assert.equal(rejectedOnParking.ok, false)
+  if (!rejectedOnParking.ok) assert.equal(rejectedOnParking.errorCode, 'INVALID_AUTHOR_APARTMENT')
+
+  // Omitted author_apartment_id on PARKING-only post -> auto-picks park-1 (not apt-14!)
+  const autoPickedParking = resolveAuthorApartmentForTarget({
+    memberships: katiMems,
+    target: { target_scope: 'KINDS', target_kinds: ['PARKING'] },
+  })
+  assert.deepEqual(autoPickedParking, { ok: true, apartmentId: 'park-1' })
+
+  // Explicit Apt 14 (entrance 2) on ENTRANCE 1 post -> 422 INVALID_AUTHOR_APARTMENT
+  const rejectedOnEntrance1 = resolveAuthorApartmentForTarget({
+    memberships: katiMems,
+    target: { target_scope: 'ENTRANCE', target_entrance: 1 },
+    requestedApartmentId: 'apt-14',
+  })
+  assert.equal(rejectedOnEntrance1.ok, false)
+
+  // Explicit Apt 14 on APARTMENT_LIST excluding Apt 14 -> 422 INVALID_AUTHOR_APARTMENT
+  const rejectedOnList = resolveAuthorApartmentForTarget({
+    memberships: katiMems,
+    target: { target_scope: 'APARTMENT_LIST', target_apartment_ids: ['apt-99'] },
+    requestedApartmentId: 'apt-14',
+  })
+  assert.equal(rejectedOnList.ok, false)
+
+  // Board without object inside target with omitted author_apartment_id -> null (board badge)
+  const boardNoObjectInTarget = resolveAuthorApartmentForTarget({
+    memberships: [aptMem],
+    target: { target_scope: 'KINDS', target_kinds: ['GARAGE'] },
+  })
+  assert.deepEqual(boardNoObjectInTarget, { ok: true, apartmentId: null })
+})
+
+
 
 
 

@@ -1,54 +1,67 @@
 @import "tailwindcss";
+@custom-variant dark (&:where([data-theme-mode="dark"], [data-theme-mode="dark"] *));
 
 @theme {
-  --color-surface: #f8f9ff;
-  --color-surface-dim: #cbdbf5;
-  --color-surface-bright: #f8f9ff;
+  /* Warm Nordic Editorial Surface & Ink Palette (WCAG AA verified) */
+  --color-surface: #fbf8f3;
+  --color-surface-dim: #d4c8b4;
+  --color-surface-bright: #fbf8f3;
   --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low: #eff4ff;
-  --color-surface-container: #e5eeff;
-  --color-surface-container-high: #dce9ff;
-  --color-surface-container-highest: #d3e4fe;
-  --color-on-surface: #0b1c30;
-  --color-on-surface-variant: #45464d;
-  --color-inverse-surface: #213145;
-  --color-inverse-on-surface: #eaf1ff;
-  --color-outline: #76777d;
-  --color-outline-variant: #c6c6cd;
-  --color-surface-tint: #565e74;
-  --color-primary: #0f172a;
-  --color-on-primary: #ffffff;
-  --color-primary-container: #131b2e;
-  --color-on-primary-container: #7c839b;
-  --color-inverse-primary: #bec6e0;
-  --color-secondary: #006c4a;
-  --color-on-secondary: #ffffff;
-  --color-secondary-container: #82f5c1;
-  --color-on-secondary-container: #00714e;
-  --color-tertiary: #000000;
-  --color-on-tertiary: #ffffff;
-  --color-tertiary-container: #410002;
-  --color-on-tertiary-container: #f63a35;
-  --color-error: #ba1a1a;
-  --color-on-error: #ffffff;
-  --color-error-container: #ffdad6;
-  --color-on-error-container: #93000a;
-  --color-primary-fixed: #dae2fd;
-  --color-primary-fixed-dim: #bec6e0;
-  --color-on-primary-fixed: #131b2e;
-  --color-on-primary-fixed-variant: #3f465c;
-  --color-secondary-fixed: #85f8c4;
-  --color-secondary-fixed-dim: #68dba9;
-  --color-on-secondary-fixed: #002114;
-  --color-on-secondary-fixed-variant: #005137;
-  --color-tertiary-fixed: #ffdad6;
-  --color-tertiary-fixed-dim: #ffb4ab;
-  --color-on-tertiary-fixed: #410002;
-  --color-on-tertiary-fixed-variant: #93000b;
-  --color-background: #f8f9ff;
-  --color-on-background: #0b1c30;
-  --color-surface-variant: #d3e4fe;
+  --color-surface-container-low: #f4efe6;
+  --color-surface-container: #ede6da;
+  --color-surface-container-high: #e4dbcc;
+  --color-surface-container-highest: #dbd0be;
+  --color-on-surface: #221d17;
+  --color-on-surface-variant: #574f45;
+  --color-inverse-surface: #2a241d;
+  --color-inverse-on-surface: #f6f1e9;
+  --color-outline: #756b5e;
+  --color-outline-variant: #d5cbb9;
+  --color-surface-tint: #1e4d3b;
 
+  /* Primary: Deep Nordic Forest */
+  --color-primary: #1e4d3b;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #15382b;
+  --color-on-primary-container: #d2e5dc;
+  --color-inverse-primary: #b8d5c7;
+
+  /* Secondary: Warm Terracotta */
+  --color-secondary: #a64422;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #f8e2d7;
+  --color-on-secondary-container: #772b11;
+
+  /* Tertiary: Roasted Clay */
+  --color-tertiary: #6e3824;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #f6e3da;
+  --color-on-tertiary-container: #582716;
+
+  /* Error: Warm Nordic Crimson */
+  --color-error: #b3261e;
+  --color-on-error: #ffffff;
+  --color-error-container: #fce8e6;
+  --color-on-error-container: #831b15;
+
+  /* Fixed Tonal Accents */
+  --color-primary-fixed: #d9eae1;
+  --color-primary-fixed-dim: #b8d5c7;
+  --color-on-primary-fixed: #123226;
+  --color-on-primary-fixed-variant: #2b5b47;
+  --color-secondary-fixed: #f5d6c6;
+  --color-secondary-fixed-dim: #e6b8a2;
+  --color-on-secondary-fixed: #3a1205;
+  --color-on-secondary-fixed-variant: #772b11;
+  --color-tertiary-fixed: #f6e3da;
+  --color-tertiary-fixed-dim: #e6c4b5;
+  --color-on-tertiary-fixed: #3a170b;
+  --color-on-tertiary-fixed-variant: #6e3824;
+  --color-background: #fbf8f3;
+  --color-on-background: #221d17;
+  --color-surface-variant: #dbd0be;
+
+  /* Spacing Scale */
   --spacing-gutter: 1.5rem;
   --spacing-gutter-mobile: 1rem;
   --spacing-margin: 2rem;
@@ -59,49 +72,72 @@
   --spacing-space-lg: 1.5rem;
   --spacing-space-xl: 2.5rem;
 
+  /* Warm-Tinted Elevation Shadows */
+  --shadow-xs: 0 1px 2px 0 rgb(34 29 23 / 0.05);
+  --shadow-sm: 0 1px 3px 0 rgb(34 29 23 / 0.07), 0 1px 2px -1px rgb(34 29 23 / 0.05);
+  --shadow-md: 0 4px 10px -2px rgb(34 29 23 / 0.08), 0 2px 4px -2px rgb(34 29 23 / 0.05);
+  --shadow-lg: 0 10px 24px -4px rgb(34 29 23 / 0.1), 0 4px 8px -4px rgb(34 29 23 / 0.06);
+  --shadow-xl: 0 20px 36px -8px rgb(34 29 23 / 0.14), 0 8px 14px -6px rgb(34 29 23 / 0.07);
+  --shadow-card: 0 1px 2px 0 rgb(34 29 23 / 0.04), 0 2px 6px -1px rgb(34 29 23 / 0.03);
+  --shadow-popover: 0 12px 28px -4px rgb(34 29 23 / 0.12), 0 4px 10px -4px rgb(34 29 23 / 0.06);
+
+  /* Semantic Radii */
+  --radius-control: 0.625rem;
+  --radius-card: 0.875rem;
+
+  /* Warm Nordic Editorial Typography */
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --font-headline-xl: "Inter", sans-serif;
-  --font-headline-lg: "Inter", sans-serif;
-  --font-headline-md: "Inter", sans-serif;
-  --font-body-lg: "Inter", sans-serif;
-  --font-body-md: "Inter", sans-serif;
-  --font-body-sm: "Inter", sans-serif;
-  --font-label-lg: "Inter", sans-serif;
-  --font-label-md: "Inter", sans-serif;
-  --font-numeric-display: "Inter", sans-serif;
+  --font-headline-xl: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-headline-lg: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-headline-md: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-body-lg: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body-md: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body-sm: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-label-lg: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-label-md: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-numeric-display: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 @layer base {
   html, body {
     margin: 0;
     padding: 0;
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: var(--font-sans);
     background-color: var(--color-surface);
     color: var(--color-on-surface);
     transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  ::selection {
+    background-color: var(--color-primary-fixed);
+    color: var(--color-on-primary-fixed);
   }
 }
 
 .text-headline-xl {
   font-size: 2.25rem;
-  line-height: 2.75rem;
-  letter-spacing: -0.025em;
-  font-weight: 700;
+  line-height: 2.65rem;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  font-feature-settings: "liga" 1, "kern" 1;
 }
 
 .text-headline-lg {
   font-size: 1.75rem;
-  line-height: 2.25rem;
-  letter-spacing: -0.02em;
+  line-height: 2.2rem;
+  letter-spacing: -0.015em;
   font-weight: 600;
+  font-feature-settings: "liga" 1, "kern" 1;
 }
 
 .text-headline-md {
   font-size: 1.25rem;
-  line-height: 1.75rem;
+  line-height: 1.7rem;
   letter-spacing: -0.01em;
   font-weight: 600;
+  font-feature-settings: "liga" 1, "kern" 1;
 }
 
 .text-body-lg {

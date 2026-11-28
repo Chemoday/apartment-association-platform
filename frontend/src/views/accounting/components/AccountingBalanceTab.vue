@@ -16,6 +16,10 @@ defineProps({
     type: String,
     required: true,
   },
+  filteredByKind: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const session = useSessionStore()
@@ -38,7 +42,7 @@ function unitLabel(unit) {
   <div class="space-y-space-lg">
     <!-- Real API Resource Balances Table -->
     <div class="rounded-xl bg-surface-container-lowest border border-surface-container shadow-2xs overflow-hidden">
-      <div class="px-space-lg py-3 bg-surface-container-low/80 border-b border-surface-container flex items-center justify-between">
+      <div class="px-space-lg py-3 bg-surface-container-low/80 border-b border-surface-container flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 class="font-label-lg text-label-lg font-bold text-on-surface">
             {{ session.t('accounting.balanceTableTitle') }}
@@ -47,6 +51,13 @@ function unitLabel(unit) {
             {{ session.t('accounting.balanceTableSub', { period: periodCode }) }}
           </p>
         </div>
+        <span
+          data-testid="balance-whole-building-badge"
+          class="inline-flex items-center gap-1 rounded-full bg-surface-container px-2.5 py-0.5 text-[11px] font-semibold text-on-surface-variant"
+        >
+          <span class="material-symbols-outlined text-[13px]" aria-hidden="true">domain</span>
+          <span>{{ session.t('accounting.wholeBuildingBalancesBadge') }}</span>
+        </span>
       </div>
 
       <div

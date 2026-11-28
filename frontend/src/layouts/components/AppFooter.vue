@@ -10,7 +10,7 @@ const isDashboardRoute = computed<boolean>(() => route.path === '/')
 </script>
 
 <template>
-  <footer class="w-full bg-surface-container-lowest border-t border-outline-variant/30 mt-space-xl pb-20 md:pb-0">
+  <footer class="w-full bg-surface-container-low/65 border-t border-outline-variant/45 mt-space-xl pb-20 md:pb-0">
     <!-- Full 4-Column Association Footer on Dashboard (/) -->
     <div v-if="isDashboardRoute" class="w-full max-w-[1280px] mx-auto px-gutter py-space-xl">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-space-lg mb-space-lg">
@@ -97,7 +97,7 @@ const isDashboardRoute = computed<boolean>(() => route.path === '/')
           <RouterLink
             to="/theme-lab"
             :title="session.t('footer.themeLab')"
-            class="inline-flex items-center gap-1 font-label-md text-label-md text-on-surface-variant/45 hover:text-on-surface transition-opacity opacity-50 hover:opacity-100"
+            class="inline-flex items-center gap-1 font-label-md text-label-md text-on-surface-variant hover:text-on-surface transition-colors"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
               <path

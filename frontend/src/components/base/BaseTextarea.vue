@@ -63,8 +63,12 @@ const charCount = computed(() => (model.value || '').length)
       :required="required"
       :aria-invalid="error ? 'true' : undefined"
       :aria-describedby="describedBy"
-      class="w-full px-3 py-2.5 bg-surface-container-lowest border rounded-lg font-body-sm text-body-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition-colors resize-y disabled:bg-surface-container-low disabled:text-on-surface-variant"
-      :class="error ? 'border-error focus:ring-error' : 'border-outline-variant'"
+      class="w-full px-3 py-2.5 bg-surface-container-lowest border rounded-[var(--radius-control)] font-body-sm text-body-sm text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 transition-colors resize-y disabled:bg-surface-container-low disabled:text-on-surface-variant"
+      :class="
+        error
+          ? 'border-error focus:border-error focus:ring-error/20'
+          : 'border-outline-variant/80 focus:border-primary focus:ring-primary/20'
+      "
     />
     <p v-if="error" :id="errorId" role="alert" class="text-xs text-error font-medium mt-0.5">
       {{ error }}

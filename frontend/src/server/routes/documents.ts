@@ -12,6 +12,7 @@ import {
 import {
   MAX_DOCUMENT_BYTES,
   addDocumentInStore,
+  canUserAccessDocumentsModule,
   checkDocumentUploadPreflight,
   deleteDocumentInStore,
   editDocumentInStore,
@@ -55,8 +56,8 @@ export async function handleDocumentsRoutes(ctx: RouteContext<SeedUser>): Promis
         refererDocUploadsDisabled;
 
       if (pathname === '/api/v1/documents/upload-options' && method === 'GET') {
-        if (!['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role) && userMems.length === 0) {
-          return sendError(res, 403, 'FORBIDDEN', 'Only active members and staff can access documents.');
+        if (!canUserAccessDocumentsModule(user, userMems)) {
+          return sendError(res, 403, 'FORBIDDEN', 'Only active members with shared access and staff can access documents.');
         }
         return sendJson(res, 200, getUploadOptionsForUser(user, { uploadsDisabled: docUploadsDisabled }));
       }

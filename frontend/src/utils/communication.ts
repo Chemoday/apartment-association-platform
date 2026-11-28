@@ -1,4 +1,5 @@
-import type { AuthorBadgeDTO, CommentView, PostEditRequest } from '@/api/schema.js'
+import type { AuthorBadgeDTO, CommentView, ObjectKind, PostEditRequest, TargetScope } from '@/api/schema.js'
+import { OBJECT_KINDS, isObjectInTarget, normalizeObjectKind, type TargetScopeLike } from './objectName.js'
 
 /**
  * Pure domain helpers for forum posts, notices, board topics, apartment threads,
@@ -123,6 +124,7 @@ export interface PostLike {
   target_scope?: string | null
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: string[] | null
   comments?: CommentLike[] | null
 }
 
@@ -134,11 +136,16 @@ export function canViewerSeePost(
   {
     viewerUserId,
     viewerRole,
-    memberships = [],
+    memberships,
   }: {
     viewerUserId?: string | null
     viewerRole?: string | null
-    memberships?: Array<{ apartment_id: string; since?: string; entrance?: number }>
+    memberships?: Array<{
+      apartment_id: string
+      apartment_kind?: string
+      since?: string
+      entrance?: number | null
+    }>
   } = {},
 ): boolean {
   if (!post) return false
@@ -150,12 +157,13 @@ export function canViewerSeePost(
   }
   if (post.post_type === 'APARTMENT_THREAD') {
     if (isBoardRole(viewerRole)) return true
+    const mems = Array.isArray(memberships) ? memberships : []
     const hasWrittenAsMember =
       Array.isArray(post.comments) &&
       post.comments.some(
         (c) => c.author_user_id === viewerUserId && c.author_apartment_id != null,
       )
-    return memberships.some(
+    return mems.some(
       (m) =>
         post.target_apartment_ids?.includes(m.apartment_id) &&
         (new Date(m.since || 0).getTime() <= new Date(post.created_at || 0).getTime() ||
@@ -164,13 +172,194 @@ export function canViewerSeePost(
     )
   }
   if (isBoardRole(viewerRole)) return true
-  if (post.target_scope === 'ENTRANCE') {
-    return memberships.some((m) => m.entrance === post.target_entrance)
+
+  const scope = post.target_scope || 'ALL_BUILDING'
+  const hasMembershipsArg = Array.isArray(memberships)
+  const mems = hasMembershipsArg ? memberships : []
+
+  if (viewerRole === 'ACCOUNTANT') {
+    if (
+      scope === 'ALL_BUILDING' ||
+      scope === 'ALL_OBJECTS' ||
+      (scope === 'KINDS' && Array.isArray(post.target_kinds) && post.target_kinds.includes('APARTMENT'))
+    ) {
+      return true
+    }
+    return mems.some((m) => isObjectInTarget(post, m))
   }
-  if (post.target_scope === 'APARTMENT_LIST') {
-    return memberships.some((m) => post.target_apartment_ids?.includes(m.apartment_id))
+
+  if (!hasMembershipsArg) {
+    if (scope === 'ALL_BUILDING' || scope === 'ALL_OBJECTS') return true
+    return false
   }
-  return true
+
+  return mems.some((m) => isObjectInTarget(post, m))
+}
+
+export interface AuthorMembershipLike {
+  apartment_id: string
+  apartment_number?: string
+  apartment_kind?: ObjectKind | string | null
+  entrance?: number | null
+  preview_badge?: AuthorBadgeDTO | { display_label: string; role_badge: string } | null
+}
+
+/**
+ * Determine which target scopes and object kinds the caller can choose when starting
+ * a `FORUM_TOPIC` (#067, docs/API.md §4):
+ * - Board/Chairman: any scope (`ALL_BUILDING`, `ALL_OBJECTS`, `KINDS`, `ENTRANCE`, `APARTMENT_LIST`)
+ *   and all non-zero kinds present in the building.
+ * - Anyone else: `ALL_BUILDING` only if they hold an `APARTMENT`, plus `KINDS` restricted
+ *   to the kinds they hold. `ALL_OBJECTS`, `ENTRANCE`, and `APARTMENT_LIST` are board-only.
+ */
+export function getAllowedForumTopicTargets({
+  role,
+  memberships = [],
+  buildingKinds = ['APARTMENT'],
+}: {
+  role?: string | null
+  memberships?: ReadonlyArray<AuthorMembershipLike> | null
+  buildingKinds?: ReadonlyArray<ObjectKind> | null
+}): {
+  canCreate: boolean
+  allowedScopes: TargetScope[]
+  availableKinds: ObjectKind[]
+  defaultScope: TargetScope
+  defaultKinds: ObjectKind[] | null
+} {
+  const normalizedBuildingKinds = OBJECT_KINDS.filter((k) =>
+    Array.isArray(buildingKinds) && buildingKinds.length > 0 ? buildingKinds.includes(k) : k === 'APARTMENT',
+  )
+
+  if (isBoardRole(role)) {
+    return {
+      canCreate: true,
+      allowedScopes: ['ALL_BUILDING', 'ALL_OBJECTS', 'KINDS'],
+      availableKinds: normalizedBuildingKinds.length > 0 ? normalizedBuildingKinds : ['APARTMENT'],
+      defaultScope: 'ALL_BUILDING',
+      defaultKinds: null,
+    }
+  }
+
+  const heldSet = new Set<ObjectKind>()
+  for (const m of Array.isArray(memberships) ? memberships : []) {
+    if (m?.apartment_id) {
+      heldSet.add(normalizeObjectKind(m.apartment_kind))
+    }
+  }
+  const heldKinds = OBJECT_KINDS.filter((k) => heldSet.has(k))
+  if (heldKinds.length === 0) {
+    return {
+      canCreate: false,
+      allowedScopes: [],
+      availableKinds: [],
+      defaultScope: 'ALL_BUILDING',
+      defaultKinds: null,
+    }
+  }
+
+  const hasApartment = heldKinds.includes('APARTMENT')
+  if (hasApartment) {
+    return {
+      canCreate: true,
+      allowedScopes: ['ALL_BUILDING', 'KINDS'],
+      availableKinds: heldKinds,
+      defaultScope: 'ALL_BUILDING',
+      defaultKinds: null,
+    }
+  }
+
+  return {
+    canCreate: true,
+    allowedScopes: ['KINDS'],
+    availableKinds: heldKinds,
+    defaultScope: 'KINDS',
+    defaultKinds: [heldKinds[0]],
+  }
+}
+
+/**
+ * Authorization check for `POST /communication/posts` with `post_type === 'FORUM_TOPIC'` (#067).
+ * Must run BEFORE target validation (`422`) so unauthorized callers receive `403 FORBIDDEN`.
+ */
+export function canAuthorForumTopicTarget({
+  role,
+  memberships = [],
+  targetScope,
+  targetKinds,
+}: {
+  role?: string | null
+  memberships?: ReadonlyArray<AuthorMembershipLike> | null
+  targetScope: string
+  targetKinds?: ReadonlyArray<string> | null
+}): boolean {
+  if (isBoardRole(role)) return true
+
+  const heldSet = new Set<ObjectKind>()
+  for (const m of Array.isArray(memberships) ? memberships : []) {
+    if (m?.apartment_id) {
+      heldSet.add(normalizeObjectKind(m.apartment_kind))
+    }
+  }
+  if (heldSet.size === 0) return false
+
+  if (targetScope === 'ALL_BUILDING') {
+    return heldSet.has('APARTMENT')
+  }
+  if (targetScope === 'KINDS') {
+    if (!Array.isArray(targetKinds) || targetKinds.length === 0) {
+      // Caller holds at least one object; let target validation return 422 INVALID_TARGET
+      return true
+    }
+    return targetKinds.every((k) => heldSet.has(String(k).toUpperCase() as ObjectKind))
+  }
+  // ALL_OBJECTS, ENTRANCE, APARTMENT_LIST (or anything else) on FORUM_TOPIC are board-only
+  return false
+}
+
+/**
+ * Filter caller's memberships to ONLY objects inside `target` (#067 privacy rule).
+ * Never offers an out-of-target object (e.g. Apt 14 under a garage-only notice).
+ */
+export function getEligibleAuthorMemberships<T extends AuthorMembershipLike>(
+  memberships: ReadonlyArray<T> | null | undefined,
+  target: TargetScopeLike | null | undefined,
+): T[] {
+  if (!Array.isArray(memberships) || memberships.length === 0) return []
+  return memberships.filter((m) => Boolean(m?.apartment_id) && isObjectInTarget(target, m))
+}
+
+/**
+ * Resolve & validate `author_apartment_id` against a post's target (#067).
+ * - Explicit ID outside caller's eligible memberships inside the target -> 422 INVALID_AUTHOR_APARTMENT.
+ * - Omitted/null -> first eligible membership inside the target, or null (board/accountant without object in target).
+ */
+export function resolveAuthorApartmentForTarget({
+  memberships = [],
+  target,
+  requestedApartmentId,
+}: {
+  memberships?: ReadonlyArray<AuthorMembershipLike> | null
+  target: TargetScopeLike | null | undefined
+  requestedApartmentId?: unknown
+}):
+  | { ok: true; apartmentId: string | null }
+  | { ok: false; status: 422; errorCode: 'INVALID_AUTHOR_APARTMENT'; message: string } {
+  const eligible = getEligibleAuthorMemberships(memberships, target)
+  if (requestedApartmentId !== undefined && requestedApartmentId !== null && requestedApartmentId !== '') {
+    const reqId = typeof requestedApartmentId === 'string' ? requestedApartmentId : ''
+    const match = reqId ? eligible.find((m) => m.apartment_id === reqId) : null
+    if (!match) {
+      return {
+        ok: false,
+        status: 422,
+        errorCode: 'INVALID_AUTHOR_APARTMENT',
+        message: 'Selected object is not eligible to sign inside this post target.',
+      }
+    }
+    return { ok: true, apartmentId: match.apartment_id }
+  }
+  return { ok: true, apartmentId: eligible[0]?.apartment_id ?? null }
 }
 
 /**

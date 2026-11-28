@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import {
   closeAccount,
@@ -16,12 +16,21 @@ import {
 } from '@/api/endpoints/invitations.js'
 import { localizeError } from '@/locales/index.js'
 import { formatShortDate } from '@/utils/dates.js'
+import { OBJECT_KINDS, objectKindLabel, objectName, objectShortName } from '@/utils/objectName.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import JoinRequestsPanel from './components/JoinRequestsPanel.vue'
+import JoinDecisionsPanel from './components/JoinDecisionsPanel.vue'
 
+const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 
-const activeTab = ref('people') // 'people' | 'invitations'
+const validTabs = ['people', 'invitations', 'join-requests', 'join-decisions']
+const initialTab =
+  typeof route.query.tab === 'string' && validTabs.includes(route.query.tab)
+    ? route.query.tab
+    : 'people'
+const activeTab = ref(initialTab)
 const searchQuery = ref('')
 const bannerMessage = ref('')
 
@@ -30,6 +39,21 @@ const invitations = ref([])
 const loading = ref(false)
 const loadError = ref(null)
 const quickDemoSigningIn = ref(false)
+
+const peopleById = computed(() => {
+  const map = {}
+  for (const p of people.value) {
+    if (p?.user_id && p?.display_label) {
+      map[p.user_id] = p.display_label
+    }
+  }
+  return map
+})
+
+async function handleJoinRequestDecided(msg) {
+  showBanner(msg)
+  await loadPeopleAndInvitations()
+}
 
 const filteredPeople = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -47,7 +71,8 @@ const filteredPeople = computed(() => {
         .includes(q) ||
       (p.memberships || []).some(
         (m) =>
-          String(m.apartment_number || '').includes(q) ||
+          String(m.apartment_number || '').toLowerCase().includes(q) ||
+          objectName(m.apartment_kind, m.apartment_number, session.t).toLowerCase().includes(q) ||
           String(m.display_label || '')
             .toLowerCase()
             .includes(q) ||
@@ -62,9 +87,16 @@ const pendingInvitationsCount = computed(
   () => invitations.value.filter((i) => i.status === 'PENDING').length,
 )
 
+let bannerTimer = null
+
 function showBanner(msg) {
   bannerMessage.value = msg
-  setTimeout(() => {
+  if (bannerTimer) {
+    clearTimeout(bannerTimer)
+    bannerTimer = null
+  }
+  bannerTimer = setTimeout(() => {
+    bannerTimer = null
     if (bannerMessage.value === msg) {
       bannerMessage.value = ''
     }
@@ -104,7 +136,40 @@ async function handleQuickDemoSignInChairman() {
   }
 }
 
-onMounted(loadPeopleAndInvitations)
+function applyRouteQuery(query) {
+  if (typeof query?.tab === 'string' && validTabs.includes(query.tab)) {
+    activeTab.value = query.tab
+  }
+  const inviteApt =
+    typeof query?.inviteApartment === 'string' ? query.inviteApartment.trim() : ''
+  if (inviteApt) {
+    const inviteKindRaw =
+      typeof query?.inviteKind === 'string' ? query.inviteKind.toUpperCase() : 'APARTMENT'
+    const inviteKind = OBJECT_KINDS.includes(inviteKindRaw) ? inviteKindRaw : 'APARTMENT'
+    openInviteOwner()
+    inviteOwnerForm.apartmentNumber = inviteApt
+    inviteOwnerForm.apartmentKind = inviteKind
+  }
+}
+
+onMounted(() => {
+  loadPeopleAndInvitations()
+  applyRouteQuery(route.query)
+})
+
+onBeforeUnmount(() => {
+  if (bannerTimer) {
+    clearTimeout(bannerTimer)
+    bannerTimer = null
+  }
+})
+
+watch(
+  () => route.query,
+  (nextQuery) => {
+    applyRouteQuery(nextQuery)
+  },
+)
 
 watch(
   () => [session.isSignedIn, session.sessionRevision],
@@ -201,9 +266,9 @@ async function confirmEndMembership() {
       )
     } else {
       showBanner(
-        session.t('people.banners.membershipEnded', {
+        session.t('people.banners.objectMembershipEnded', {
           label: person.display_label,
-          number: membership.apartment_number,
+          object: objectName(membership.apartment_kind, membership.apartment_number, session.t),
         }),
       )
     }
@@ -268,6 +333,7 @@ async function confirmCloseAccount() {
 const showInviteOwnerModal = ref(false)
 const inviteOwnerForm = reactive({
   contact: '',
+  apartmentKind: 'APARTMENT',
   apartmentNumber: '05',
 })
 const inviteOwnerError = ref('')
@@ -275,6 +341,7 @@ const inviteOwnerBusy = ref(false)
 
 function openInviteOwner() {
   inviteOwnerForm.contact = ''
+  inviteOwnerForm.apartmentKind = 'APARTMENT'
   inviteOwnerForm.apartmentNumber = '05'
   inviteOwnerError.value = ''
   showInviteOwnerModal.value = true
@@ -295,10 +362,15 @@ async function submitInviteOwner() {
   inviteOwnerBusy.value = true
   inviteOwnerError.value = ''
   try {
+    const normalizedNumber =
+      inviteOwnerForm.apartmentKind === 'APARTMENT' && /^\d$/.test(apt)
+        ? apt.padStart(2, '0')
+        : apt
     await createInvitation({
       kind: 'OWNER',
       email: trimmed,
-      apartment_number: apt.padStart(2, '0'),
+      apartment_kind: inviteOwnerForm.apartmentKind,
+      apartment_number: normalizedNumber,
     })
     showInviteOwnerModal.value = false
     activeTab.value = 'invitations'
@@ -393,7 +465,9 @@ function openInvitationPreviewLink(inv) {
   }
   const kind = inv.kind === 'TENANT' ? 'tenant' : 'owner'
   const apt = inv.apartment_number || '14'
-  router.push({ name: 'login-link', hash: `#demo-register-${kind}-${apt}` })
+  const objKindSuffix =
+    inv.apartment_kind && inv.apartment_kind !== 'APARTMENT' ? `-${inv.apartment_kind}` : ''
+  router.push({ name: 'login-link', hash: `#demo-register-${kind}-${apt}${objKindSuffix}` })
 }
 </script>
 
@@ -534,9 +608,37 @@ function openInvitationPreviewLink(inv) {
               {{ pendingInvitationsCount }}
             </span>
           </button>
+
+          <button
+            type="button"
+            class="px-4 py-2 rounded-lg font-label-lg text-xs font-bold transition-colors inline-flex items-center gap-2 cursor-pointer"
+            :class="
+              activeTab === 'join-requests'
+                ? 'bg-primary text-on-primary'
+                : 'bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+            "
+            @click="activeTab = 'join-requests'"
+          >
+            <span class="material-symbols-outlined text-[16px]" aria-hidden="true">person_add</span>
+            <span>{{ session.t('people.tabs.joinRequests') }}</span>
+          </button>
+
+          <button
+            type="button"
+            class="px-4 py-2 rounded-lg font-label-lg text-xs font-bold transition-colors inline-flex items-center gap-2 cursor-pointer"
+            :class="
+              activeTab === 'join-decisions'
+                ? 'bg-primary text-on-primary'
+                : 'bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+            "
+            @click="activeTab = 'join-decisions'"
+          >
+            <span class="material-symbols-outlined text-[16px]" aria-hidden="true">fact_check</span>
+            <span>{{ session.t('people.tabs.joinDecisions') }}</span>
+          </button>
         </div>
 
-        <!-- Search Filter on People Tab -->
+        <!-- Search Filter on People Tab / Bulk Invite Action on Invitations Tab -->
         <div v-if="activeTab === 'people'" class="relative w-full sm:w-64">
           <span class="material-symbols-outlined text-[17px] text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2" aria-hidden="true">
             search
@@ -548,6 +650,15 @@ function openInvitationPreviewLink(inv) {
             class="w-full pl-9 pr-3 py-1.5 rounded-lg bg-surface-container-lowest border border-surface-container text-xs text-on-surface focus:outline-none focus:border-primary"
           />
         </div>
+        <button
+          v-else-if="activeTab === 'invitations'"
+          type="button"
+          class="px-3.5 py-2 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-bold inline-flex items-center gap-1.5 self-start sm:self-center cursor-pointer"
+          @click="router.push({ name: 'bulk-invitations' })"
+        >
+          <span class="material-symbols-outlined text-[16px]" aria-hidden="true">upload_file</span>
+          <span>{{ session.t('people.bulk.openButton') }}</span>
+        </button>
       </div>
 
       <!-- TAB 1: PEOPLE -->
@@ -613,7 +724,7 @@ function openInvitationPreviewLink(inv) {
                   class="inline-flex flex-wrap items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-container-low border border-surface-container text-xs"
                 >
                   <span class="font-semibold text-on-surface">
-                    {{ session.t('common.aptShort', { number: mem.apartment_number }) }}
+                    {{ objectShortName(mem.apartment_kind, mem.apartment_number, session.t) }}
                   </span>
                   <span class="text-[10px] font-bold uppercase text-secondary">
                     {{ mem.relation_type }}
@@ -676,7 +787,7 @@ function openInvitationPreviewLink(inv) {
 
       <!-- TAB 2: INVITATIONS -->
       <section
-        v-else
+        v-else-if="activeTab === 'invitations'"
         class="rounded-xl bg-surface-container-lowest border border-surface-container shadow-xs divide-y divide-surface-container"
       >
         <div
@@ -708,7 +819,7 @@ function openInvitationPreviewLink(inv) {
                 <span class="px-2 py-0.5 rounded bg-surface-container-high text-on-surface text-[10px] font-bold uppercase">
                   {{ inv.kind }}
                   <template v-if="inv.apartment_number">
-                    · {{ session.t('common.aptShort', { number: inv.apartment_number }) }}
+                    · {{ objectShortName(inv.apartment_kind, inv.apartment_number, session.t) }}
                   </template>
                   <template v-else-if="inv.building_role">
                     · {{ inv.building_role }}
@@ -782,6 +893,18 @@ function openInvitationPreviewLink(inv) {
           </div>
         </div>
       </section>
+
+      <!-- TAB 3: JOIN REQUESTS (Chairman only) -->
+      <JoinRequestsPanel
+        v-else-if="activeTab === 'join-requests'"
+        @decided="handleJoinRequestDecided"
+      />
+
+      <!-- TAB 4: JOIN DECISIONS -->
+      <JoinDecisionsPanel
+        v-else-if="activeTab === 'join-decisions'"
+        :people-by-id="peopleById"
+      />
     </template>
 
     <!-- MODAL 1: Change Role -->
@@ -883,16 +1006,24 @@ function openInvitationPreviewLink(inv) {
         <div class="w-full max-w-md rounded-xl bg-surface-container-lowest border border-surface-container p-6 shadow-xl space-y-4">
           <h3 class="font-headline-md text-lg font-bold text-on-surface">
             {{
-              session.t('people.modals.endMembershipTitle', {
-                number: endMembershipModal.membership.apartment_number,
+              session.t('people.modals.endObjectMembershipTitle', {
+                object: objectName(
+                  endMembershipModal.membership.apartment_kind,
+                  endMembershipModal.membership.apartment_number,
+                  session.t,
+                ),
               })
             }}
           </h3>
           <p class="text-sm text-on-surface-variant leading-relaxed">
             {{
-              session.t('people.modals.endMembershipDesc', {
+              session.t('people.modals.endObjectMembershipDesc', {
                 label: endMembershipModal.person.display_label,
-                number: endMembershipModal.membership.apartment_number,
+                object: objectName(
+                  endMembershipModal.membership.apartment_kind,
+                  endMembershipModal.membership.apartment_number,
+                  session.t,
+                ),
               })
             }}
           </p>
@@ -1009,18 +1140,36 @@ function openInvitationPreviewLink(inv) {
               />
             </div>
 
-            <div class="space-y-1.5">
-              <label for="invite-owner-apt" class="block font-label-md text-xs font-semibold text-on-surface">
-                {{ session.t('people.modals.apartmentNumberLabel') }}
-              </label>
-              <input
-                id="invite-owner-apt"
-                v-model="inviteOwnerForm.apartmentNumber"
-                type="text"
-                maxlength="5"
-                placeholder="14"
-                class="w-full px-3.5 py-2.5 rounded-lg bg-surface-container-low border border-outline-variant/50 text-sm text-on-surface focus:outline-none focus:border-primary"
-              />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="space-y-1.5">
+                <label for="invite-owner-kind" class="block font-label-md text-xs font-semibold text-on-surface">
+                  {{ session.t('people.modals.objectKindLabel') }}
+                </label>
+                <select
+                  id="invite-owner-kind"
+                  v-model="inviteOwnerForm.apartmentKind"
+                  data-testid="invite-owner-kind-select"
+                  class="w-full px-3 py-2.5 rounded-lg bg-surface-container-low border border-outline-variant/50 text-sm text-on-surface focus:outline-none focus:border-primary"
+                >
+                  <option v-for="kind in OBJECT_KINDS" :key="kind" :value="kind">
+                    {{ objectKindLabel(kind, session.t) }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="space-y-1.5">
+                <label for="invite-owner-apt" class="block font-label-md text-xs font-semibold text-on-surface">
+                  {{ session.t('people.modals.objectNumberLabel') }}
+                </label>
+                <input
+                  id="invite-owner-apt"
+                  v-model="inviteOwnerForm.apartmentNumber"
+                  type="text"
+                  maxlength="32"
+                  :placeholder="session.t('people.modals.objectNumberPlaceholder')"
+                  class="w-full px-3.5 py-2.5 rounded-lg bg-surface-container-low border border-outline-variant/50 text-sm text-on-surface focus:outline-none focus:border-primary"
+                />
+              </div>
             </div>
 
             <div class="rounded-lg bg-surface-container-low border border-surface-container p-3 text-xs text-on-surface-variant leading-relaxed">

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import type { DisplayMode } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
+import { objectShortName } from '@/utils/objectName.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -19,7 +20,11 @@ const privacyModes: DisplayMode[] = ['APARTMENT_ONLY', 'INITIALS', 'FULL_NAME']
 
 const apartmentLabel = computed<string>(() => {
   if (session.activeMembership?.apartment_number) {
-    return `Apt ${session.activeMembership.apartment_number}`
+    return objectShortName(
+      session.activeMembership.apartment_kind,
+      session.activeMembership.apartment_number,
+      session.t,
+    )
   }
   return session.activeMembership?.preview_badge?.display_label || buildingRole.value
 })
@@ -97,7 +102,7 @@ onBeforeUnmount(() => {
       v-if="menuOpen"
       class="absolute right-0 mt-1.5 w-64 rounded-xl bg-surface-container-lowest shadow-lg border border-surface-container py-1.5 z-50"
     >
-      <!-- Mobile & Tablet (< lg) Active Apartment & Privacy Switcher (since AppNavbarPrivacySelector is hidden < lg) -->
+      <!-- Mobile & Tablet (< lg) Active Object & Privacy Switcher (since AppNavbarPrivacySelector is hidden < lg) -->
       <div
         v-if="membership"
         class="lg:hidden px-3.5 py-2.5 mb-1 border-b border-surface-container bg-surface-container-low/50 space-y-2"
@@ -119,7 +124,7 @@ onBeforeUnmount(() => {
               "
               @click="session.selectApartment(m.apartment_id)"
             >
-              {{ session.t('common.aptShort', { number: m.apartment_number }) }}
+              {{ objectShortName(m.apartment_kind, m.apartment_number, session.t) }}
             </button>
           </div>
         </div>

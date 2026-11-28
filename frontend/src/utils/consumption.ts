@@ -2,10 +2,12 @@ import type {
   ApartmentConsumptionResponse,
   BuildingConsumptionResponse,
   MeterUnit,
+  ObjectKind,
   PeriodDTO,
   ResourceType,
 } from '@/api/schema.js'
 import { sumMeterValues } from './meterValue.js'
+import { normalizeObjectKind } from './objectName.js'
 
 export const MIN_CONSUMPTION_MONTHS = 1
 export const MAX_CONSUMPTION_MONTHS = 24
@@ -134,12 +136,14 @@ export interface ApartmentConsumptionMeterInput {
 export function buildApartmentConsumptionResponse({
   apartmentId,
   apartmentNumber,
+  apartmentKind,
   periods,
   meters,
   months = DEFAULT_CONSUMPTION_MONTHS,
 }: {
   apartmentId: string
   apartmentNumber: string
+  apartmentKind?: ObjectKind | null
   periods: Array<{ period_code: string; status?: string; due_date?: string }>
   meters: ApartmentConsumptionMeterInput[]
   months?: number
@@ -230,6 +234,7 @@ export function buildApartmentConsumptionResponse({
   return {
     apartment_id: apartmentId,
     apartment_number: apartmentNumber,
+    apartment_kind: normalizeObjectKind(apartmentKind),
     periods: selectedPeriods,
     resources,
   }
@@ -349,6 +354,7 @@ export function buildBuildingConsumptionResponse({
         string,
         {
           deltasScaled: bigint[]
+          areaDeltasScaled: bigint[]
           countedAptIds: Set<string>
           countedAreaScaled: bigint
           estimatedCount: number
@@ -405,6 +411,7 @@ export function buildBuildingConsumptionResponse({
         if (!bucket) {
           bucket = {
             deltasScaled: [],
+            areaDeltasScaled: [],
             countedAptIds: new Set(),
             countedAreaScaled: 0n,
             estimatedCount: 0,
@@ -412,6 +419,9 @@ export function buildBuildingConsumptionResponse({
           group.byPeriod.set(r.period_code, bucket)
         }
         bucket.deltasScaled.push(deltaScaled)
+        if (aptAreaScaled > 0n) {
+          bucket.areaDeltasScaled.push(deltaScaled)
+        }
         if (String(r.source || '').toUpperCase() === 'AUTO_ESTIMATED') {
           bucket.estimatedCount += 1
         }
@@ -448,12 +458,16 @@ export function buildBuildingConsumptionResponse({
         for (const d of bucket.deltasScaled) {
           totalScaled += d
         }
+        let areaTotalScaled = 0n
+        for (const d of bucket.areaDeltasScaled) {
+          areaTotalScaled += d
+        }
         const total = formatFixedBigInt(totalScaled, 3)
         const aptCount = bucket.countedAptIds.size
         const avgAptScaled = roundBigIntHalfUp(totalScaled, BigInt(aptCount))
         const avgM2Scaled =
-          bucket.countedAreaScaled > 0n
-            ? roundBigIntHalfUp(totalScaled * 10_000_000n, bucket.countedAreaScaled)
+          bucket.countedAreaScaled > 0n && bucket.areaDeltasScaled.length > 0
+            ? roundBigIntHalfUp(areaTotalScaled * 10_000_000n, bucket.countedAreaScaled)
             : null
 
         return {

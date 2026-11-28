@@ -43,9 +43,13 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
       cardMeta: (typeof DEMO_APARTMENT_CARDS)[number],
       sortedPeriods: PeriodDTO[],
     ) {
-      const baseApt =
-        apartmentsByPeriod['2026-10'].find((a) => a.apartment_id === cardMeta.apartment_id) ||
-        apartmentsByPeriod['2026-10'][0];
+      const exactApt = apartmentsByPeriod['2026-10'].find(
+        (a) => a.apartment_id === cardMeta.apartment_id,
+      );
+      if (!exactApt && (cardMeta.apartment_kind || 'APARTMENT') !== 'APARTMENT') {
+        return [];
+      }
+      const baseApt = exactApt || apartmentsByPeriod['2026-10'][0];
 
       const metersHistory = baseApt.meters.map((baseMeter, mIdx) => {
         const readings: {
@@ -92,7 +96,7 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
       });
 
       // Add a replaced meter sample on Apt 14 so the replaced-meter label is visible
-      if (cardMeta.apartment_number === '14') {
+      if (cardMeta.apartment_number === '14' && (cardMeta.apartment_kind || 'APARTMENT') === 'APARTMENT') {
         metersHistory.push({
           meter_id: '018f0000-0000-7000-8000-000000000599',
           resource_type: 'COLD_WATER',
@@ -143,6 +147,7 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
       return sendJson(res, 200, {
         apartment_id: cardMeta.apartment_id,
         apartment_number: cardMeta.apartment_number,
+        apartment_kind: cardMeta.apartment_kind || 'APARTMENT',
         periods: sortedPeriods,
         meters: buildMiddlewareApartmentMeters(cardMeta, sortedPeriods),
       });
@@ -180,6 +185,7 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
         buildApartmentConsumptionResponse({
           apartmentId: cardMeta.apartment_id,
           apartmentNumber: cardMeta.apartment_number,
+          apartmentKind: cardMeta.apartment_kind || 'APARTMENT',
           periods: sortedPeriods,
           meters: metersHistory,
           months: parsedMonths.months,
@@ -210,7 +216,7 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
         const cardMeta = DEMO_APARTMENT_CARDS.find((a) => a.apartment_id === baseApt.apartment_id);
         return {
           apartment_id: baseApt.apartment_id,
-          area_m2: cardMeta?.area_m2 || '0',
+          area_m2: cardMeta?.area_m2 ?? null,
           meters: cardMeta ? buildMiddlewareApartmentMeters(cardMeta, sortedPeriods) : [],
         };
       });
@@ -255,6 +261,7 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
 
       const period = periodsMap[periodCode] || periodsMap['2026-10'];
       const periodApts = apartmentsByPeriod[period.period_code] || apartmentsByPeriod['2026-10'];
+      const periodAptById = new Map(periodApts.map((a) => [a.apartment_id, a]));
 
       const baseCanSubmitByAptId = new Map(
         (apartmentsByPeriod['2026-10'] || []).map((a) => [
@@ -263,34 +270,43 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
         ])
       );
 
-      const apartments = periodApts
-        .filter((a) => userAptIds.has(a.apartment_id))
-        .map((a) => {
-          const memCanSubmit = Boolean(memByAptId.get(a.apartment_id)?.can_submit_readings);
-          const baseAptCanSubmit = baseCanSubmitByAptId.get(a.apartment_id) ?? false;
+      const apartments = userMems.map((mem) => {
+        const a = periodAptById.get(mem.apartment_id);
+        const memCanSubmit = Boolean(mem.can_submit_readings);
+        if (!a) {
           return {
-            apartment_id: a.apartment_id,
-            apartment_number: a.apartment_number,
-            can_submit_readings: baseAptCanSubmit && memCanSubmit,
-            meters: a.meters.map((m) => ({
-              meter_id: m.meter_id,
-              resource_type: m.resource_type,
-              serial_number: m.serial_number ?? null,
-              location_label: m.location_label,
-              unit: m.unit,
-              previous_value: m.previous_value,
-              needs_start: Boolean(m.needs_start),
-              previous_delta: m.historical_avg ?? null,
-              average_delta: m.historical_avg ?? null,
-              reading: m.reading ? { ...m.reading } : null,
-              next_submission: computeMeterNextSubmission(
-                m.meter_id,
-                baseAptCanSubmit,
-                memCanSubmit
-              ),
-            })),
+            apartment_id: mem.apartment_id,
+            apartment_number: mem.apartment_number,
+            apartment_kind: mem.apartment_kind || 'APARTMENT',
+            can_submit_readings: memCanSubmit,
+            meters: [],
           };
-        });
+        }
+        const baseAptCanSubmit = baseCanSubmitByAptId.get(a.apartment_id) ?? false;
+        return {
+          apartment_id: a.apartment_id,
+          apartment_number: a.apartment_number,
+          apartment_kind: a.apartment_kind || mem.apartment_kind || 'APARTMENT',
+          can_submit_readings: baseAptCanSubmit && memCanSubmit,
+          meters: a.meters.map((m) => ({
+            meter_id: m.meter_id,
+            resource_type: m.resource_type,
+            serial_number: m.serial_number ?? null,
+            location_label: m.location_label,
+            unit: m.unit,
+            previous_value: m.previous_value,
+            needs_start: Boolean(m.needs_start),
+            previous_delta: m.historical_avg ?? null,
+            average_delta: m.historical_avg ?? null,
+            reading: m.reading ? { ...m.reading } : null,
+            next_submission: computeMeterNextSubmission(
+              m.meter_id,
+              baseAptCanSubmit,
+              memCanSubmit
+            ),
+          })),
+        };
+      });
 
       return sendJson(res, 200, {
         period,
@@ -709,6 +725,11 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
         return sendError(res, 403, 'FORBIDDEN', 'Board or Accountant role required.');
       }
       const periodCode = matrixMatch[1];
+      const rawKind = urlObj.searchParams.get('kind');
+      const kindFilter = rawKind ? rawKind.trim().toUpperCase() : '';
+      if (kindFilter && !['APARTMENT', 'PARKING', 'GARAGE'].includes(kindFilter)) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Invalid object kind filter.');
+      }
       const period = periodsMap[periodCode];
       if (!period) {
         return sendError(res, 404, 'PERIOD_NOT_FOUND', 'The requested billing period was not found.');
@@ -762,6 +783,7 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
         return {
           apartment_id: a.apartment_id,
           apartment_number: a.apartment_number,
+          apartment_kind: a.apartment_kind || 'APARTMENT',
           entrance: a.entrance,
           floor: a.floor,
           status: aptStatus,
@@ -809,7 +831,9 @@ export async function handleMetersRoutes(ctx: RouteContext<SeedUser>): Promise<b
           },
         ],
         master_meters: masterMeters,
-        apartments,
+        apartments: kindFilter
+          ? apartments.filter((a) => (a.apartment_kind || 'APARTMENT') === kindFilter)
+          : apartments,
       });
     }
 

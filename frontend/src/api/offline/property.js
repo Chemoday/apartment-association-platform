@@ -1,6 +1,7 @@
 import {
   UNHANDLED,
   BUILDING_ID,
+  OFFLINE_APARTMENT_CARDS,
   OFFLINE_MEMBERSHIPS_BY_USER,
   OFFLINE_BUILDING,
   consumeOfflineRegistryQuota,
@@ -17,6 +18,7 @@ import {
 } from '../../utils/buildingPassport.js'
 import {
   computeMockPreviewBadge,
+  computeMockSharedAccess,
 } from '../../mocks/domains/index.js'
 
 export async function handleOfflineProperty(ctx) {
@@ -31,6 +33,7 @@ export async function handleOfflineProperty(ctx) {
       building_role: user.building_role,
       privacy_display_mode: memberships[0]?.privacy_display_mode || 'FULL_NAME',
       locale: user.locale ?? null,
+      shared_access: computeMockSharedAccess(memberships),
       memberships: JSON.parse(JSON.stringify(memberships)),
     }
   }
@@ -148,84 +151,6 @@ export async function handleOfflineProperty(ctx) {
   }
 
   // 3b. GET /property/apartments & GET /property/apartments/:id (E8/P1)
-  const OFFLINE_APARTMENT_CARDS = [
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000301',
-      apartment_number: '01',
-      entrance: 1,
-      floor: 1,
-      area_m2: '48.50',
-      owner_count: 1,
-      tenant_count: 0,
-      resident_count: 0,
-      residents: [{ relation_type: 'OWNER', since: '2021-03-10T10:00:00Z' }],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000302',
-      apartment_number: '02',
-      entrance: 1,
-      floor: 1,
-      area_m2: '54.30',
-      owner_count: 0,
-      tenant_count: 1,
-      resident_count: 0,
-      residents: [{ relation_type: 'TENANT', since: '2026-06-15T10:00:00Z' }],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000305',
-      apartment_number: '05',
-      entrance: 1,
-      floor: 2,
-      area_m2: '62.10',
-      owner_count: 0,
-      tenant_count: 0,
-      resident_count: 0,
-      residents: [],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000309',
-      apartment_number: '09',
-      entrance: 2,
-      floor: 3,
-      area_m2: '51.00',
-      owner_count: 1,
-      tenant_count: 0,
-      resident_count: 1,
-      residents: [
-        { relation_type: 'OWNER', since: '2023-04-01T09:00:00Z' },
-        { relation_type: 'RESIDENT', since: '2024-09-01T12:00:00Z' },
-      ],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000314',
-      apartment_number: '14',
-      entrance: 2,
-      floor: 4,
-      area_m2: '54.30',
-      owner_count: 1,
-      tenant_count: 1,
-      resident_count: 0,
-      residents: [
-        { relation_type: 'OWNER', since: '2022-01-12T10:00:00Z' },
-        { relation_type: 'TENANT', since: '2025-09-03T10:00:00Z' },
-      ],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000315',
-      apartment_number: '15',
-      entrance: 2,
-      floor: 4,
-      area_m2: '59.00',
-      owner_count: 1,
-      tenant_count: 1,
-      resident_count: 0,
-      residents: [
-        { relation_type: 'OWNER', since: '2022-05-18T10:00:00Z' },
-        { relation_type: 'TENANT', since: '2025-05-01T10:00:00Z' },
-      ],
-    },
-  ]
-
   if (pathname === '/property/apartments' && method === 'GET') {
     if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
       const err = new Error('Forbidden')
@@ -235,7 +160,7 @@ export async function handleOfflineProperty(ctx) {
       throw err
     }
     return {
-      apartments: OFFLINE_APARTMENT_CARDS.map(({ residents, ...rest }) => rest),
+      apartments: OFFLINE_APARTMENT_CARDS.map(({ residents: _residents, ...rest }) => rest),
     }
   }
 
@@ -269,7 +194,12 @@ export async function handleOfflineProperty(ctx) {
     const allowedModes = ['FULL_NAME', 'INITIALS', 'APARTMENT_ONLY']
     if (current && allowedModes.includes(nextMode)) {
       current.privacy_display_mode = nextMode
-      current.preview_badge = computeMockPreviewBadge(user, current.apartment_number, nextMode)
+      current.preview_badge = computeMockPreviewBadge(
+        user,
+        current.apartment_number,
+        nextMode,
+        current.apartment_kind,
+      )
     }
     const target = current || {
       membership_id: membershipId,

@@ -44,9 +44,11 @@ const errorId = computed(() => (props.error ? `${props.id}-error` : undefined))
         :disabled="disabled"
         :aria-invalid="error ? 'true' : undefined"
         :aria-describedby="errorId"
-        class="w-full h-11 px-3 bg-surface-container-lowest border rounded-lg font-body-sm text-body-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary transition-colors disabled:bg-surface-container-low disabled:text-on-surface-variant"
+        class="w-full h-11 px-3 bg-surface-container-lowest border rounded-[var(--radius-control)] font-body-sm text-body-sm text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 transition-colors disabled:bg-surface-container-low disabled:text-on-surface-variant"
         :class="[
-          error ? 'border-error focus:ring-error' : 'border-outline-variant',
+          error
+            ? 'border-error focus:border-error focus:ring-error/20'
+            : 'border-outline-variant/80 focus:border-primary focus:ring-primary/20',
           suffix ? 'pr-14' : '',
         ]"
       />

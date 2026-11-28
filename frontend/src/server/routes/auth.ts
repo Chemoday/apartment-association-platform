@@ -1,6 +1,7 @@
 import type { SeedUser } from '../state.js';
 import { type RouteContext, sendJson, sendError, readBody } from '../http.js';
 import {
+  DEMO_APARTMENT_CARDS,
   DEMO_USERS,
   membershipsByUser,
   passwordsByUser,
@@ -15,9 +16,18 @@ import {
   type MockPersonSummary,
   type MockInvitation,
 } from '../state.js';
+import {
+  evaluateBulkInvitationsText,
+  type BulkEvaluationError,
+} from '../../utils/bulkInvitations.js';
+import {
+  buildConnectionItems,
+  buildConnectionOverview,
+} from '../../utils/connections.js';
+import { normalizePhoneToE164 } from '../../utils/phone.js';
 
 export async function handleAuthRoutes(ctx: RouteContext<SeedUser>): Promise<boolean> {
-  const { req, res, pathname, method, user } = ctx;
+  const { req, res, urlObj, pathname, method, user } = ctx;
 
     if (pathname === '/api/v1/auth/refresh' && method === 'POST') {
       if (serverStore.activeSignedInUserId && serverStore.activeSessionsStore.some((s) => s.current)) {
@@ -58,19 +68,26 @@ export async function handleAuthRoutes(ctx: RouteContext<SeedUser>): Promise<boo
         const parts = tokenStr.split('-');
         const kindRaw = (parts[2] || 'owner').toUpperCase();
         const targetVal = parts[3] || '14';
+        const objKindRaw = (parts[4] || '').toUpperCase();
+        const objKind =
+          objKindRaw === 'PARKING' || objKindRaw === 'GARAGE' ? objKindRaw : 'APARTMENT';
         const invitation =
           kindRaw === 'STAFF'
             ? {
                 kind: 'STAFF',
                 apartment_number: null,
+                apartment_kind: null,
                 building_role: ['BOARD', 'ACCOUNTANT', 'CHAIRMAN'].includes(targetVal)
                   ? targetVal
                   : 'BOARD',
+                country_code: 'EE',
               }
             : {
                 kind: kindRaw === 'TENANT' ? 'TENANT' : 'OWNER',
                 apartment_number: targetVal,
+                apartment_kind: objKind,
                 building_role: null,
+                country_code: 'EE',
               };
         return sendJson(res, 200, {
           status: 'REGISTRATION_REQUIRED',
@@ -84,12 +101,17 @@ export async function handleAuthRoutes(ctx: RouteContext<SeedUser>): Promise<boo
         const parts = tokenStr.split('-');
         const kindRaw = (parts[2] || 'tenant').toUpperCase();
         const targetVal = parts[3] || '14';
+        const objKindRaw = (parts[4] || '').toUpperCase();
+        const objKind =
+          objKindRaw === 'PARKING' || objKindRaw === 'GARAGE' ? objKindRaw : 'APARTMENT';
         return sendJson(res, 200, {
           status: 'SIGN_IN_TO_ACCEPT',
           invitation: {
             kind: kindRaw === 'OWNER' ? 'OWNER' : 'TENANT',
             apartment_number: targetVal,
+            apartment_kind: objKind,
             building_role: null,
+            country_code: 'EE',
           },
         });
       }
@@ -524,11 +546,32 @@ export async function handleAuthRoutes(ctx: RouteContext<SeedUser>): Promise<boo
         }
       }
 
+      const rawKind = body.apartment_kind ? String(body.apartment_kind).toUpperCase() : 'APARTMENT';
+      if (kind === 'OWNER' && !['APARTMENT', 'PARKING', 'GARAGE'].includes(rawKind)) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Invalid object kind.');
+      }
+      let apartmentKind: 'APARTMENT' | 'PARKING' | 'GARAGE' | null =
+        kind === 'STAFF' ? null : (rawKind as 'APARTMENT' | 'PARKING' | 'GARAGE');
+      if (kind === 'OWNER' && apartmentNumber) {
+        const matchedCard = DEMO_APARTMENT_CARDS.find(
+          (c) => (c.apartment_kind || 'APARTMENT') === apartmentKind && c.apartment_number === apartmentNumber,
+        );
+        apartmentId =
+          matchedCard?.apartment_id ||
+          NUMBER_TO_APARTMENT_ID[apartmentNumber] ||
+          `018f0000-0000-7000-8000-0000000003${apartmentNumber.padStart(2, '0')}`;
+      }
+      if (kind === 'TENANT' && apartmentId) {
+        const matchedCard = DEMO_APARTMENT_CARDS.find((c) => c.apartment_id === apartmentId);
+        apartmentKind = matchedCard?.apartment_kind || 'APARTMENT';
+      }
+
       const duplicate = serverStore.buildingInvitationsStore.find(
         (i) =>
           i.status === 'PENDING' &&
           i.kind === kind &&
           i.apartment_number === apartmentNumber &&
+          (i.apartment_kind ?? null) === apartmentKind &&
           (i.raw_email.toLowerCase() === email.toLowerCase() ||
             i.masked_email === maskEmailServerSide(email))
       );
@@ -552,12 +595,429 @@ export async function handleAuthRoutes(ctx: RouteContext<SeedUser>): Promise<boo
         invited_by_user_id: authedUser.user_id,
         apartment_id: kind === 'STAFF' ? null : apartmentId,
         apartment_number: kind === 'STAFF' ? null : apartmentNumber,
+        apartment_kind: kind === 'STAFF' ? null : apartmentKind,
         building_role: kind === 'STAFF' ? buildingRole : null,
         created_at: nowIso,
         expires_at: expiresIso,
       };
       serverStore.buildingInvitationsStore.unshift(newInv);
       return sendJson(res, 201, toInvitationView(newInv, authedUser.user_id));
+    }
+
+    // E13/R4a (#057 + #069): POST /api/v1/auth/invitations/bulk/preview & /bulk
+    if (
+      (pathname === '/api/v1/auth/invitations/bulk/preview' ||
+        pathname === '/api/v1/auth/invitations/bulk') &&
+      method === 'POST'
+    ) {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      const body = await readBody(req);
+      const text = typeof body.text === 'string' ? body.text : '';
+      const isSend = pathname.endsWith('/bulk');
+      const existingPending = serverStore.buildingInvitationsStore
+        .filter((i) => i.status === 'PENDING' && i.kind === 'OWNER')
+        .map((i) => ({
+          apartment_id: i.apartment_id,
+          apartment_number: i.apartment_number,
+          apartment_kind: i.apartment_kind,
+          raw_email: i.raw_email,
+        }));
+      try {
+        const { report, invitedRows } = evaluateBulkInvitationsText(text, {
+          apartments: DEMO_APARTMENT_CARDS,
+          existingPending,
+          limitRemaining: 50,
+          mode: isSend ? 'send' : 'preview',
+        });
+        if (isSend && invitedRows.length > 0) {
+          const nowIso = new Date().toISOString();
+          const expiresIso = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
+          for (const row of invitedRows) {
+            serverStore.buildingInvitationsStore.unshift({
+              invitation_id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+              kind: 'OWNER',
+              status: 'PENDING',
+              masked_email: maskEmailServerSide(row.email),
+              raw_email: row.email.toLowerCase(),
+              invited_by_user_id: authedUser.user_id,
+              apartment_id: row.apartment_id,
+              apartment_number: row.apartment_number,
+              apartment_kind: row.apartment_kind,
+              building_role: null,
+              created_at: nowIso,
+              expires_at: expiresIso,
+            });
+          }
+        }
+        return sendJson(res, 200, report);
+      } catch (err) {
+        const bulkErr = err as BulkEvaluationError;
+        if (bulkErr && (bulkErr.status === 422 || bulkErr.status === 429)) {
+          return sendError(
+            res,
+            bulkErr.status,
+            bulkErr.errorCode,
+            bulkErr.message,
+            bulkErr.retry_after_seconds
+              ? { retry_after_seconds: bulkErr.retry_after_seconds }
+              : undefined,
+          );
+        }
+        throw err;
+      }
+    }
+
+    // E13/R4b (#058 + #069): GET /api/v1/auth/connections & PUT /api/v1/auth/connections/{id}/paper
+    if (pathname === '/api/v1/auth/connections' && method === 'GET') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      const allMemberships = serverStore.buildingUsersStore.flatMap((p) => p.memberships);
+      const overview = buildConnectionOverview({
+        apartments: DEMO_APARTMENT_CARDS,
+        memberships: allMemberships,
+        invitations: serverStore.buildingInvitationsStore,
+        paperApartmentIds: serverStore.paperApartmentIds,
+        activeJoinCodeApartmentIds: new Set(serverStore.joinCodesStore.map((c) => c.apartment_id)),
+        pendingJoinRequestApartmentIds: new Set(
+          serverStore.joinRequestsStore.map((r) => r.apartment_id),
+        ),
+        statusFilter: urlObj.searchParams.get('status'),
+        limit: Number(urlObj.searchParams.get('limit') || 50),
+        offset: Number(urlObj.searchParams.get('offset') || 0),
+      });
+      return sendJson(res, 200, overview);
+    }
+
+    const connPaperMatch = pathname.match(/^\/api\/v1\/auth\/connections\/([^/]+)\/paper$/);
+    if (connPaperMatch && method === 'PUT') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      const aptId = connPaperMatch[1];
+      const apt = DEMO_APARTMENT_CARDS.find((c) => c.apartment_id === aptId);
+      if (!apt) {
+        return sendError(res, 404, 'APARTMENT_NOT_FOUND', 'Object not found.');
+      }
+      const body = await readBody(req);
+      const onPaper = Boolean(body.on_paper);
+      if (onPaper) {
+        serverStore.paperApartmentIds.add(aptId);
+      } else {
+        serverStore.paperApartmentIds.delete(aptId);
+      }
+      const allMemberships = serverStore.buildingUsersStore.flatMap((p) => p.memberships);
+      const item = buildConnectionItems({
+        apartments: [apt],
+        memberships: allMemberships,
+        invitations: serverStore.buildingInvitationsStore,
+        paperApartmentIds: serverStore.paperApartmentIds,
+        activeJoinCodeApartmentIds: new Set(serverStore.joinCodesStore.map((c) => c.apartment_id)),
+        pendingJoinRequestApartmentIds: new Set(
+          serverStore.joinRequestsStore.map((r) => r.apartment_id),
+        ),
+      })[0];
+      return sendJson(res, 200, item);
+    }
+
+    // E13/R4c (#059 + #069): POST/GET /api/v1/auth/join-codes & DELETE /api/v1/auth/join-codes/{code_id}
+    if (pathname === '/api/v1/auth/join-codes' && method === 'GET') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      const list = serverStore.joinCodesStore.map((c) => ({
+        code_id: c.code_id,
+        apartment_id: c.apartment_id,
+        apartment_number: c.apartment_number,
+        apartment_kind: c.apartment_kind,
+        created_at: c.created_at,
+        expires_at: c.expires_at,
+      }));
+      return sendJson(res, 200, list);
+    }
+
+    if (pathname === '/api/v1/auth/join-codes' && method === 'POST') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      const body = await readBody(req);
+      const requestedIds = Array.isArray(body.apartment_ids) ? (body.apartment_ids as string[]) : null;
+      const allMemberships = serverStore.buildingUsersStore.flatMap((p) => p.memberships);
+      const ownerAptIds = new Set(
+        allMemberships.filter((m) => m.relation_type === 'OWNER').map((m) => m.apartment_id),
+      );
+      const pendingInvAptIds = new Set(
+        serverStore.buildingInvitationsStore
+          .filter((i) => i.status === 'PENDING' && i.kind === 'OWNER' && i.apartment_id)
+          .map((i) => i.apartment_id as string),
+      );
+      const activeCodeAptIds = new Set(serverStore.joinCodesStore.map((c) => c.apartment_id));
+      const pendingReqAptIds = new Set(serverStore.joinRequestsStore.map((r) => r.apartment_id));
+
+      let targets: typeof DEMO_APARTMENT_CARDS;
+      if (requestedIds !== null) {
+        if (requestedIds.length === 0 || new Set(requestedIds).size !== requestedIds.length) {
+          return sendError(res, 422, 'VALIDATION_ERROR', 'Provide unique non-empty apartment_ids.');
+        }
+        targets = [];
+        for (const id of requestedIds) {
+          const found = DEMO_APARTMENT_CARDS.find((c) => c.apartment_id === id);
+          if (!found) {
+            return sendError(res, 404, 'APARTMENT_NOT_FOUND', 'Object not found.');
+          }
+          targets.push(found);
+        }
+      } else {
+        targets = DEMO_APARTMENT_CARDS.filter(
+          (c) =>
+            !ownerAptIds.has(c.apartment_id) &&
+            !pendingInvAptIds.has(c.apartment_id) &&
+            !activeCodeAptIds.has(c.apartment_id) &&
+            !pendingReqAptIds.has(c.apartment_id),
+        );
+      }
+
+      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      const makeCode = () => {
+        const pick = (n: number) =>
+          Array.from({ length: n }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+        return `${pick(4)}-${pick(4)}-${pick(2)}`;
+      };
+      const nowIso = new Date().toISOString();
+      const expiresIso = new Date(Date.now() + 30 * 86400 * 1000).toISOString();
+      const issued = targets.map((apt) => {
+        const rec = {
+          code_id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+          apartment_id: apt.apartment_id,
+          apartment_number: apt.apartment_number,
+          apartment_kind: (apt.apartment_kind || 'APARTMENT') as 'APARTMENT' | 'PARKING' | 'GARAGE',
+          join_code: makeCode(),
+          created_at: nowIso,
+          expires_at: expiresIso,
+        };
+        serverStore.joinCodesStore.unshift(rec);
+        return {
+          code_id: rec.code_id,
+          apartment_id: rec.apartment_id,
+          apartment_number: rec.apartment_number,
+          apartment_kind: rec.apartment_kind,
+          join_code: rec.join_code,
+          expires_at: rec.expires_at,
+        };
+      });
+      const host = req.headers.host || 'localhost:3000';
+      const assocName =
+        serverStore.associationSettingsStore.find((s) => s.key === 'association_name')?.value ||
+        'KÜ Tamme 14';
+      res.setHeader('Cache-Control', 'no-store');
+      return sendJson(res, 201, {
+        association_name: assocName,
+        join_url: `http://${host}/join`,
+        codes: issued,
+      });
+    }
+
+    const joinCodeDelMatch = pathname.match(/^\/api\/v1\/auth\/join-codes\/([^/]+)$/);
+    if (joinCodeDelMatch && method === 'DELETE') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      const codeId = joinCodeDelMatch[1];
+      const idx = serverStore.joinCodesStore.findIndex((c) => c.code_id === codeId);
+      if (idx === -1) {
+        return sendError(res, 404, 'JOIN_CODE_NOT_FOUND', 'Join code not found.');
+      }
+      serverStore.joinCodesStore.splice(idx, 1);
+      res.statusCode = 204;
+      { res.end(); return true; }
+    }
+
+    const normalizeCrockfordJoinCode = (raw: unknown) =>
+      String(raw || '')
+        .replace(/[\s-]/g, '')
+        .toUpperCase()
+        .replace(/[IL]/g, '1')
+        .replace(/O/g, '0');
+
+    // E13/R4c (#060 + #069): Public /join lookup, privacy-notice, submit
+    if (pathname === '/api/v1/auth/join/lookup' && method === 'POST') {
+      const body = await readBody(req);
+      const normalized = normalizeCrockfordJoinCode(body.join_code);
+      const matched = serverStore.joinCodesStore.find(
+        (c) => normalizeCrockfordJoinCode(c.join_code) === normalized,
+      );
+      if (!matched) {
+        return sendError(res, 400, 'INVALID_JOIN_CODE', 'This code is wrong, used or expired.');
+      }
+      const assocName =
+        serverStore.associationSettingsStore.find((s) => s.key === 'association_name')?.value ||
+        'KÜ Tamme 14';
+      return sendJson(res, 200, {
+        association_name: assocName,
+        apartment_number: matched.apartment_number,
+        apartment_kind: matched.apartment_kind,
+        country_code: 'EE',
+      });
+    }
+
+    if (pathname === '/api/v1/auth/join/privacy-notice' && method === 'GET') {
+      const rawLocale = String(urlObj.searchParams.get('locale') || 'en').toLowerCase();
+      const locale = (['en', 'et', 'ru'].includes(rawLocale) ? rawLocale : 'en') as 'en' | 'et' | 'ru';
+      const customUrl =
+        serverStore.associationSettingsStore.find((s) => s.key === 'privacy_notice_url')?.value || null;
+      return sendJson(res, 200, {
+        custom_url: customUrl,
+        locale,
+        text: customUrl
+          ? null
+          : 'Your name, phone number, and e-mail address are used only so the chairman of the apartment association can verify that you are the owner of an apartment, a parking space or a garage. This request data is deleted immediately after the decision (or automatically after 30 days).',
+      });
+    }
+
+    if (pathname === '/api/v1/auth/join' && method === 'POST') {
+      const body = await readBody(req);
+      const normalized = normalizeCrockfordJoinCode(body.join_code);
+      const idx = serverStore.joinCodesStore.findIndex(
+        (c) => normalizeCrockfordJoinCode(c.join_code) === normalized,
+      );
+      if (idx === -1) {
+        return sendError(res, 400, 'INVALID_JOIN_CODE', 'This code is wrong, used or expired.');
+      }
+      const fullName = String(body.full_name || '').trim();
+      const email = String(body.email || '').trim();
+      const e164Phone = normalizePhoneToE164(typeof body.phone === 'string' ? body.phone : '');
+      if (!fullName || fullName.length > 200 || !isValidEmailFormat(email)) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Invalid join request details.');
+      }
+      if (!e164Phone) {
+        return sendError(res, 422, 'VALIDATION_ERROR', 'Invalid phone number.', {
+          errors: [{ loc: ['body', 'phone'], message: 'Invalid phone number', type: 'value_error' }],
+        });
+      }
+      const [usedCode] = serverStore.joinCodesStore.splice(idx, 1);
+      const rawLocale = String(body.locale || 'en').toLowerCase();
+      const locale = (['en', 'et', 'ru'].includes(rawLocale) ? rawLocale : 'en') as 'en' | 'et' | 'ru';
+      serverStore.joinRequestsStore.push({
+        request_id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+        apartment_id: usedCode.apartment_id,
+        apartment_number: usedCode.apartment_number,
+        apartment_kind: usedCode.apartment_kind,
+        full_name: fullName,
+        phone: e164Phone,
+        email,
+        locale,
+        created_at: new Date().toISOString(),
+      });
+      return sendJson(res, 202, { accepted: true });
+    }
+
+    // E13/R4c (#061 + #069): Join requests (chairman only) & join decisions (chairman + board)
+    if (pathname === '/api/v1/auth/join-requests' && method === 'GET') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      const oldestFirst = [...serverStore.joinRequestsStore].sort(
+        (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
+      );
+      return sendJson(res, 200, oldestFirst);
+    }
+
+    const joinReqActionMatch = pathname.match(
+      /^\/api\/v1\/auth\/join-requests\/([^/]+)\/(confirm|reject)$/,
+    );
+    if (joinReqActionMatch && method === 'POST') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN') {
+        return sendError(res, 403, 'FORBIDDEN', 'Chairman access required.');
+      }
+      const [, reqId, action] = joinReqActionMatch;
+      const idx = serverStore.joinRequestsStore.findIndex((r) => r.request_id === reqId);
+      if (idx === -1) {
+        return sendError(res, 404, 'JOIN_REQUEST_NOT_FOUND', 'Join request not found.');
+      }
+      const [request] = serverStore.joinRequestsStore.splice(idx, 1);
+      const nowIso = new Date().toISOString();
+      serverStore.joinDecisionsStore.unshift({
+        apartment_id: request.apartment_id,
+        apartment_number: request.apartment_number,
+        apartment_kind: request.apartment_kind,
+        outcome: action === 'confirm' ? 'CONFIRMED' : 'REJECTED',
+        decided_by_user_id: authedUser.user_id,
+        decided_at: nowIso,
+      });
+
+      if (action === 'reject') {
+        res.statusCode = 204;
+        { res.end(); return true; }
+      }
+
+      const expiresIso = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
+      const newInv: MockInvitation = {
+        invitation_id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+        kind: 'OWNER',
+        status: 'PENDING',
+        masked_email: maskEmailServerSide(request.email),
+        raw_email: request.email.toLowerCase(),
+        invited_by_user_id: authedUser.user_id,
+        apartment_id: request.apartment_id,
+        apartment_number: request.apartment_number,
+        apartment_kind: request.apartment_kind,
+        building_role: null,
+        created_at: nowIso,
+        expires_at: expiresIso,
+      };
+      serverStore.buildingInvitationsStore.unshift(newInv);
+      return sendJson(res, 200, toInvitationView(newInv, authedUser.user_id));
+    }
+
+    if (pathname === '/api/v1/auth/join-decisions' && method === 'GET') {
+      const authedUser = getBearerAuthenticatedUser(req);
+      if (!authedUser) {
+        return sendError(res, 401, 'NOT_AUTHENTICATED', 'Sign in required.');
+      }
+      if (authedUser.building_role !== 'CHAIRMAN' && authedUser.building_role !== 'BOARD') {
+        return sendError(res, 403, 'FORBIDDEN', 'Board or chairman access required.');
+      }
+      const limit = Math.min(Math.max(Number(urlObj.searchParams.get('limit') || 20), 1), 100);
+      const offset = Math.max(Number(urlObj.searchParams.get('offset') || 0), 0);
+      const newestFirst = [...serverStore.joinDecisionsStore].sort(
+        (a, b) => Date.parse(b.decided_at) - Date.parse(a.decided_at),
+      );
+      return sendJson(res, 200, newestFirst.slice(offset, offset + limit));
     }
 
     // A4: POST /api/v1/auth/invitations/{id}/resend
@@ -824,6 +1284,7 @@ export async function handleAuthRoutes(ctx: RouteContext<SeedUser>): Promise<boo
         invited_by_user_id: authedUser.user_id,
         apartment_id: ownedMem.apartment_id,
         apartment_number: ownedMem.apartment_number,
+        apartment_kind: ownedMem.apartment_kind || 'APARTMENT',
         building_role: null,
         created_at: nowIso,
         expires_at: expiresIso,
@@ -852,6 +1313,7 @@ export async function handleAuthRoutes(ctx: RouteContext<SeedUser>): Promise<boo
           membership_id: m.membership_id,
           apartment_id: m.apartment_id,
           apartment_number: m.apartment_number,
+          apartment_kind: m.apartment_kind || 'APARTMENT',
           relation_type: m.relation_type,
           display_label: m.display_label,
           since: m.since,

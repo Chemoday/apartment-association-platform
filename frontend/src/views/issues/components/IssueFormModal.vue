@@ -17,6 +17,7 @@ import {
   findMatchingOpenIssues,
   validateIssueReportDraft,
 } from '@/utils/issues.js'
+import { objectName, resolveAutoPickedObjectId } from '@/utils/objectName.js'
 import {
   MAX_CONCURRENT_PHOTO_UPLOADS,
   canQueuePhotoUploadsAfterCreate,
@@ -301,7 +302,7 @@ function finishAfterPartialUpload() {
 const apartmentLabelById = computed(() => {
   const map = {}
   for (const m of session.memberships || []) {
-    map[m.apartment_id] = m.apartment_number
+    map[m.apartment_id] = objectName(m.apartment_kind, m.apartment_number, session.t)
   }
   return map
 })
@@ -397,7 +398,9 @@ async function initializeForm({ preserveDraft = false } = {}) {
       formMeta.value.apartment_ids.length > 0 &&
       !formMeta.value.apartment_ids.includes(draft.value.apartment_id)
     ) {
-      draft.value.apartment_id = formMeta.value.apartment_ids[0]
+      draft.value.apartment_id =
+        resolveAutoPickedObjectId(formMeta.value.apartment_ids, session.memberships || []) ||
+        formMeta.value.apartment_ids[0]
     }
   } catch (err) {
     if (isUnmounted || !props.open || initEpoch !== submissionEpoch) return
@@ -543,8 +546,13 @@ async function handleSubmit() {
   modalAbortController = new AbortController()
   const signal = modalAbortController.signal
 
+  const payloadToSend = { ...validation.payload }
+  if (formMeta.value.apartment_ids.length <= 1) {
+    delete payloadToSend.apartment_id
+  }
+
   try {
-    const created = await createIssue(validation.payload, { signal })
+    const created = await createIssue(payloadToSend, { signal })
     if (isUnmounted || !props.open || submitEpoch !== submissionEpoch || signal.aborted) {
       return
     }
@@ -926,13 +934,7 @@ function formatLocationLabel(entrance, place) {
                 :key="aptId"
                 :value="aptId"
               >
-                {{
-                  apartmentLabelById[aptId]
-                    ? session.t('issues.form.apartmentOption', {
-                        number: apartmentLabelById[aptId],
-                      })
-                    : aptId
-                }}
+                {{ apartmentLabelById[aptId] || aptId }}
               </option>
             </select>
             <p

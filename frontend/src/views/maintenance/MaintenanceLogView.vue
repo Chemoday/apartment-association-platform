@@ -700,19 +700,19 @@ onBeforeUnmount(() => {
           <div
             v-else
             data-testid="maintenance-report-table"
-            class="bg-surface-container-lowest border border-surface-container rounded-2xl overflow-hidden shadow-2xs"
+            class="bg-surface-container-lowest border border-outline-variant/45 rounded-[var(--radius-card)] overflow-hidden shadow-card"
           >
             <div class="overflow-x-auto">
-              <table class="w-full text-left border-collapse">
+              <table class="w-full min-w-[560px] text-left border-collapse">
                 <thead>
-                  <tr class="border-b border-surface-container bg-surface-container-low/60 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+                  <tr class="border-b border-outline-variant/40 bg-surface-container-low/70 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
                     <th class="px-4 py-3">{{ session.t('maintenance.report.tableTask') }}</th>
                     <th class="px-4 py-3 text-right">{{ session.t('maintenance.report.tableDone') }}</th>
                     <th class="px-4 py-3 text-right">{{ session.t('maintenance.report.tableSkipped') }}</th>
                     <th class="px-4 py-3 text-right">{{ session.t('maintenance.report.tableCost') }}</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-surface-container text-sm">
+                <tbody class="divide-y divide-outline-variant/35 text-sm">
                   <tr
                     v-for="task in reportData.tasks"
                     :key="task.task_id"

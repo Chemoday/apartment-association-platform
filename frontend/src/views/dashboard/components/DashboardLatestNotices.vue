@@ -2,6 +2,7 @@
 import { RouterLink, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { formatDate } from '@/utils/dates.js'
+import { formatTargetScopeLabel } from '@/utils/objectName.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
@@ -75,11 +76,7 @@ const session = useSessionStore()
 
         <div class="flex flex-wrap items-center justify-between gap-space-sm pt-space-xs">
           <span class="text-xs text-on-surface-variant">
-            {{
-              notice.target_scope === 'ENTRANCE'
-                ? session.t('dashboard.notices.entranceTarget', { entrance: notice.target_entrance })
-                : session.t('dashboard.notices.allBuildingTarget')
-            }}
+            {{ formatTargetScopeLabel(notice, session.t) }}
           </span>
           <button
             type="button"

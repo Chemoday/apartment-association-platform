@@ -8,6 +8,12 @@ import { useApartmentConsumption } from '@/composables/useApartmentConsumption.j
 import { createApartmentThread, listApartmentThreads } from '@/api/endpoints/communication.js'
 import { formatDate, formatDateTime, formatPeriodLabel, formatRelativeTime } from '@/utils/dates.js'
 import { formatSignedDelta } from '@/utils/meterValue.js'
+import {
+  formatBadgeObjectToken,
+  formatObjectArea,
+  formatObjectLocation,
+  objectName,
+} from '@/utils/objectName.js'
 import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ConsumptionChart from '@/components/domain/ConsumptionChart.vue'
@@ -253,22 +259,27 @@ watch(
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div class="flex items-center gap-4">
             <div class="w-14 h-14 rounded-2xl bg-primary-container text-on-primary flex items-center justify-center font-headline-md text-xl font-bold shrink-0">
-              {{ card.apartment_number }}
+              {{ (card.apartment_kind || 'APARTMENT') === 'APARTMENT' ? card.apartment_number : formatBadgeObjectToken(card.apartment_kind, card.apartment_number) }}
             </div>
             <div>
               <div class="inline-flex items-center gap-1.5 text-xs font-label-md uppercase tracking-wider text-primary font-semibold">
                 {{ session.t('apartments.cardEyebrow') }}
               </div>
               <h1 class="font-headline-md text-headline-md font-bold text-on-surface">
-                {{ session.t('apartments.apartmentTitle', { number: card.apartment_number }) }}
+                {{ objectName(card.apartment_kind, card.apartment_number, session.t) }}
               </h1>
-              <p class="text-xs sm:text-sm text-on-surface-variant mt-0.5">
-                {{ session.t('apartments.entranceNumber', { entrance: card.entrance }) }}
-                ·
-                {{ session.t('apartments.floorNumber', { floor: card.floor }) }}
-                ·
-                <span class="font-mono font-semibold text-on-surface">
-                  {{ card.area_m2 }} {{ session.t('apartments.areaUnit') }}
+              <p
+                v-if="formatObjectLocation(card, session.t) || formatObjectArea(card.area_m2)"
+                class="text-xs sm:text-sm text-on-surface-variant mt-0.5"
+              >
+                <template v-if="formatObjectLocation(card, session.t)">
+                  {{ formatObjectLocation(card, session.t) }}
+                </template>
+                <template v-if="formatObjectLocation(card, session.t) && formatObjectArea(card.area_m2)">
+                  ·
+                </template>
+                <span v-if="formatObjectArea(card.area_m2)" class="font-mono font-semibold text-on-surface">
+                  {{ formatObjectArea(card.area_m2) }}
                 </span>
               </p>
             </div>

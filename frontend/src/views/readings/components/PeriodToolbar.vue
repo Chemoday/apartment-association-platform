@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { formatPeriodLabel } from '@/utils/dates.js'
+import { objectKindPluralLabel } from '@/utils/objectName.js'
 import StatusChip from '@/components/domain/StatusChip.vue'
 
 const props = defineProps({
@@ -15,6 +16,14 @@ const props = defineProps({
     default: '',
   },
   periods: {
+    type: Array,
+    default: () => [],
+  },
+  selectedKind: {
+    type: String,
+    default: '',
+  },
+  availableKinds: {
     type: Array,
     default: () => [],
   },
@@ -36,7 +45,7 @@ const props = defineProps({
   },
 })
 
-defineEmits(['change-period', 'change-status', 'estimate-missing', 'export-csv'])
+defineEmits(['change-period', 'change-kind', 'change-status', 'estimate-missing', 'export-csv'])
 
 const session = useSessionStore()
 const { canManagePeriods, canViewMatrix } = useRole()
@@ -78,6 +87,26 @@ const allowedNextStatuses = computed(() => {
         >
           <option v-for="code in periods" :key="code" :value="code">
             {{ formatPeriodLabel(code, session.lang) }} ({{ code }})
+          </option>
+        </select>
+      </div>
+
+      <!-- Object Kind Filter (#068: shown when the building has more than one object kind) -->
+      <div v-if="availableKinds.length > 1" class="flex items-center gap-1.5">
+        <label for="period-kind-selector" class="font-label-md text-xs text-on-surface-variant font-semibold">
+          {{ session.t('periodToolbar.kindLabel') }}
+        </label>
+        <select
+          id="period-kind-selector"
+          data-testid="period-toolbar-kind-select"
+          :value="selectedKind"
+          :disabled="Boolean(busyAction)"
+          class="h-9 px-3 rounded-lg bg-surface-container-low text-on-surface font-label-md text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          @change="$emit('change-kind', $event.target.value)"
+        >
+          <option value="">{{ session.t('periodToolbar.allKinds') }}</option>
+          <option v-for="k in availableKinds" :key="k" :value="k">
+            {{ objectKindPluralLabel(k, session.t) }}
           </option>
         </select>
       </div>

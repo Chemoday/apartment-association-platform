@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppIcon from './AppIcon.vue'
+
 export type ToastVariant = 'info' | 'success' | 'warning' | 'error'
 
 export interface ToastItem {
@@ -30,14 +32,14 @@ defineEmits<{
       v-for="toast in toasts"
       :key="toast.id"
       :role="toast.variant === 'error' ? 'alert' : 'status'"
-      class="pointer-events-auto rounded-xl border px-4 py-3 shadow-lg flex items-center justify-between gap-3 text-sm"
+      class="pointer-events-auto rounded-[var(--radius-card)] border px-4 py-3 shadow-popover flex items-center justify-between gap-3 text-sm"
       :class="
         toast.variant === 'error'
           ? 'bg-error text-on-error border-error'
           : toast.variant === 'success'
-            ? 'bg-emerald-700 text-white border-emerald-800'
+            ? 'bg-primary text-on-primary border-primary-container'
             : toast.variant === 'warning'
-              ? 'bg-amber-800 text-white border-amber-900'
+              ? 'bg-secondary text-on-secondary border-secondary'
               : 'bg-inverse-surface text-inverse-on-surface border-outline-variant/30'
       "
     >
@@ -45,10 +47,10 @@ defineEmits<{
       <button
         type="button"
         :aria-label="dismissLabel"
-        class="shrink-0 opacity-80 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded"
+        class="shrink-0 opacity-80 hover:opacity-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded"
         @click="$emit('dismiss', toast.id)"
       >
-        <span class="material-symbols-outlined text-[16px]" aria-hidden="true">close</span>
+        <AppIcon name="close" :size="16" />
       </button>
     </div>
   </div>

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
+import { canAccessIssues } from '@/router/access.js'
 import { useRole } from '@/composables/useRole.js'
 import { getMyDashboard } from '@/api/endpoints/meters.js'
 import { listPosts } from '@/api/endpoints/communication.js'
@@ -9,6 +10,11 @@ import { listIssues } from '@/api/endpoints/issues.js'
 import { listPolls } from '@/api/endpoints/governance.js'
 import { formatMonthName, formatPeriodLabel } from '@/utils/dates.js'
 import { summarizeNextSubmissions } from '@/utils/nextSubmission.js'
+import {
+  formatBadgeObjectToken,
+  formatObjectLocation,
+  objectName,
+} from '@/utils/objectName.js'
 import DashboardMetersSummary from './components/DashboardMetersSummary.vue'
 import DashboardLatestNotices from './components/DashboardLatestNotices.vue'
 import DashboardQuickActions from './components/DashboardQuickActions.vue'
@@ -18,6 +24,7 @@ import DashboardHouseDirectory from './components/DashboardHouseDirectory.vue'
 import DashboardBuildingCard from './components/DashboardBuildingCard.vue'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import AppIcon from '@/components/base/AppIcon.vue'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -43,7 +50,7 @@ async function loadScreenData() {
       getMyDashboard(),
       listPosts({ post_type: 'OFFICIAL_NOTICE', limit: 5 }),
       listPosts({ post_type: 'FORUM_TOPIC', limit: 20 }),
-      listIssues().catch(() => []),
+      canAccessIssues(session) ? listIssues().catch(() => []) : Promise.resolve([]),
       listPolls().catch(() => []),
     ])
     dashboardData.value = dashRes
@@ -116,7 +123,7 @@ const quickActionMonthLabel = computed(() =>
   <div class="w-full max-w-[1280px] mx-auto px-gutter py-space-lg">
     <!-- Top Welcome & Nordic State Header -->
     <section class="w-full mb-space-lg">
-      <div class="bg-surface-container-lowest rounded-xl p-space-lg shadow-xs border border-surface-container flex flex-col lg:flex-row lg:items-center justify-between gap-space-md">
+      <div class="bg-surface-container-lowest rounded-[var(--radius-card)] p-space-lg shadow-card border border-outline-variant/45 flex flex-col lg:flex-row lg:items-center justify-between gap-space-md">
         <div class="flex flex-col gap-space-xs">
           <div class="flex items-center gap-space-xs text-xs">
             <span class="font-label-md text-label-md uppercase tracking-wider text-secondary font-semibold">
@@ -134,12 +141,12 @@ const quickActionMonthLabel = computed(() =>
 
           <div class="flex flex-wrap items-center gap-y-1 gap-x-space-md text-on-surface-variant">
             <span class="font-body-md text-body-md flex items-center gap-1.5">
-              <span class="material-symbols-outlined text-[18px] text-on-surface-variant">apartment</span>
+              <AppIcon name="apartment" :size="18" class="text-on-surface-variant" />
               {{ session.buildingName }} • {{ session.buildingApartmentsCount }} {{ session.t('dashboard.apartmentsLabel') }} ({{ session.buildingEntrancesCount }} {{ session.t('dashboard.entrancesLabel') }})
             </span>
             <span aria-hidden="true">·</span>
             <span class="font-body-md text-body-md flex items-center gap-1.5">
-              <span class="material-symbols-outlined text-[18px] text-secondary">thermostat</span>
+              <AppIcon name="thermostat" :size="18" class="text-secondary" />
               {{ session.t('dashboard.heatingStatus') }}
             </span>
           </div>
@@ -149,16 +156,14 @@ const quickActionMonthLabel = computed(() =>
         <div class="flex flex-col sm:flex-row sm:items-center gap-space-sm pt-space-xs lg:pt-0">
           <div
             v-if="apartments.length > 0"
-            class="inline-flex items-center gap-2 px-space-md py-space-sm rounded-full"
+            class="inline-flex items-center gap-2 px-space-md py-space-sm rounded-full border"
             :class="
               allMetersSubmitted
-                ? 'bg-secondary-container/60 text-on-secondary-container'
-                : 'bg-amber-100 text-amber-900'
+                ? 'bg-primary-fixed/80 text-on-primary-fixed border-primary/15'
+                : 'bg-secondary-container/85 text-on-secondary-container border-secondary/20'
             "
           >
-            <span class="material-symbols-outlined text-[18px]">
-              {{ allMetersSubmitted ? 'check_circle' : 'schedule' }}
-            </span>
+            <AppIcon :name="allMetersSubmitted ? 'check_circle' : 'schedule'" :size="18" />
             <span class="font-label-lg text-label-lg font-medium">
               {{ periodLabel }}:
               {{
@@ -172,21 +177,21 @@ const quickActionMonthLabel = computed(() =>
           <button
             v-if="apartments.length > 0"
             type="button"
-            class="px-space-md py-space-sm rounded-lg bg-primary text-on-primary hover:bg-primary-container font-label-lg text-label-lg transition-colors flex items-center justify-center gap-1.5"
+            class="px-space-md py-space-sm rounded-[var(--radius-control)] bg-primary text-on-primary hover:bg-primary-container font-label-lg text-label-lg transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
             @click="router.push('/readings')"
           >
             <span>{{ session.t('dashboard.viewReadings') }}</span>
-            <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+            <AppIcon name="arrow_forward" :size="16" />
           </button>
 
           <button
             v-else-if="canViewMatrix"
             type="button"
-            class="px-space-md py-space-sm rounded-lg bg-primary text-on-primary hover:bg-primary-container font-label-lg text-label-lg transition-colors flex items-center justify-center gap-1.5"
+            class="px-space-md py-space-sm rounded-[var(--radius-control)] bg-primary text-on-primary hover:bg-primary-container font-label-lg text-label-lg transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
             @click="router.push('/accounting')"
           >
             <span>{{ session.t('dashboard.openReadingsMatrix') }}</span>
-            <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+            <AppIcon name="arrow_forward" :size="16" />
           </button>
         </div>
       </div>
@@ -502,6 +507,9 @@ const quickActionMonthLabel = computed(() =>
                     <span class="font-headline-md text-headline-md font-bold text-on-surface font-numeric-display">
                       {{ session.buildingHeatedArea }} m²
                     </span>
+                    <span class="text-[11px] text-on-surface-variant">
+                      {{ session.t('dashboard.heatedAreaApartmentsOnly') }}
+                    </span>
                   </div>
                   <div class="flex flex-col">
                     <span class="font-label-md text-label-md text-on-surface-variant">
@@ -528,15 +536,22 @@ const quickActionMonthLabel = computed(() =>
             >
               <div class="flex items-center justify-between pb-space-sm mb-space-sm border-b border-surface-container">
                 <div class="flex items-center gap-2.5">
-                  <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-on-primary font-bold font-label-md text-label-md">
-                    {{ m.apartment_number }}
+                  <div class="min-w-8 h-8 px-1.5 rounded-full bg-primary flex items-center justify-center text-on-primary font-bold font-label-md text-label-md">
+                    {{
+                      (m.apartment_kind || 'APARTMENT') === 'APARTMENT'
+                        ? m.apartment_number
+                        : formatBadgeObjectToken(m.apartment_kind, m.apartment_number)
+                    }}
                   </div>
                   <div class="flex flex-col">
                     <span class="font-label-lg text-label-lg font-bold text-on-surface">
-                      {{ session.t('common.apartmentNumber', { number: m.apartment_number }) }}
+                      {{ objectName(m.apartment_kind, m.apartment_number, session.t) }}
                     </span>
-                    <span class="font-label-md text-label-md text-on-surface-variant">
-                      {{ session.t('common.floorEntranceComma', { floor: m.floor, entrance: m.entrance }) }}
+                    <span
+                      v-if="formatObjectLocation(m, session.t)"
+                      class="font-label-md text-label-md text-on-surface-variant"
+                    >
+                      {{ formatObjectLocation(m, session.t) }}
                     </span>
                   </div>
                 </div>
@@ -594,7 +609,11 @@ const quickActionMonthLabel = computed(() =>
                 >
                   <span class="material-symbols-outlined text-[16px]">speed</span>
                   <span>
-                    {{ session.t('dashboard.manageAptMeters', { number: m.apartment_number }) }}
+                    {{
+                      session.t('dashboard.manageObjectMeters', {
+                        object: objectName(m.apartment_kind, m.apartment_number, session.t),
+                      })
+                    }}
                   </span>
                 </button>
                 <button

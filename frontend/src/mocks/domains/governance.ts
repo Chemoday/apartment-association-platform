@@ -3,7 +3,7 @@
  * Used by both `src/server/apiMiddleware.ts` and `src/api/offlineDemoData.js`.
  */
 
-import type { MembershipView, TargetScope } from '../../api/schema'
+import type { MembershipView, ObjectKind, TargetScope } from '../../api/schema'
 import {
   compareCanonicalNumbers,
   computeNumberStats,
@@ -12,6 +12,7 @@ import {
   normalizeCanonicalNumber,
 } from '../../utils/pollValidation.js'
 import {
+  MOCK_APARTMENT_ID_TO_KIND,
   MOCK_KNOWN_APARTMENT_ENTRANCES,
   MOCK_MEMBERSHIPS_BY_USER,
   type MockSeedUser,
@@ -61,6 +62,7 @@ export interface MockInternalPoll {
   target_scope: TargetScope
   target_entrance: number | null
   target_apartment_ids: string[] | null
+  target_kinds?: ObjectKind[] | null
   eligibility: 'RESIDENTS' | 'OWNERS'
   unit: 'APARTMENT' | 'PERSON'
   closes_at: string
@@ -416,10 +418,16 @@ export function createDefaultMockPolls(nowMs: number = Date.now()): MockInternal
 export function isMockApartmentTargetedByPoll(
   poll: MockInternalPoll,
   aptId: string,
-  entrance: number,
+  entrance: number | null,
+  apartmentKind?: string | null,
 ): boolean {
-  if (poll.target_scope === 'ALL_BUILDING') return true
-  if (poll.target_scope === 'ENTRANCE') return poll.target_entrance === entrance
+  const kind = (apartmentKind || MOCK_APARTMENT_ID_TO_KIND[aptId] || 'APARTMENT') as ObjectKind
+  if (poll.target_scope === 'ALL_BUILDING') return kind === 'APARTMENT'
+  if (poll.target_scope === 'ALL_OBJECTS') return true
+  if (poll.target_scope === 'KINDS') {
+    return Array.isArray(poll.target_kinds) && poll.target_kinds.includes(kind)
+  }
+  if (poll.target_scope === 'ENTRANCE') return entrance !== null && poll.target_entrance === entrance
   if (poll.target_scope === 'APARTMENT_LIST') {
     return Array.isArray(poll.target_apartment_ids) && poll.target_apartment_ids.includes(aptId)
   }
@@ -435,7 +443,9 @@ export function isMockPollVisibleToUser(
   if (poll.status === 'DRAFT') return isBoardUser
   if (isBoardUser || user.building_role === 'ACCOUNTANT') return true
   const mems = membershipsByUser[user.user_id] || []
-  return mems.some((m) => isMockApartmentTargetedByPoll(poll, m.apartment_id, m.entrance))
+  return mems.some((m) =>
+    isMockApartmentTargetedByPoll(poll, m.apartment_id, m.entrance, m.apartment_kind),
+  )
 }
 
 export function computeMockPollAnswerability(
@@ -448,7 +458,9 @@ export function computeMockPollAnswerability(
   }
   const mems = membershipsByUser[user.user_id] || []
   const qualifying = mems.filter((m) => {
-    if (!isMockApartmentTargetedByPoll(poll, m.apartment_id, m.entrance)) return false
+    if (!isMockApartmentTargetedByPoll(poll, m.apartment_id, m.entrance, m.apartment_kind)) {
+      return false
+    }
     if (poll.eligibility === 'OWNERS' && m.relation_type !== 'OWNER') return false
     return true
   })
@@ -486,7 +498,9 @@ export function computeMockMyBallots(
   const mems = membershipsByUser[user.user_id] || []
   const visibleAptIds = mems
     .filter((m) => {
-      if (!isMockApartmentTargetedByPoll(poll, m.apartment_id, m.entrance)) return false
+      if (!isMockApartmentTargetedByPoll(poll, m.apartment_id, m.entrance, m.apartment_kind)) {
+        return false
+      }
       if (poll.eligibility === 'OWNERS' && m.relation_type !== 'OWNER') return false
       return true
     })
@@ -548,6 +562,7 @@ export function toMockPollSummary(
     target_scope: poll.target_scope,
     target_entrance: poll.target_entrance,
     target_apartment_ids: poll.target_apartment_ids,
+    target_kinds: poll.target_kinds ?? null,
     eligibility: poll.eligibility,
     unit: poll.unit,
     closes_at: poll.closes_at,
@@ -594,7 +609,9 @@ export function computeMockPollElectorateCount(
   membershipsByUser: Record<string, MembershipView[]> = MOCK_MEMBERSHIPS_BY_USER,
 ): number {
   const targetedAptIds = Object.entries(MOCK_KNOWN_APARTMENT_ENTRANCES)
-    .filter(([aptId, ent]) => isMockApartmentTargetedByPoll(poll, aptId, ent))
+    .filter(([aptId, ent]) =>
+      isMockApartmentTargetedByPoll(poll, aptId, ent, MOCK_APARTMENT_ID_TO_KIND[aptId]),
+    )
     .map(([aptId]) => aptId)
 
   if (poll.unit === 'APARTMENT') {

@@ -298,27 +298,48 @@ export function validateOfflinePollDraft(body) {
   }
   const description = typeof body?.description === 'string' ? body.description.trim() : ''
   const targetScope = body?.target_scope
-  if (!['ALL_BUILDING', 'ENTRANCE', 'APARTMENT_LIST'].includes(targetScope)) {
+  if (!['ALL_BUILDING', 'ALL_OBJECTS', 'KINDS', 'ENTRANCE', 'APARTMENT_LIST'].includes(targetScope)) {
     throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target_scope.')
   }
   let targetEntrance = null
   let targetApartmentIds = null
-  if (targetScope === 'ALL_BUILDING') {
+  let targetKinds = null
+  const hasKindsInput = Array.isArray(body.target_kinds) && body.target_kinds.length > 0
+  if (targetScope === 'ALL_BUILDING' || targetScope === 'ALL_OBJECTS') {
     if (
       body.target_entrance != null ||
-      (Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0)
+      (Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0) ||
+      hasKindsInput
     ) {
-      throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target fields for ALL_BUILDING.')
+      throw makeOfflineError(422, 'INVALID_TARGET', `Invalid target fields for ${targetScope}.`)
     }
+  } else if (targetScope === 'KINDS') {
+    if (
+      body.target_entrance != null ||
+      (Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0) ||
+      !Array.isArray(body.target_kinds) ||
+      body.target_kinds.length === 0
+    ) {
+      throw makeOfflineError(422, 'INVALID_TARGET', 'Non-empty target_kinds is required for KINDS.')
+    }
+    const rawKinds = Array.from(new Set(body.target_kinds.map((k) => String(k).toUpperCase())))
+    const unknownKinds = rawKinds.filter((k) => !['APARTMENT', 'PARKING', 'GARAGE'].includes(k))
+    if (unknownKinds.length > 0) {
+      throw makeOfflineError(422, 'INVALID_TARGET', 'Unknown object kind in target_kinds.', {
+        unknown_kinds: unknownKinds,
+      })
+    }
+    targetKinds = rawKinds
   } else if (targetScope === 'ENTRANCE') {
     const ent = Number(body.target_entrance)
-    if (!Number.isInteger(ent) || ![1, 2].includes(ent) || body.target_apartment_ids != null) {
+    if (!Number.isInteger(ent) || ![1, 2].includes(ent) || body.target_apartment_ids != null || hasKindsInput) {
       throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target_entrance.')
     }
     targetEntrance = ent
   } else if (targetScope === 'APARTMENT_LIST') {
     if (
       body.target_entrance != null ||
+      hasKindsInput ||
       !Array.isArray(body.target_apartment_ids) ||
       body.target_apartment_ids.length === 0
     ) {
@@ -326,7 +347,7 @@ export function validateOfflinePollDraft(body) {
     }
     const deduped = Array.from(new Set(body.target_apartment_ids.map((id) => String(id))))
     for (const aptId of deduped) {
-      if (!OFFLINE_KNOWN_APARTMENT_ENTRANCES[aptId]) {
+      if (!(aptId in OFFLINE_KNOWN_APARTMENT_ENTRANCES)) {
         throw makeOfflineError(422, 'INVALID_TARGET', 'Unknown apartment.')
       }
     }
@@ -389,6 +410,7 @@ export function validateOfflinePollDraft(body) {
     target_scope: targetScope,
     target_entrance: targetEntrance,
     target_apartment_ids: targetApartmentIds,
+    target_kinds: targetKinds,
     eligibility,
     unit,
     closes_at: closesAt,
@@ -568,4 +590,56 @@ export const offlineStore = {
   set offlineSignedInUserId(val) { offlineSignedInUserId = val },
   get offlineHasPassword() { return offlineHasPassword },
   set offlineHasPassword(val) { offlineHasPassword = val },
+  get offlinePaperApartmentIds() { return offlinePaperApartmentIds },
+  set offlinePaperApartmentIds(val) { offlinePaperApartmentIds = val },
+  get offlineJoinCodes() { return offlineJoinCodes },
+  set offlineJoinCodes(val) { offlineJoinCodes = val },
+  get offlineJoinRequests() { return offlineJoinRequests },
+  set offlineJoinRequests(val) { offlineJoinRequests = val },
+  get offlineJoinDecisions() { return offlineJoinDecisions },
+  set offlineJoinDecisions(val) { offlineJoinDecisions = val },
 }
+
+let offlinePaperApartmentIds = new Set(['018f0000-0000-7000-8000-000000000303'])
+let offlineJoinCodes = [
+  {
+    code_id: '018f0000-0000-7000-8000-000000007101',
+    apartment_id: '018f0000-0000-7000-8000-000000000302',
+    apartment_number: '02',
+    apartment_kind: 'APARTMENT',
+    join_code: 'K7QF-M3TX-9R',
+    created_at: '2026-11-20T09:00:00Z',
+    expires_at: new Date(Date.now() + 25 * 86400 * 1000).toISOString(),
+  },
+]
+let offlineJoinRequests = [
+  {
+    request_id: '018f0000-0000-7000-8000-000000007201',
+    apartment_id: '018f0000-0000-7000-8000-000000000304',
+    apartment_number: '04',
+    apartment_kind: 'APARTMENT',
+    full_name: 'Liis Mägi',
+    phone: '+37255512345',
+    email: 'liis.magi@demo.invalid',
+    locale: 'et',
+    created_at: '2026-11-24T14:20:00Z',
+  },
+]
+let offlineJoinDecisions = [
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000301',
+    apartment_number: '01',
+    apartment_kind: 'APARTMENT',
+    outcome: 'CONFIRMED',
+    decided_by_user_id: '018f0000-0000-7000-8000-000000000101',
+    decided_at: '2026-11-18T11:15:00Z',
+  },
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000402',
+    apartment_number: 'P-2',
+    apartment_kind: 'PARKING',
+    outcome: 'EXPIRED',
+    decided_by_user_id: null,
+    decided_at: '2026-11-10T00:00:00Z',
+  },
+]

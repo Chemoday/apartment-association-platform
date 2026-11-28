@@ -1,4 +1,5 @@
 import type { AuthorBadgeDTO, ChatMessageView, ChatPage, ChatState } from '@/api/schema.js'
+import { formatBadgeObjectToken, isApartmentKindStrict } from './objectName.js'
 
 /**
  * Pure domain, polling schedule, expiry pruning, and mock backend helpers for Building Chat (#033).
@@ -135,6 +136,7 @@ export function pruneExpiredChatMessages<
 export interface ChatMembershipLike {
   apartment_id?: string
   apartment_number?: string
+  apartment_kind?: string
   relation_type?: string
   preview_badge?: { display_label: string; role_badge: string } | null
 }
@@ -150,7 +152,10 @@ export function canUserParticipateInChat(
   if (user.building_role === 'CHAIRMAN' || user.building_role === 'BOARD') {
     return true
   }
-  return Array.isArray(memberships) && memberships.length > 0
+  return (
+    Array.isArray(memberships) &&
+    memberships.some((m) => isApartmentKindStrict(m?.apartment_kind))
+  )
 }
 
 export type ValidateChatAfterResult =
@@ -454,7 +459,9 @@ export function resolveChatAuthorBadge(
   memberships?: ChatMembershipLike[] | null,
   authorApartmentId?: string | null,
 ): ResolveChatAuthorBadgeResult {
-  const mems = Array.isArray(memberships) ? memberships : []
+  const mems = (Array.isArray(memberships) ? memberships : []).filter(
+    (m) => isApartmentKindStrict(m?.apartment_kind),
+  )
   let targetMem: ChatMembershipLike | null
   if (authorApartmentId !== undefined && authorApartmentId !== null) {
     if (typeof authorApartmentId !== 'string' || authorApartmentId === '') {
@@ -481,7 +488,11 @@ export function resolveChatAuthorBadge(
     return {
       ok: true,
       badge: {
-        display_label: `Apt. ${targetMem.apartment_number}`,
+        display_label: formatBadgeObjectToken(
+          targetMem.apartment_kind,
+          targetMem.apartment_number,
+          'Apt.',
+        ),
         role_badge: roleBadge,
       },
     }

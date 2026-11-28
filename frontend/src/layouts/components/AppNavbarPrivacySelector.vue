@@ -3,6 +3,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import type { DisplayMode } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
+import { objectShortName } from '@/utils/objectName.js'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -79,7 +80,7 @@ onBeforeUnmount(() => {
           {{ session.t('header.neighborDisplayBadge') }}
         </span>
         <span class="text-[11px] text-secondary font-semibold">
-          Apt {{ membership.apartment_number }}
+          {{ objectShortName(membership.apartment_kind, membership.apartment_number, session.t) }}
         </span>
       </div>
 
@@ -87,7 +88,7 @@ onBeforeUnmount(() => {
         <label class="block text-[11px] font-semibold text-on-surface-variant mb-1">
           {{ session.t('header.activeApartment') }}
         </label>
-        <div class="flex gap-1">
+        <div class="flex flex-wrap gap-1">
           <button
             v-for="m in session.memberships"
             :key="m.membership_id"
@@ -100,7 +101,7 @@ onBeforeUnmount(() => {
             "
             @click="session.selectApartment(m.apartment_id)"
           >
-            Apt {{ m.apartment_number }}
+            {{ objectShortName(m.apartment_kind, m.apartment_number, session.t) }}
           </button>
         </div>
       </div>

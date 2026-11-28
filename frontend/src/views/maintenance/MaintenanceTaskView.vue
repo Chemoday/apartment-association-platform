@@ -21,6 +21,7 @@ import {
   normalizeCostInput,
 } from '@/utils/maintenance.js'
 import { formatDate } from '@/utils/dates.js'
+import { formatTargetScopeLabel } from '@/utils/objectName.js'
 import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
@@ -684,7 +685,7 @@ onMounted(() => {
 
               <div class="flex items-center gap-2 pt-2 border-t border-surface-container text-xs text-on-surface-variant">
                 <span>{{ session.t('maintenance.targetScopeLabel') }}:</span>
-                <span class="font-semibold text-on-surface">{{ session.t(`polls.target.${task.notice.target_scope === 'ALL_BUILDING' ? 'allBuilding' : task.notice.target_scope}`) }}</span>
+                <span class="font-semibold text-on-surface">{{ formatTargetScopeLabel(task.notice, session.t) }}</span>
               </div>
             </div>
 

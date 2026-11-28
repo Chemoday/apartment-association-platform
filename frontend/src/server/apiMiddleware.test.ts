@@ -2636,7 +2636,7 @@ describe('apiMiddleware HTTP meter without a start (#038)', () => {
     assert.equal(badStatus.status, 422)
     assert.equal(badStatus.json.error_code, 'VALIDATION_ERROR')
 
-    // 4. CSV export uses 15-column format with MASTER rows and hyphenated filename
+    // 4. CSV export uses 16-column format with apartment_kind last (empty for MASTER rows) and hyphenated filename (#068)
     const csvRes = await sendJsonReq(
       'GET',
       '/api/v1/meters/periods/2026-10/export-csv',
@@ -2648,9 +2648,33 @@ describe('apiMiddleware HTTP meter without a start (#038)', () => {
       'attachment; filename="readings-2026-10.csv"',
     )
     const lines = csvRes.body.split('\n')
-    assert.equal(lines[0].split(',').length, 15)
-    assert.ok(lines[0].endsWith(',previous_origin'))
-    assert.ok(lines.some((line: string) => line.startsWith('2026-10,,MASTER,')))
+    assert.equal(lines[0].split(',').length, 16)
+    assert.ok(lines[0].endsWith(',previous_origin,apartment_kind'))
+    assert.ok(lines.some((line: string) => line.startsWith('2026-10,,MASTER,') && line.endsWith(',')))
+    assert.ok(lines.some((line: string) => line.endsWith(',GARAGE')))
+
+    // 5. Matrix ?kind= filters apartments while keeping whole-building balances & master_meters (#068)
+    const allMatrixRes = await sendJsonReq('GET', '/api/v1/meters/periods/2026-10/matrix', CHAIRMAN_ID)
+    const garageMatrixRes = await sendJsonReq(
+      'GET',
+      '/api/v1/meters/periods/2026-10/matrix?kind=GARAGE',
+      CHAIRMAN_ID,
+    )
+    assert.equal(garageMatrixRes.status, 200)
+    assert.ok(garageMatrixRes.json.apartments.length > 0)
+    assert.ok(
+      garageMatrixRes.json.apartments.every((a: any) => a.apartment_kind === 'GARAGE'),
+    )
+    assert.deepEqual(garageMatrixRes.json.balances, allMatrixRes.json.balances)
+    assert.deepEqual(garageMatrixRes.json.master_meters, allMatrixRes.json.master_meters)
+
+    const badKindRes = await sendJsonReq(
+      'GET',
+      '/api/v1/meters/periods/2026-10/matrix?kind=STORAGE',
+      CHAIRMAN_ID,
+    )
+    assert.equal(badKindRes.status, 422)
+    assert.equal(badKindRes.json.error_code, 'VALIDATION_ERROR')
   })
 })
 

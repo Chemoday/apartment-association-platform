@@ -8,6 +8,7 @@ import AppNavbarPrivacySelector from './AppNavbarPrivacySelector.vue'
 import AppNotificationBell from './AppNotificationBell.vue'
 import AppNavbarUserMenu from './AppNavbarUserMenu.vue'
 import AppNavbarLanguageDropdown from './AppNavbarLanguageDropdown.vue'
+import AppIcon from '@/components/base/AppIcon.vue'
 
 const session = useSessionStore()
 const { canShowChat, recentCount, recentMinutes } = useChatState()
@@ -29,22 +30,28 @@ const chatCountLabel = computed<string>(() => {
 </script>
 
 <template>
-  <div class="h-16 sm:h-20 w-full max-w-[1280px] mx-auto px-3 sm:px-gutter flex items-center justify-between gap-2 sm:gap-4">
-    <!-- Brand -->
-    <div class="flex items-center gap-4 min-w-0 shrink-0">
-      <RouterLink to="/" class="flex flex-col shrink-0 group">
-        <div class="flex items-center gap-1.5">
-          <span class="font-headline-md text-base sm:text-headline-md font-bold tracking-tight text-on-surface whitespace-nowrap">
+  <div class="h-14 sm:h-16 w-full max-w-[1280px] mx-auto px-3 sm:px-gutter flex items-center justify-between gap-2 sm:gap-4">
+    <!-- Brand (Mobile) & Subtle Building Context (md+ where Sidebar holds brand) -->
+    <div class="flex items-center gap-3 min-w-0">
+      <RouterLink to="/" class="flex md:hidden flex-col group min-w-0">
+        <div class="flex items-center gap-1.5 min-w-0">
+          <span class="font-headline-md text-base font-semibold tracking-tight text-on-surface whitespace-nowrap truncate">
             {{ session.buildingName }}
           </span>
-          <span class="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-[11px] font-semibold">
+          <span class="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-[11px] font-semibold shrink-0">
             {{ session.building?.district || 'Tallinn' }}
           </span>
         </div>
-        <span class="hidden sm:block font-label-md text-[11px] text-on-surface-variant whitespace-nowrap">
-          {{ session.buildingAddress }} • Reg {{ session.buildingRegistryCode }}
-        </span>
       </RouterLink>
+
+      <div class="hidden md:flex items-center gap-2 min-w-0 text-xs text-on-surface-variant">
+        <AppIcon name="location_on" :size="15" class="text-primary" />
+        <span class="font-medium text-on-surface truncate">{{ session.buildingAddress }}</span>
+        <span class="text-outline-variant" aria-hidden="true">·</span>
+        <span class="font-label-md text-[11px] px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container shrink-0">
+          {{ session.building?.district || 'Tallinn' }}
+        </span>
+      </div>
     </div>
 
     <!-- Right Controls -->
@@ -71,7 +78,7 @@ const chatCountLabel = computed<string>(() => {
         :aria-label="chatTooltip"
         class="relative inline-flex items-center justify-center w-9 h-9 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors shrink-0"
       >
-        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">chat</span>
+        <AppIcon name="chat" :size="19" />
         <span
           v-if="recentCount > 0"
           data-testid="navbar-chat-activity-dot"

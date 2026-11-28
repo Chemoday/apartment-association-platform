@@ -5,6 +5,12 @@ import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { localizeError } from '@/locales/index.js'
 import { formatShortDate } from '@/utils/dates.js'
+import {
+  formatBadgeObjectToken,
+  formatObjectLocation,
+  objectName,
+  objectShortName,
+} from '@/utils/objectName.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 import SettingsShellTabs from './components/SettingsShellTabs.vue'
 import ProfileResidentsCard from './components/ProfileResidentsCard.vue'
@@ -42,19 +48,31 @@ const uiLanguageLabels = {
   ru: 'Русский (RU)',
 }
 
+function objectBadgeText(membership) {
+  if (!membership) return ''
+  if ((membership.apartment_kind || 'APARTMENT') === 'APARTMENT') {
+    return membership.apartment_number
+  }
+  return formatBadgeObjectToken(membership.apartment_kind, membership.apartment_number)
+}
+
 function getSimulatedBadgePreview(membership, mode) {
   if (!membership) return ''
+  const token = formatBadgeObjectToken(
+    membership.apartment_kind,
+    membership.apartment_number,
+    'Apt.',
+  )
   if (membership.privacy_display_mode === mode) {
-    return membership.preview_badge?.display_label || `Apt. ${membership.apartment_number}`
+    return membership.preview_badge?.display_label || token
   }
-  const apt = membership.apartment_number
   if (mode === 'APARTMENT_ONLY') {
-    return `Apt. ${apt}`
+    return token
   }
   if (mode === 'INITIALS') {
-    return `I. P. (Apt. ${apt})`
+    return `I. P. (${token})`
   }
-  return `Resident (Apt. ${apt})`
+  return `Resident (${token})`
 }
 
 async function handleSelectPrivacyMode(membership, mode) {
@@ -124,7 +142,7 @@ async function handleNotificationLocaleChange(event) {
       <div class="flex flex-col md:flex-row md:items-center justify-between gap-5 pb-5 border-b border-surface-container">
         <div class="flex items-start gap-4">
           <div class="w-12 h-12 rounded-xl bg-primary text-on-primary flex items-center justify-center font-headline-md text-lg font-bold shrink-0 shadow-xs">
-            {{ activeMembership?.apartment_number || buildingRole.slice(0, 2) }}
+            {{ activeMembership ? objectBadgeText(activeMembership) : buildingRole.slice(0, 2) }}
           </div>
           <div class="space-y-1">
             <div class="flex flex-wrap items-center gap-2">
@@ -281,12 +299,12 @@ async function handleNotificationLocaleChange(event) {
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-surface-container">
             <div class="flex items-center gap-3">
               <div class="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center font-label-lg text-sm font-bold shrink-0">
-                {{ m.apartment_number }}
+                {{ objectBadgeText(m) }}
               </div>
               <div>
                 <div class="flex flex-wrap items-center gap-2">
                   <h3 class="font-headline-md text-base font-bold text-on-surface">
-                    {{ session.t('common.apartmentNumber', { number: m.apartment_number }) }}
+                    {{ objectName(m.apartment_kind, m.apartment_number, session.t) }}
                   </h3>
                   <span class="px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface text-[11px] font-bold uppercase">
                     {{ m.relation_type }}
@@ -298,10 +316,17 @@ async function handleNotificationLocaleChange(event) {
                     {{ session.t('profile.apartments.activeChip') }}
                   </span>
                 </div>
-                <p class="text-xs text-on-surface-variant">
-                  {{ session.t('common.floorEntrance', { floor: m.floor, entrance: m.entrance }) }}
-                  <template v-if="m.since">
+                <p
+                  v-if="formatObjectLocation(m, session.t) || m.since"
+                  class="text-xs text-on-surface-variant"
+                >
+                  <template v-if="formatObjectLocation(m, session.t)">
+                    {{ formatObjectLocation(m, session.t) }}
+                  </template>
+                  <template v-if="formatObjectLocation(m, session.t) && m.since">
                     <span aria-hidden="true"> · </span>
+                  </template>
+                  <template v-if="m.since">
                     <span>
                       {{
                         session.t('profile.apartments.memberSince', {
@@ -329,7 +354,13 @@ async function handleNotificationLocaleChange(event) {
                 @click="router.push('/readings')"
               >
                 <span class="material-symbols-outlined text-[15px]" aria-hidden="true">speed</span>
-                <span>{{ session.t('dashboard.manageAptMeters', { number: m.apartment_number }) }}</span>
+                <span>
+                  {{
+                    session.t('dashboard.manageObjectMeters', {
+                      object: objectShortName(m.apartment_kind, m.apartment_number, session.t),
+                    })
+                  }}
+                </span>
               </button>
             </div>
           </div>

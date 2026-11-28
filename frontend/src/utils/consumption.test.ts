@@ -399,17 +399,18 @@ test('buildBuildingConsumptionResponse counts each apt once, excludes MASTER met
     average_per_m2: '0.1200',
     estimated_readings: 1,
   })
-  // 2026-10: Apt 1 (1.500, area 50) + Apt 2 (-0.500, area 0) = 1.000 / 2 apts = 0.500 / 50 = 0.0200
+  // 2026-10: Apt 1 (1.500, area 50) + Apt 2 (-0.500, area 0) = 1.000 / 2 apts = 0.500;
+  // per-m2 counts only objects with positive recorded area: 1.500 / 50 = 0.0300 (E14 #064)
   assert.deepEqual(cold.months[2], {
     period_code: '2026-10',
     total: '1.000',
     apartments_counted: 2,
     average_per_apartment: '0.500',
-    average_per_m2: '0.0200',
+    average_per_m2: '0.0300',
     estimated_readings: 0,
   })
 
-  // Zero-area-only apartment yields average_per_m2: null
+  // Zero-area-only or null-area garage yields average_per_m2: null (never NaN)
   const zeroAreaResp = buildBuildingConsumptionResponse({
     periods: [{ period_code: '2026-10', status: 'LOCKED' }],
     apartments: [
@@ -425,10 +426,26 @@ test('buildBuildingConsumptionResponse counts each apt once, excludes MASTER met
           },
         ],
       },
+      {
+        apartment_id: 'garage-null',
+        area_m2: null,
+        meters: [
+          {
+            meter_id: 'mg',
+            resource_type: 'ELECTRICITY',
+            unit: 'kWh',
+            readings: [{ period_code: '2026-10', consumption_delta: '18.500' }],
+          },
+        ],
+      },
     ],
   })
-  assert.equal(zeroAreaResp.resources[0].months[0].average_per_apartment, '2.500')
-  assert.equal(zeroAreaResp.resources[0].months[0].average_per_m2, null)
+  const heatZero = zeroAreaResp.resources.find((r) => r.resource_type === 'HEAT')!
+  const elecNull = zeroAreaResp.resources.find((r) => r.resource_type === 'ELECTRICITY')!
+  assert.equal(heatZero.months[0].average_per_apartment, '2.500')
+  assert.equal(heatZero.months[0].average_per_m2, null)
+  assert.equal(elecNull.months[0].average_per_apartment, '18.500')
+  assert.equal(elecNull.months[0].average_per_m2, null)
 
   // Chart geometry preserves building consumption fields (`total`, `apartmentsCounted`, `estimatedReadings`)
   const geo = computeConsumptionChartGeometry(cold.months, periods)

@@ -5,6 +5,7 @@ import { useSessionStore } from '@/stores/session.js'
 import { getPost } from '@/api/endpoints/communication.js'
 import { listApartments } from '@/api/endpoints/property.js'
 import { formatDateTime } from '@/utils/dates.js'
+import { objectShortName } from '@/utils/objectName.js'
 import CommentList from '@/views/forum/components/CommentList.vue'
 import CommentComposer from '@/views/forum/components/CommentComposer.vue'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
@@ -35,17 +36,17 @@ const apartmentLabel = computed(() => {
   if (targetId) {
     const fromMem = userMemberships.value.find((m) => m.apartment_id === targetId)
     if (fromMem?.apartment_number) {
-      return session.t('common.aptShort', { number: fromMem.apartment_number })
+      return objectShortName(fromMem.apartment_kind, fromMem.apartment_number, session.t)
     }
     const fromMap = apartmentsMap.value[targetId]
     if (fromMap) {
-      return session.t('common.aptShort', { number: fromMap })
+      return objectShortName(fromMap.apartment_kind, fromMap.apartment_number, session.t)
     }
   }
   const badgeLabel = String(post.value?.author_badge?.display_label || '')
   const match = badgeLabel.match(/Apt\.?\s*([0-9A-Za-z-]+)/i)
   if (match?.[1]) {
-    return session.t('common.aptShort', { number: match[1] })
+    return objectShortName('APARTMENT', match[1], session.t)
   }
   return session.t('messages.apartmentThreadBadge')
 })
@@ -75,7 +76,10 @@ async function loadThread() {
     if (aptsRes?.apartments && Array.isArray(aptsRes.apartments)) {
       const nextMap = { ...apartmentsMap.value }
       for (const a of aptsRes.apartments) {
-        nextMap[a.apartment_id] = a.apartment_number
+        nextMap[a.apartment_id] = {
+          apartment_number: a.apartment_number,
+          apartment_kind: a.apartment_kind,
+        }
       }
       apartmentsMap.value = nextMap
     }

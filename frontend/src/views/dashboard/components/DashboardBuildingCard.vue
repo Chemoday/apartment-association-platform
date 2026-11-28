@@ -7,6 +7,7 @@ import {
   getPrimaryEnergyClass,
   isSupportedBuildingFacts,
 } from '@/utils/buildingPassport.js'
+import { OBJECT_KINDS, objectKindPluralLabel } from '@/utils/objectName.js'
 
 const session = useSessionStore()
 
@@ -22,6 +23,17 @@ const floorsDisplay = computed(() =>
 const energyClass = computed(() =>
   isVisible.value ? getPrimaryEnergyClass(facts.value) : null,
 )
+const objectCountEntries = computed(() => {
+  const counts = session.building?.object_counts
+  if (!counts || typeof counts !== 'object') return []
+  return OBJECT_KINDS
+    .map((kind) => ({
+      kind,
+      count: Number(counts[kind] || 0),
+      label: objectKindPluralLabel(kind, session.t),
+    }))
+    .filter((entry) => entry.count > 0)
+})
 </script>
 
 <template>
@@ -86,6 +98,21 @@ const energyClass = computed(() =>
           {{ energyClass || session.t('buildingPassport.dashboardCard.noEnergyClass') }}
         </span>
       </div>
+    </div>
+
+    <div
+      v-if="objectCountEntries.length > 0"
+      data-testid="dashboard-building-object-counts"
+      class="flex flex-wrap items-center gap-2 mt-space-sm pt-space-sm border-t border-surface-container"
+    >
+      <span
+        v-for="entry in objectCountEntries"
+        :key="entry.kind"
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-xs text-on-surface-variant font-medium"
+      >
+        <strong class="text-on-surface font-mono tabular-nums">{{ entry.count }}</strong>
+        <span>{{ entry.label }}</span>
+      </span>
     </div>
   </RouterLink>
 </template>

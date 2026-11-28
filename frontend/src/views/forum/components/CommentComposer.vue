@@ -4,6 +4,8 @@ import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { addComment } from '@/api/endpoints/communication.js'
 import { localizeError } from '@/locales/index.js'
+import { getEligibleAuthorMemberships } from '@/utils/communication.js'
+import { objectName } from '@/utils/objectName.js'
 import BaseButton from '@/components/base/BaseButton.vue'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 
@@ -11,6 +13,10 @@ const props = defineProps({
   postId: {
     type: String,
     required: true,
+  },
+  postTarget: {
+    type: Object,
+    default: null,
   },
   disabled: {
     type: Boolean,
@@ -30,14 +36,51 @@ const body = ref('')
 const submitting = ref(false)
 const errorMsg = ref('')
 const sentSuccess = ref(false)
+const selectedApartmentId = ref(null)
 let successTimer = null
 
+const eligibleMemberships = computed(() => {
+  if (props.omitAuthorApartment) return []
+  const allMems = Array.isArray(session.memberships) ? session.memberships : []
+  if (!props.postTarget) return allMems
+  return getEligibleAuthorMemberships(allMems, props.postTarget)
+})
+
+watch(
+  [eligibleMemberships, () => session.activeMembership?.apartment_id],
+  ([mems, activeId]) => {
+    if (!mems.length) {
+      selectedApartmentId.value = null
+      return
+    }
+    if (mems.some((m) => m.apartment_id === selectedApartmentId.value)) {
+      return
+    }
+    selectedApartmentId.value =
+      activeId && mems.some((m) => m.apartment_id === activeId)
+        ? activeId
+        : mems[0].apartment_id
+  },
+  { immediate: true },
+)
+
 const previewBadge = computed(() => {
-  if (session.activeMembership?.preview_badge) {
+  const chosen = eligibleMemberships.value.find(
+    (m) => m.apartment_id === selectedApartmentId.value,
+  )
+  if (chosen?.preview_badge) {
+    return chosen.preview_badge
+  }
+  if (!props.postTarget && session.activeMembership?.preview_badge) {
     return session.activeMembership.preview_badge
   }
   return {
-    display_label: session.currentDemoUser?.label || 'Board',
+    display_label:
+      buildingRole.value === 'CHAIRMAN'
+        ? session.t('buildingRole.CHAIRMAN')
+        : buildingRole.value === 'BOARD'
+          ? session.t('buildingRole.BOARD')
+          : session.currentDemoUser?.label || 'Board',
     role_badge: buildingRole.value === 'ACCOUNTANT' ? 'ACCOUNTANT' : 'BOARD',
   }
 })
@@ -73,18 +116,21 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
-    const payload = props.omitAuthorApartment
-      ? { body: body.value.trim() }
-      : {
-          body: body.value.trim(),
-          author_apartment_id: session.activeMembership?.apartment_id || null,
-        }
+    const payload = { body: body.value.trim() }
+    if (
+      !props.omitAuthorApartment &&
+      selectedApartmentId.value &&
+      eligibleMemberships.value.some((m) => m.apartment_id === selectedApartmentId.value)
+    ) {
+      payload.author_apartment_id = selectedApartmentId.value
+    }
     const comment = await addComment(props.postId, payload)
     body.value = ''
     triggerSuccessFeedback()
     emit('added', comment)
   } catch (err) {
-    errorMsg.value = localizeError(err.errorCode, err.payload, session.lang)
+    const code = err?.errorCode || (err?.status === 403 ? 'FORBIDDEN' : null)
+    errorMsg.value = localizeError(code, err?.payload, session.lang)
   } finally {
     submitting.value = false
   }
@@ -120,9 +166,23 @@ function handleKeydown(e) {
 
     <!-- Status & Action Bar right next to the Submit button -->
     <div class="flex flex-wrap items-center justify-between gap-3 pt-0.5">
-      <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
+      <div class="flex flex-wrap items-center gap-1.5 text-xs text-on-surface-variant">
         <template v-if="!disabled">
           <span>{{ session.t('forum.signingAsLabel') }}</span>
+          <select
+            v-if="eligibleMemberships.length > 1"
+            v-model="selectedApartmentId"
+            data-testid="comment-composer-author-object-select"
+            class="rounded-lg border border-surface-container-high bg-surface-container-lowest px-2 py-0.5 text-xs font-medium text-on-surface focus:border-primary focus:outline-none"
+          >
+            <option
+              v-for="m in eligibleMemberships"
+              :key="m.apartment_id"
+              :value="m.apartment_id"
+            >
+              {{ objectName(m.apartment_kind, m.apartment_number, session.t) }}
+            </option>
+          </select>
           <AuthorBadge :badge="previewBadge" />
         </template>
       </div>

@@ -6,6 +6,7 @@ const handledEscapeEvents = new WeakSet<object>()
 
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import AppIcon from './AppIcon.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -147,14 +148,14 @@ onUnmounted(() => {
       <div
         ref="dialogPanelRef"
         tabindex="-1"
-        class="w-full rounded-xl bg-surface-container-lowest shadow-2xl border border-surface-container overflow-hidden flex flex-col max-h-[90vh] focus:outline-none"
+        class="w-full rounded-[var(--radius-card)] bg-surface-container-lowest shadow-popover border border-outline-variant/50 overflow-hidden flex flex-col max-h-[90vh] focus:outline-none"
         :class="maxWidth"
       >
-        <div class="px-space-lg py-space-md bg-surface-container-low flex items-center justify-between gap-space-sm border-b border-surface-container">
+        <div class="px-space-lg py-space-md bg-surface-container-low flex items-center justify-between gap-space-sm border-b border-outline-variant/40">
           <div class="flex items-center gap-space-sm min-w-0">
             <slot name="icon" />
             <div class="min-w-0">
-              <h3 class="font-headline-md text-headline-md text-on-surface font-bold truncate">
+              <h3 class="font-headline-md text-headline-md text-on-surface font-semibold truncate">
                 {{ title }}
               </h3>
               <p v-if="subtitle" class="font-body-sm text-body-sm text-on-surface-variant truncate">
@@ -165,10 +166,10 @@ onUnmounted(() => {
           <button
             type="button"
             :aria-label="closeAriaLabel || 'Close modal'"
-            class="p-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors"
+            class="p-1.5 rounded-[var(--radius-control)] hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer"
             @click="$emit('close')"
           >
-            <span class="material-symbols-outlined text-[20px]">close</span>
+            <AppIcon name="close" :size="19" />
           </button>
         </div>
 
@@ -178,7 +179,7 @@ onUnmounted(() => {
 
         <div
           v-if="$slots.footer"
-          class="px-space-lg py-space-md bg-surface-container-low border-t border-surface-container flex items-center justify-end gap-space-sm"
+          class="px-space-lg py-space-md bg-surface-container-low border-t border-outline-variant/40 flex items-center justify-end gap-space-sm"
         >
           <slot name="footer" />
         </div>

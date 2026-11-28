@@ -27,9 +27,13 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
 
   const dashboard = await apiRequest<any>('/meters/my-dashboard')
   assert.equal(dashboard.period.period_code, '2026-10')
-  assert.equal(dashboard.apartments.length, 1)
+  assert.equal(dashboard.apartments.length, 2)
   assert.equal(dashboard.apartments[0].apartment_number, '14')
+  assert.equal(dashboard.apartments[0].apartment_kind, 'APARTMENT')
   assert.equal(dashboard.apartments[0].can_submit_readings, true)
+  assert.equal(dashboard.apartments[1].apartment_number, '1')
+  assert.equal(dashboard.apartments[1].apartment_kind, 'PARKING')
+  assert.equal(dashboard.apartments[1].meters.length, 0)
 
   // Switch to Chairman role and inspect matrix
   setDemoUser('018f0000-0000-7000-8000-000000000101')
@@ -38,7 +42,9 @@ test('offline demo responder serves demo users, building metadata, dashboard, ma
 
   const matrix = await apiRequest<any>('/meters/periods/2026-10/matrix')
   assert.equal(matrix.period.period_code, '2026-10')
-  assert.equal(matrix.apartments.length, 5)
+  assert.equal(matrix.apartments.length, 6)
+  assert.equal(matrix.apartments[5].apartment_kind, 'GARAGE')
+  assert.equal(matrix.apartments[5].apartment_number, '12')
   assert.equal(matrix.balances.length, 2)
 
   const notices = await resolveOfflineDemoRequest(
@@ -4276,7 +4282,7 @@ test('offlineDemoData enforces RBAC, 404 PERIOD_NOT_FOUND, 409 PERIOD_NOT_IN_REV
       (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
     )
 
-    // 6. CSV export matches 15-column API contract with MASTER rows and Content-Disposition
+    // 6. CSV export matches 16-column API contract with apartment_kind last (empty for MASTER rows) (#068)
     const csvResp = await resolveOfflineDemoRequest('/meters/periods/2026-10/export-csv', {
       actingUserId: chairmanId,
       raw: true,
@@ -4286,9 +4292,28 @@ test('offlineDemoData enforces RBAC, 404 PERIOD_NOT_FOUND, 409 PERIOD_NOT_IN_REV
       'attachment; filename="readings-2026-10.csv"',
     )
     const csvLines = (await csvResp.text()).split('\n')
-    assert.equal(csvLines[0].split(',').length, 15)
-    assert.ok(csvLines[0].endsWith(',previous_origin'))
-    assert.ok(csvLines.some((line: string) => line.startsWith('2026-10,,MASTER,')))
+    assert.equal(csvLines[0].split(',').length, 16)
+    assert.ok(csvLines[0].endsWith(',previous_origin,apartment_kind'))
+    assert.ok(csvLines.some((line: string) => line.startsWith('2026-10,,MASTER,') && line.endsWith(',')))
+    assert.ok(csvLines.some((line: string) => line.endsWith(',GARAGE')))
+
+    // 7. Matrix ?kind= filters apartments while keeping whole-building balances (#068)
+    const fullMat = await resolveOfflineDemoRequest('/meters/periods/2026-10/matrix', {
+      actingUserId: chairmanId,
+    })
+    const garMat = await resolveOfflineDemoRequest('/meters/periods/2026-10/matrix?kind=GARAGE', {
+      actingUserId: chairmanId,
+    })
+    assert.ok(garMat.apartments.length > 0)
+    assert.ok(garMat.apartments.every((a: any) => a.apartment_kind === 'GARAGE'))
+    assert.deepEqual(garMat.balances, fullMat.balances)
+    await assert.rejects(
+      () =>
+        resolveOfflineDemoRequest('/meters/periods/2026-10/matrix?kind=UNKNOWN', {
+          actingUserId: chairmanId,
+        }),
+      (err: any) => err?.status === 422 && err?.errorCode === 'VALIDATION_ERROR',
+    )
   } finally {
     disableOfflineDemo()
   }

@@ -17,7 +17,8 @@ export const queryKeys = {
   meters: {
     periods: () => 'meters:periods',
     myDashboard: (periodCode = 'active') => `meters:my-dashboard:${periodCode}`,
-    periodMatrix: (periodCode: string) => `meters:matrix:${periodCode}`,
+    periodMatrix: (periodCode: string, kind?: string | null) =>
+      kind ? `meters:matrix:${periodCode}:${kind}` : `meters:matrix:${periodCode}`,
     apartmentReadings: (apartmentId: string) => `meters:apartment-readings:${apartmentId}`,
     apartmentConsumption: (apartmentId: string, months = 12) =>
       `meters:apartment-consumption:${apartmentId}:${months}`,

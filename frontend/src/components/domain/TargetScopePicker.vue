@@ -1,31 +1,46 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { TargetScope } from '@/api/schema.js'
+import type { ObjectKind, TargetScope } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
+import { OBJECT_KINDS, objectKindPluralLabel, objectShortName } from '@/utils/objectName.js'
 
 export interface TargetScopeModel {
   target_scope?: TargetScope
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: ObjectKind[] | null
   [key: string]: unknown
 }
 
 export interface TargetScopeApartmentOption {
   apartment_id: string
   apartment_number: string
+  apartment_kind?: ObjectKind | string | null
 }
+
+const DEFAULT_ALLOWED_SCOPES: TargetScope[] = [
+  'ALL_BUILDING',
+  'ALL_OBJECTS',
+  'KINDS',
+  'ENTRANCE',
+  'APARTMENT_LIST',
+]
 
 const props = withDefaults(
   defineProps<{
     modelValue: TargetScopeModel
     apartments?: TargetScopeApartmentOption[]
     availableEntrances?: number[]
+    availableKinds?: ObjectKind[]
+    allowedScopes?: TargetScope[]
     errorMessage?: string
     testIdPrefix?: string
   }>(),
   {
     apartments: () => [],
     availableEntrances: () => [1, 2],
+    availableKinds: undefined,
+    allowedScopes: undefined,
     errorMessage: '',
     testIdPrefix: 'target-picker',
   },
@@ -38,18 +53,46 @@ const emit = defineEmits<{
 
 const session = useSessionStore()
 
+const effectiveAvailableKinds = computed<ObjectKind[]>(() => {
+  if (Array.isArray(props.availableKinds)) {
+    return OBJECT_KINDS.filter((k) => props.availableKinds!.includes(k))
+  }
+  const fromSession = session.availableObjectKinds
+  return Array.isArray(fromSession) && fromSession.length > 0 ? fromSession : ['APARTMENT']
+})
+
+const effectiveAllowedScopes = computed<TargetScope[]>(() => {
+  const base =
+    Array.isArray(props.allowedScopes) && props.allowedScopes.length > 0
+      ? props.allowedScopes
+      : DEFAULT_ALLOWED_SCOPES
+  return base.filter((scope) => {
+    if (scope === 'KINDS') return effectiveAvailableKinds.value.length > 0
+    return true
+  })
+})
+
 const currentScope = computed<TargetScope>(() => props.modelValue?.target_scope || 'ALL_BUILDING')
 const currentEntrance = computed<number>(() => props.modelValue?.target_entrance ?? 1)
 const currentApartmentIds = computed<string[]>(() =>
   Array.isArray(props.modelValue?.target_apartment_ids) ? props.modelValue.target_apartment_ids : [],
 )
+const currentKinds = computed<ObjectKind[]>(() =>
+  Array.isArray(props.modelValue?.target_kinds) ? props.modelValue.target_kinds : [],
+)
 
 function updateScope(newScope: TargetScope): void {
+  const defaultKinds =
+    currentKinds.value.length > 0
+      ? currentKinds.value.filter((k) => effectiveAvailableKinds.value.includes(k))
+      : effectiveAvailableKinds.value.slice(0, 1)
+
   emit('update:modelValue', {
     ...props.modelValue,
     target_scope: newScope,
     target_entrance: newScope === 'ENTRANCE' ? currentEntrance.value || 1 : null,
     target_apartment_ids: newScope === 'APARTMENT_LIST' ? currentApartmentIds.value : null,
+    target_kinds: newScope === 'KINDS' ? defaultKinds : null,
   })
   emit('change')
 }
@@ -75,6 +118,21 @@ function toggleApartment(aptId: string, checked: boolean): void {
   emit('change')
 }
 
+function toggleKind(kind: ObjectKind, checked: boolean): void {
+  const set = new Set<ObjectKind>(currentKinds.value)
+  if (checked) {
+    set.add(kind)
+  } else {
+    set.delete(kind)
+  }
+  const ordered = OBJECT_KINDS.filter((k) => set.has(k))
+  emit('update:modelValue', {
+    ...props.modelValue,
+    target_kinds: ordered,
+  })
+  emit('change')
+}
+
 function onScopeSelectChange(event: Event): void {
   const target = event.target as HTMLSelectElement | null
   if (target) updateScope(target.value as TargetScope)
@@ -88,6 +146,11 @@ function onEntranceSelectChange(event: Event): void {
 function onApartmentCheckboxChange(aptId: string, event: Event): void {
   const target = event.target as HTMLInputElement | null
   if (target) toggleApartment(aptId, target.checked)
+}
+
+function onKindCheckboxChange(kind: ObjectKind, event: Event): void {
+  const target = event.target as HTMLInputElement | null
+  if (target) toggleKind(kind, target.checked)
 }
 </script>
 
@@ -104,10 +167,67 @@ function onApartmentCheckboxChange(aptId: string, event: Event): void {
         class="mt-1 block w-full rounded-lg border border-surface-container-high bg-surface-container-low/40 px-3.5 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
         @change="onScopeSelectChange"
       >
-        <option value="ALL_BUILDING">{{ session.t('polls.target.allBuilding') }}</option>
-        <option value="ENTRANCE">{{ session.t('polls.editor.targetByEntrance') }}</option>
-        <option value="APARTMENT_LIST">{{ session.t('polls.target.selectedApartments') }}</option>
+        <option
+          v-if="effectiveAllowedScopes.includes('ALL_BUILDING')"
+          value="ALL_BUILDING"
+        >
+          {{ session.t('polls.target.allBuilding') }}
+        </option>
+        <option
+          v-if="effectiveAllowedScopes.includes('ALL_OBJECTS')"
+          value="ALL_OBJECTS"
+        >
+          {{ session.t('polls.target.allObjects') }}
+        </option>
+        <option
+          v-if="effectiveAllowedScopes.includes('KINDS')"
+          value="KINDS"
+        >
+          {{ session.t('polls.target.byKind') }}
+        </option>
+        <option
+          v-if="effectiveAllowedScopes.includes('ENTRANCE')"
+          value="ENTRANCE"
+        >
+          {{ session.t('polls.editor.targetByEntrance') }}
+        </option>
+        <option
+          v-if="effectiveAllowedScopes.includes('APARTMENT_LIST')"
+          value="APARTMENT_LIST"
+        >
+          {{ session.t('polls.target.selectedApartments') }}
+        </option>
       </select>
+      <p
+        v-if="currentScope === 'ALL_BUILDING'"
+        :data-testid="`${testIdPrefix}-all-building-hint`"
+        class="mt-1 text-xs text-on-surface-variant"
+      >
+        {{ session.t('polls.editor.allBuildingApartmentsOnlyHint') }}
+      </p>
+    </div>
+
+    <!-- Kinds Multi-Select when Scope === KINDS -->
+    <div v-if="currentScope === 'KINDS'" class="pt-1">
+      <span class="block text-xs font-semibold text-on-surface">
+        {{ session.t('polls.editor.selectKindsLabel') }}
+      </span>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <label
+          v-for="kind in effectiveAvailableKinds"
+          :key="kind"
+          :data-testid="`${testIdPrefix}-kind-${kind}`"
+          class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-surface-container-high bg-surface-container-low px-3 py-2 text-xs font-medium text-on-surface hover:border-primary/40 transition-colors"
+        >
+          <input
+            type="checkbox"
+            :checked="currentKinds.includes(kind)"
+            class="h-4 w-4 rounded accent-primary"
+            @change="onKindCheckboxChange(kind, $event)"
+          />
+          <span>{{ objectKindPluralLabel(kind, session.t) }}</span>
+        </label>
+      </div>
     </div>
 
     <!-- Entrance Selector when Scope === ENTRANCE -->
@@ -127,7 +247,7 @@ function onApartmentCheckboxChange(aptId: string, event: Event): void {
       </select>
     </div>
 
-    <!-- Apartment Multi-Select when Scope === APARTMENT_LIST -->
+    <!-- Object Multi-Select when Scope === APARTMENT_LIST -->
     <div v-if="currentScope === 'APARTMENT_LIST'" class="pt-1">
       <span class="block text-xs font-semibold text-on-surface">
         {{ session.t('polls.editor.selectApartmentsLabel') }}
@@ -144,7 +264,7 @@ function onApartmentCheckboxChange(aptId: string, event: Event): void {
             class="h-4 w-4 rounded accent-primary"
             @change="onApartmentCheckboxChange(apt.apartment_id, $event)"
           />
-          <span>{{ session.t('common.aptShort', { number: apt.apartment_number }) }}</span>
+          <span>{{ objectShortName(apt.apartment_kind, apt.apartment_number, session.t) }}</span>
         </label>
       </div>
     </div>

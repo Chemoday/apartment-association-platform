@@ -356,6 +356,7 @@ export interface PollDraftInput {
   target_scope?: TargetScope | string
   target_entrance?: number | string | null
   target_apartment_ids?: string[] | null
+  target_kinds?: Array<string> | null
   eligibility?: Eligibility | string
   unit?: PollUnit | string
   closes_date?: string
@@ -388,6 +389,7 @@ export function validatePollDraft(draft?: PollDraftInput | null): {
   const targetScope = (draft?.target_scope || 'ALL_BUILDING') as TargetScope
   let targetEntrance: number | null = null
   let targetApartmentIds: string[] | null = null
+  let targetKinds: Array<'APARTMENT' | 'PARKING' | 'GARAGE'> | null = null
 
   if (targetScope === 'ENTRANCE') {
     const parsedEnt = Number(draft?.target_entrance)
@@ -404,6 +406,24 @@ export function validatePollDraft(draft?: PollDraftInput | null): {
       fieldErrors.target = 'INVALID_TARGET_APARTMENTS'
     } else {
       targetApartmentIds = ids
+    }
+  } else if (targetScope === 'KINDS') {
+    const validKinds = Array.isArray(draft?.target_kinds)
+      ? Array.from(
+          new Set(
+            draft.target_kinds
+              .map((k) => String(k || '').toUpperCase())
+              .filter(
+                (k): k is 'APARTMENT' | 'PARKING' | 'GARAGE' =>
+                  k === 'APARTMENT' || k === 'PARKING' || k === 'GARAGE',
+              ),
+          ),
+        )
+      : []
+    if (validKinds.length === 0) {
+      fieldErrors.target = 'INVALID_TARGET_KINDS'
+    } else {
+      targetKinds = validKinds
     }
   }
 
@@ -565,6 +585,7 @@ export function validatePollDraft(draft?: PollDraftInput | null): {
     target_scope: targetScope,
     target_entrance: targetEntrance,
     target_apartment_ids: targetApartmentIds,
+    ...(targetScope === 'KINDS' ? { target_kinds: targetKinds } : {}),
     eligibility: (draft?.eligibility || 'RESIDENTS') as Eligibility,
     unit: (draft?.unit || 'APARTMENT') as PollUnit,
     closes_at: closesAtIso,

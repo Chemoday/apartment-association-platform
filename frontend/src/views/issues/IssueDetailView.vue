@@ -384,7 +384,7 @@ onMounted(() => {
         <RouterLink
           :to="{ name: 'issue-detail', params: { issueId: issue.duplicate_of } }"
           data-testid="issue-duplicate-link"
-          class="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-amber-700 shrink-0"
+          class="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-secondary px-3.5 py-2 text-xs font-semibold text-on-secondary hover:opacity-90 shrink-0"
         >
           {{ session.t('issues.detail.viewOriginalIssue') }}
           <span class="material-symbols-outlined text-[16px]">open_in_new</span>
@@ -535,7 +535,7 @@ onMounted(() => {
                     issue.status === 'RESOLVED'
                       ? 'bg-emerald-600 text-white'
                       : ['IN_PROGRESS', 'WAITING_FOR_CONTRACTOR'].includes(issue.status)
-                        ? 'bg-amber-500 text-white ring-4 ring-amber-500/20'
+                        ? 'bg-secondary text-on-secondary ring-4 ring-secondary/20'
                         : 'bg-surface-container-high text-on-surface-variant'
                   "
                 >

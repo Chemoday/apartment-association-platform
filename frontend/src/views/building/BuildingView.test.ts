@@ -396,11 +396,8 @@ test('DashboardBuildingCard visibility and navigation links work across roles wi
     // Null registry_facts -> DashboardBuildingCard hidden
     assert.equal(findByTestId(root, 'dashboard-building-card'), null)
 
-    // Nav links present in home group even for Accountant
-    const homeGroupBtn = findByTestId(root, 'nav-group-home')!
-    assert.ok(homeGroupBtn)
-    await homeGroupBtn.props.onClick({ stopPropagation() {} })
-    await flushUpdates()
+    // Nav links directly visible in vertical sidebar home group even for Accountant
+    assert.ok(findByTestId(root, 'nav-group-home'))
     const navBuildingLink = findByTestId(root, 'nav-link-building')
     assert.ok(navBuildingLink)
     assert.equal(navBuildingLink!.props.href, '/building')
@@ -450,3 +447,67 @@ test('DashboardBuildingCard visibility and navigation links work across roles wi
     await vite.close()
   }
 })
+
+test('BuildingView displays non-zero object_counts per kind and apartments-only heated area note (#064)', async () => {
+  const vite = await createClientVueViteServer()
+  const { createApp, collectText, findByTestId, flushUpdates } = createFakeDomHarness()
+  let app: any = null
+
+  try {
+    const { useSessionStore } = await vite.ssrLoadModule('/src/stores/session.js')
+    const { default: BuildingView } = await vite.ssrLoadModule('/src/views/building/BuildingView.vue')
+
+    const pinia = createPinia()
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'dashboard', component: Dummy },
+        { path: '/building', name: 'building', component: Dummy },
+      ],
+    })
+    await router.push('/building')
+    await router.isReady()
+
+    const session = useSessionStore(pinia)
+    session.setLang('en')
+    session.mode = 'demo'
+    session.me = { user_id: USER_IDS.USER, building_role: 'USER', memberships: [], locale: 'en' } as any
+    session.building = {
+      building_id: 'b1',
+      name: 'KÜ Sõpruse 12',
+      address: 'Sõpruse pst 12, Tallinn',
+      apartment_count: 6,
+      entrance_count: 2,
+      heated_area_m2: '329.20',
+      object_counts: { APARTMENT: 6, PARKING: 2, GARAGE: 0 },
+      registry_facts: null,
+    } as any
+
+    const RootWrapper = defineComponent({
+      setup() {
+        return () => h(BuildingView)
+      },
+    })
+    const root: VTestNode = { kind: 'element', tag: 'div', props: {}, children: [], parentNode: null }
+    app = createApp(RootWrapper)
+    app.use(pinia)
+    app.use(router)
+    app.mount(root)
+    await flushUpdates()
+
+    const summary = findByTestId(root, 'building-objects-summary')
+    assert.ok(summary, 'Objects summary must render when building has object_counts/heated_area_m2')
+    assert.match(collectText(findByTestId(root, 'building-object-count-APARTMENT')!), /6/)
+    assert.match(collectText(findByTestId(root, 'building-object-count-PARKING')!), /2/)
+    assert.equal(findByTestId(root, 'building-object-count-GARAGE'), null, 'Zero-count kind must be hidden')
+    assert.match(collectText(findByTestId(root, 'building-heated-area')!), /329\.20 m²/)
+    assert.match(
+      collectText(findByTestId(root, 'building-apartments-only-note')!),
+      /apartments only/i,
+    )
+  } finally {
+    app?.unmount?.()
+    await vite.close()
+  }
+})
+

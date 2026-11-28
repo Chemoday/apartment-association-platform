@@ -138,14 +138,8 @@ test('AppNavbar, AppSidebar, AppBottomNav, and DashboardCommunityPulse share ONE
     assert.equal(chatStateGetCalls, 1)
     assert.equal(findByTestId(root, 'navbar-chat-link'), null)
     assert.equal(findByTestId(root, 'community-pulse-chat-line'), null)
-    const commTriggerInitially = findByTestId(root, 'nav-group-community')
-    assert.ok(commTriggerInitially)
-    await commTriggerInitially!.props.onClick({ stopPropagation() {} })
-    await flushUpdates()
+    assert.ok(findByTestId(root, 'nav-group-community'))
     assert.equal(findByTestId(root, 'nav-link-chat'), null)
-    // close menu
-    await commTriggerInitially!.props.onClick({ stopPropagation() {} })
-    await flushUpdates()
 
     // 2. Enabled with recent_count=5 -> ONE shared refresh updates navbar, sidebar, mobile sheet, and dashboard
     serverChatState = {
@@ -170,10 +164,8 @@ test('AppNavbar, AppSidebar, AppBottomNav, and DashboardCommunityPulse share ONE
     assert.ok(dotBadge)
     assert.match(collectText(dotBadge!), /5/)
 
-    // Sidebar Community menu includes nav-link-chat
-    const commGroupBtn = findByTestId(root, 'nav-group-community')!
-    await commGroupBtn.props.onClick({ stopPropagation() {} })
-    await flushUpdates()
+    // Sidebar Community group directly includes nav-link-chat
+    assert.ok(findByTestId(root, 'nav-group-community'))
     const sidebarChatLink = findByTestId(root, 'nav-link-chat')
     assert.ok(sidebarChatLink, 'Sidebar community menu must include Building chat')
     assert.match(collectText(sidebarChatLink!), /Building chat/)
@@ -715,9 +707,7 @@ test('ChatView handles direct /chat entry state sync, load retry, POST 500 trace
       findByTestId(root, 'navbar-chat-link'),
       'Direct /chat navigation must populate navbar chat icon without prior /api/v1/chat poll',
     )
-    const commBtn = findByTestId(root, 'nav-group-community')!
-    await commBtn.props.onClick({ stopPropagation() {} })
-    await flushUpdates()
+    assert.ok(findByTestId(root, 'nav-group-community'))
     assert.ok(
       findByTestId(root, 'nav-link-chat'),
       'Direct /chat navigation must populate sidebar chat link without prior /api/v1/chat poll',

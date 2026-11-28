@@ -5,6 +5,7 @@
 
 import type {
   AuthorBadgeDTO,
+  ObjectKind,
   PostCategory,
   PostOrigin,
   PostType,
@@ -38,6 +39,7 @@ export interface MockStoredPost {
   target_scope: TargetScope
   target_entrance: number | null
   target_apartment_ids: string[] | null
+  target_kinds?: ObjectKind[] | null
   is_active: boolean
   comments_enabled: boolean
   created_at: string

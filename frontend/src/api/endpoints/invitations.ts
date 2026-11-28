@@ -1,5 +1,7 @@
 import { apiRequest } from '../client.js'
 import type {
+  BulkInvitationReport,
+  BulkInvitationRequest,
   InvitationView,
   OwnerInvitationCreate,
   ReplaceTenantRequest,
@@ -20,10 +22,12 @@ export type InvitationCreate =
 export function createInvitation(payload: InvitationCreate): Promise<InvitationView> {
   let body: InvitationCreate
   if (payload.kind === 'OWNER') {
+    const ownerPayload = payload as OwnerInvitationCreate
     body = {
       kind: 'OWNER',
-      email: payload.email,
-      apartment_number: (payload as OwnerInvitationCreate).apartment_number,
+      email: ownerPayload.email,
+      apartment_number: ownerPayload.apartment_number,
+      ...(ownerPayload.apartment_kind ? { apartment_kind: ownerPayload.apartment_kind } : {}),
     }
   } else if (payload.kind === 'TENANT') {
     body = {
@@ -121,4 +125,26 @@ export function replaceTenant(
       body: { email },
     },
   )
+}
+
+/**
+ * Preview a bulk owner-invitation list without sending any invitations (#057 + #069).
+ */
+export function previewBulkInvitations(text: string): Promise<BulkInvitationReport> {
+  const body: BulkInvitationRequest = { text }
+  return apiRequest<BulkInvitationReport>('/auth/invitations/bulk/preview', {
+    method: 'POST',
+    body,
+  })
+}
+
+/**
+ * Send all READY owner invitations from a pasted/loaded list (#057 + #069).
+ */
+export function sendBulkInvitations(text: string): Promise<BulkInvitationReport> {
+  const body: BulkInvitationRequest = { text }
+  return apiRequest<BulkInvitationReport>('/auth/invitations/bulk', {
+    method: 'POST',
+    body,
+  })
 }

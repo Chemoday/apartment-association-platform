@@ -7,6 +7,7 @@ import type {
   UploadOptions,
 } from '@/api/schema.js'
 import { i18n } from '../locales/index.js'
+import { isApartmentKindStrict } from './objectName.js'
 
 export const MAX_DOCUMENT_BYTES = 20_000_000
 export const MAX_DOCUMENT_TITLE_LENGTH = 200
@@ -665,7 +666,12 @@ export function canUserAccessDocumentsModule(
 ): boolean {
   if (!user) return false
   if (isStaffRole(user.building_role)) return true
-  return Array.isArray(userMemberships) && userMemberships.length > 0
+  if (!Array.isArray(userMemberships) || userMemberships.length === 0) return false
+  return userMemberships.some((raw) => {
+    const m = raw && typeof raw === 'object' ? (raw as { apartment_kind?: string | null; relation_type?: string | null }) : null
+    if (!m) return false
+    return isApartmentKindStrict(m.apartment_kind) || m.relation_type === 'OWNER'
+  })
 }
 
 /**

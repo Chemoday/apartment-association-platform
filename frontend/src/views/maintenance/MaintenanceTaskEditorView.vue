@@ -53,6 +53,7 @@ const form = reactive({
     target_scope: 'ALL_BUILDING',
     target_entrance: 1,
     target_apartment_ids: [],
+    target_kinds: [],
     comments_enabled: false,
   },
 })
@@ -94,6 +95,7 @@ const targetModel = computed({
       target_scope: form.notice.target_scope,
       target_entrance: form.notice.target_entrance,
       target_apartment_ids: form.notice.target_apartment_ids,
+      target_kinds: form.notice.target_kinds,
     }
   },
   set(val) {
@@ -103,6 +105,7 @@ const targetModel = computed({
     form.notice.target_apartment_ids = Array.isArray(val.target_apartment_ids)
       ? val.target_apartment_ids
       : []
+    form.notice.target_kinds = Array.isArray(val.target_kinds) ? val.target_kinds : []
     delete clientErrors.notice_target
   },
 })
@@ -165,6 +168,9 @@ async function loadData({ preserveConflictBanner = false } = {}) {
           target_scope: taskRes.notice.target_scope || 'ALL_BUILDING',
           target_entrance: taskRes.notice.target_entrance ?? 1,
           target_apartment_ids: taskRes.notice.target_apartment_ids || [],
+          target_kinds: Array.isArray(taskRes.notice.target_kinds)
+            ? [...taskRes.notice.target_kinds]
+            : [],
           comments_enabled: Boolean(taskRes.notice.comments_enabled),
         }
       } else {

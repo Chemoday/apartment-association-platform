@@ -1,5 +1,5 @@
 import type { SeedUser } from '../state.js';
-import type { EmergencyView, PostCategory, PostType, TargetScope } from '../../api/schema.js';
+import type { EmergencyView, ObjectKind, PostCategory, PostType, TargetScope } from '../../api/schema.js';
 import { type RouteContext, sendJson, sendError, readBody } from '../http.js';
 import {
   DEMO_USERS,
@@ -17,6 +17,7 @@ import {
   COMMENT_BODY_MAX_LENGTH,
   POST_BODY_MAX_LENGTH,
   POST_TITLE_MAX_LENGTH,
+  canAuthorForumTopicTarget,
   canViewerSeePost,
   getEditWindowDeadlineMs,
   hasDisallowedControlChars,
@@ -24,9 +25,26 @@ import {
   isPostHideable,
   isWithinEditWindow,
   projectCommentForViewer,
+  resolveAuthorApartmentForTarget,
   validateCommentEdit,
   validateHideReason,
 } from '../../utils/communication.js';
+
+const VALID_POST_TARGET_SCOPES: TargetScope[] = [
+  'ALL_BUILDING',
+  'ALL_OBJECTS',
+  'KINDS',
+  'ENTRANCE',
+  'APARTMENT_LIST',
+];
+
+function getServerAvailableObjectKinds(): ObjectKind[] {
+  const kinds = new Set<ObjectKind>();
+  for (const card of DEMO_APARTMENT_CARDS) {
+    kinds.add((card.apartment_kind || 'APARTMENT') as ObjectKind);
+  }
+  return Array.from(kinds);
+}
 
 export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Promise<boolean> {
   const { req, res, urlObj, pathname, method, user, isBoard } = ctx;
@@ -55,6 +73,7 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
           target_scope: p.target_scope,
           target_entrance: p.target_entrance,
           target_apartment_ids: p.target_apartment_ids,
+          target_kinds: p.target_kinds ?? null,
           is_active: p.is_active,
           comments_enabled: p.comments_enabled,
           comments_count: p.comments.length,
@@ -92,9 +111,19 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
       const post = postsStore.find((p) => p.id === resolveMatch[1]);
       if (!post) return sendError(res, 404, 'POST_NOT_FOUND', 'Emergency alert not found.');
       post.is_active = false;
-      // Add EMERGENCY_RESOLVED notification for all other demo users
+      // Add EMERGENCY_RESOLVED notification for targeted users (and board), excluding actor
       for (const demoUser of DEMO_USERS) {
         if (demoUser.user_id !== user.user_id) {
+          const demoMems = membershipsByUser[demoUser.user_id] || [];
+          if (
+            !canViewerSeePost(post, {
+              viewerUserId: demoUser.user_id,
+              viewerRole: demoUser.building_role,
+              memberships: demoMems,
+            })
+          ) {
+            continue;
+          }
           const list = getUserNotifications(demoUser.user_id);
           list.unshift({
             id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
@@ -106,6 +135,7 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
               category: post.category,
               target_scope: post.target_scope,
               target_entrance: post.target_entrance,
+              target_kinds: post.target_scope === 'KINDS' ? (post.target_kinds ?? []) : [],
             },
             created_at: new Date().toISOString(),
             read_at: null,
@@ -206,12 +236,16 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         author_badge: resolveAuthorBadge(
           p.author_user_id,
           p.post_type,
-          p.target_apartment_ids?.[0] || null
+          p.post_type === 'APARTMENT_THREAD'
+            ? p.target_apartment_ids?.[0] || null
+            : p.author_apartment_id ?? null,
+          p.post_type !== 'APARTMENT_THREAD' && p.post_type !== 'BOARD_TOPIC'
         ),
         is_mine: p.author_user_id === user.user_id,
         target_scope: p.target_scope,
         target_entrance: p.target_entrance,
         target_apartment_ids: p.target_apartment_ids,
+        target_kinds: p.target_kinds ?? null,
         is_active: p.is_active,
         comments_enabled: p.comments_enabled,
         comments_count: p.comments.length,
@@ -281,7 +315,8 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         if (
           body.target_scope !== 'APARTMENT_LIST' ||
           !Array.isArray(body.target_apartment_ids) ||
-          body.target_apartment_ids.length !== 1
+          body.target_apartment_ids.length !== 1 ||
+          body.target_kinds != null
         ) {
           return sendError(
             res,
@@ -331,7 +366,8 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         if (
           (body.target_scope && body.target_scope !== 'ALL_BUILDING') ||
           body.target_entrance ||
-          body.target_apartment_ids
+          body.target_apartment_ids ||
+          body.target_kinds
         ) {
           return sendError(
             res,
@@ -342,13 +378,163 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         }
       }
 
-      const targetApartmentIds = Array.isArray(body.target_apartment_ids)
+      const resolvedTargetScope: TargetScope =
+        typeof body.target_scope === 'string' && body.target_scope
+          ? (body.target_scope as TargetScope)
+          : 'ALL_BUILDING';
+      const callerMems = membershipsByUser[user.user_id] || [];
+
+      if (postType === 'FORUM_TOPIC') {
+        const rawTargetKinds = Array.isArray(body.target_kinds)
+          ? (body.target_kinds as unknown[]).map((k) => String(k).toUpperCase())
+          : null;
+        if (
+          !canAuthorForumTopicTarget({
+            role: user.building_role,
+            memberships: callerMems,
+            targetScope: resolvedTargetScope,
+            targetKinds: rawTargetKinds,
+          })
+        ) {
+          return sendError(
+            res,
+            403,
+            'FORBIDDEN',
+            'You are not allowed to publish a forum topic to this target.'
+          );
+        }
+      }
+
+      if (!VALID_POST_TARGET_SCOPES.includes(resolvedTargetScope)) {
+        return sendError(res, 422, 'INVALID_TARGET', 'Invalid target_scope.');
+      }
+
+      let targetEntrance: number | null =
+        typeof body.target_entrance === 'number' ? body.target_entrance : null;
+      let targetApartmentIds: string[] | null = Array.isArray(body.target_apartment_ids)
         ? body.target_apartment_ids.map(String)
         : null;
-      const authorApartmentId =
-        typeof body.author_apartment_id === 'string' && body.author_apartment_id
-          ? body.author_apartment_id
-          : null;
+      let targetKinds: ObjectKind[] | null = null;
+
+      if (postType !== 'BOARD_TOPIC' && postType !== 'APARTMENT_THREAD') {
+        const hasEntranceInput = body.target_entrance !== undefined && body.target_entrance !== null;
+        const hasApartmentListInput =
+          Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0;
+        const hasKindsInput = Array.isArray(body.target_kinds) && body.target_kinds.length > 0;
+
+        if (resolvedTargetScope === 'ALL_BUILDING' || resolvedTargetScope === 'ALL_OBJECTS') {
+          if (hasEntranceInput || hasApartmentListInput || hasKindsInput) {
+            return sendError(
+              res,
+              422,
+              'INVALID_TARGET',
+              `target_entrance, target_apartment_ids, and target_kinds must be null for ${resolvedTargetScope}.`
+            );
+          }
+          targetEntrance = null;
+          targetApartmentIds = null;
+          targetKinds = null;
+        } else if (resolvedTargetScope === 'KINDS') {
+          if (hasEntranceInput || hasApartmentListInput || !hasKindsInput) {
+            return sendError(
+              res,
+              422,
+              'INVALID_TARGET',
+              'Non-empty target_kinds is required for KINDS scope.'
+            );
+          }
+          const availableKinds = getServerAvailableObjectKinds();
+          const rawKinds = Array.isArray(body.target_kinds) ? (body.target_kinds as unknown[]) : [];
+          const dedupedKinds = Array.from(
+            new Set<string>(rawKinds.map((k: unknown) => String(k).toUpperCase()))
+          );
+          const unknownKinds = dedupedKinds.filter(
+            (k) => !availableKinds.includes(k as ObjectKind)
+          );
+          if (unknownKinds.length > 0) {
+            return sendError(
+              res,
+              422,
+              'INVALID_TARGET',
+              'Unknown object kind in target_kinds.',
+              { unknown_kinds: unknownKinds }
+            );
+          }
+          targetEntrance = null;
+          targetApartmentIds = null;
+          targetKinds = dedupedKinds as ObjectKind[];
+        } else if (resolvedTargetScope === 'ENTRANCE') {
+          if (
+            postType === 'FORUM_TOPIC' ||
+            typeof targetEntrance !== 'number' ||
+            !Number.isInteger(targetEntrance) ||
+            hasApartmentListInput ||
+            hasKindsInput
+          ) {
+            return sendError(
+              res,
+              422,
+              'INVALID_TARGET',
+              postType === 'FORUM_TOPIC'
+                ? 'Forum topics only support ALL_BUILDING, ALL_OBJECTS, or KINDS.'
+                : 'Valid target_entrance is required for ENTRANCE scope.'
+            );
+          }
+          targetApartmentIds = null;
+          targetKinds = null;
+        } else if (resolvedTargetScope === 'APARTMENT_LIST') {
+          if (
+            postType === 'FORUM_TOPIC' ||
+            hasEntranceInput ||
+            hasKindsInput ||
+            !hasApartmentListInput
+          ) {
+            return sendError(
+              res,
+              422,
+              'INVALID_TARGET',
+              postType === 'FORUM_TOPIC'
+                ? 'Forum topics only support ALL_BUILDING, ALL_OBJECTS, or KINDS.'
+                : 'Non-empty target_apartment_ids is required for APARTMENT_LIST scope.'
+            );
+          }
+          targetEntrance = null;
+          targetKinds = null;
+        }
+      }
+
+      let authorApartmentId: string | null = null;
+      if (postType === 'BOARD_TOPIC') {
+        authorApartmentId = null;
+      } else if (postType === 'APARTMENT_THREAD') {
+        authorApartmentId = isBoard ? null : targetApartmentIds?.[0] || null;
+      } else if (
+        (postType === 'OFFICIAL_NOTICE' || postType === 'EMERGENCY') &&
+        !body.author_apartment_id
+      ) {
+        authorApartmentId = null;
+      } else {
+        const authorResolution = resolveAuthorApartmentForTarget({
+          memberships: callerMems,
+          target: {
+            target_scope: resolvedTargetScope,
+            target_entrance: targetEntrance,
+            target_apartment_ids: targetApartmentIds,
+            target_kinds: targetKinds,
+          },
+          requestedApartmentId: body.author_apartment_id,
+        });
+        if (!authorResolution.ok) {
+          return sendError(
+            res,
+            authorResolution.status,
+            authorResolution.errorCode,
+            authorResolution.message
+          );
+        }
+        authorApartmentId = authorResolution.apartmentId;
+      }
+
       const created: InternalPost = {
         id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
         post_type: postType,
@@ -359,21 +545,11 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         title: cleanTitle,
         body: cleanBody,
         author_user_id: user.user_id,
-        author_apartment_id:
-          postType === 'BOARD_TOPIC'
-            ? null
-            : postType === 'APARTMENT_THREAD'
-              ? isBoard
-                ? null
-                : targetApartmentIds?.[0] || null
-              : authorApartmentId,
-        target_scope:
-          typeof body.target_scope === 'string' && body.target_scope
-            ? (body.target_scope as TargetScope)
-            : 'ALL_BUILDING',
-        target_entrance:
-          typeof body.target_entrance === 'number' ? body.target_entrance : null,
+        author_apartment_id: authorApartmentId,
+        target_scope: resolvedTargetScope,
+        target_entrance: targetEntrance,
         target_apartment_ids: targetApartmentIds,
+        target_kinds: targetKinds,
         is_active: true,
         comments_enabled: body.comments_enabled !== false,
         created_at: new Date().toISOString(),
@@ -394,15 +570,26 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
           target_scope: created.target_scope,
           target_entrance: created.target_entrance,
           target_apartment_ids: created.target_apartment_ids,
+          target_kinds: created.target_kinds,
           author_user_id: user.user_id,
           created_at: created.created_at,
         });
       }
 
-      // If an emergency is published, notify all other demo users (author never gets own alert)
+      // If an emergency is published, notify targeted demo users (and board); author never gets own alert
       if (postType === 'EMERGENCY') {
         for (const demoUser of DEMO_USERS) {
           if (demoUser.user_id !== user.user_id) {
+            const demoMems = membershipsByUser[demoUser.user_id] || [];
+            if (
+              !canViewerSeePost(created, {
+                viewerUserId: demoUser.user_id,
+                viewerRole: demoUser.building_role,
+                memberships: demoMems,
+              })
+            ) {
+              continue;
+            }
             const list = getUserNotifications(demoUser.user_id);
             list.unshift({
               id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
@@ -414,6 +601,7 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
                 category: created.category,
                 target_scope: created.target_scope,
                 target_entrance: created.target_entrance,
+                target_kinds: created.target_scope === 'KINDS' ? (created.target_kinds ?? []) : [],
               },
               created_at: created.created_at,
               read_at: null,
@@ -431,6 +619,8 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         );
       }
 
+      const useStrictAuthorBadge =
+        created.post_type !== 'APARTMENT_THREAD' && created.post_type !== 'BOARD_TOPIC';
       return sendJson(res, 201, {
         id: created.id,
         post_type: created.post_type,
@@ -440,12 +630,16 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         author_badge: resolveAuthorBadge(
           created.author_user_id,
           created.post_type,
-          created.target_apartment_ids?.[0] || null
+          useStrictAuthorBadge
+            ? created.author_apartment_id
+            : created.target_apartment_ids?.[0] || null,
+          useStrictAuthorBadge
         ),
         is_mine: true,
         target_scope: created.target_scope,
         target_entrance: created.target_entrance,
         target_apartment_ids: created.target_apartment_ids,
+        target_kinds: created.target_kinds ?? null,
         is_active: created.is_active,
         comments_enabled: created.comments_enabled,
         comments_count: 0,
@@ -483,17 +677,25 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
       const pagedComments = post.comments.slice(commentsOffset, commentsOffset + commentsLimit);
 
       const targetAptId = post.target_apartment_ids?.[0] || null;
+      const isStrictBadge =
+        post.post_type !== 'APARTMENT_THREAD' && post.post_type !== 'BOARD_TOPIC';
       return sendJson(res, 200, {
         id: post.id,
         post_type: post.post_type,
         category: post.category,
         title: post.title,
         body: post.body,
-        author_badge: resolveAuthorBadge(post.author_user_id, post.post_type, targetAptId),
+        author_badge: resolveAuthorBadge(
+          post.author_user_id,
+          post.post_type,
+          isStrictBadge ? post.author_apartment_id ?? null : targetAptId,
+          isStrictBadge,
+        ),
         is_mine: post.author_user_id === user.user_id,
         target_scope: post.target_scope,
         target_entrance: post.target_entrance,
         target_apartment_ids: post.target_apartment_ids,
+        target_kinds: post.target_kinds ?? null,
         is_active: post.is_active,
         comments_enabled: post.comments_enabled,
         comments_count: post.comments.length,
@@ -511,7 +713,12 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
             postId: post.id,
             viewerUserId: user.user_id,
             viewerRole: user.building_role,
-            authorBadge: resolveAuthorBadge(c.author_user_id, post.post_type, targetAptId),
+            authorBadge: resolveAuthorBadge(
+              c.author_user_id,
+              post.post_type,
+              isStrictBadge ? c.author_apartment_id ?? null : targetAptId,
+              isStrictBadge,
+            ),
           })
         ),
       });
@@ -574,6 +781,7 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
           'Comment body must be non-empty plain text.'
         );
       }
+      let resolvedCommentAptId: string | null = null;
       if (post.post_type === 'APARTMENT_THREAD' || post.post_type === 'BOARD_TOPIC') {
         if (body.author_apartment_id !== undefined && body.author_apartment_id !== null) {
           return sendError(
@@ -583,22 +791,34 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
             'author_apartment_id is not allowed on this thread.'
           );
         }
+        resolvedCommentAptId =
+          post.post_type === 'APARTMENT_THREAD'
+            ? isBoard
+              ? null
+              : post.target_apartment_ids?.[0] || null
+            : null;
+      } else {
+        const authorResolution = resolveAuthorApartmentForTarget({
+          memberships: userMems,
+          target: post,
+          requestedApartmentId: body.author_apartment_id,
+        });
+        if (!authorResolution.ok) {
+          return sendError(
+            res,
+            authorResolution.status,
+            authorResolution.errorCode,
+            authorResolution.message
+          );
+        }
+        resolvedCommentAptId = authorResolution.apartmentId;
       }
       const comment: InternalComment = {
         id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
         post_id: post.id,
         body: cleanCommentBody,
         author_user_id: user.user_id,
-        author_apartment_id:
-          post.post_type === 'BOARD_TOPIC'
-            ? null
-            : post.post_type === 'APARTMENT_THREAD'
-              ? isBoard
-                ? null
-                : post.target_apartment_ids?.[0] || null
-              : typeof body.author_apartment_id === 'string' && body.author_apartment_id
-                ? body.author_apartment_id
-                : null,
+        author_apartment_id: resolvedCommentAptId,
         created_at: new Date().toISOString(),
         edited_at: null,
         hidden_at: null,
@@ -613,6 +833,8 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
           comment.created_at
         );
       }
+      const useStrictCommentBadge =
+        post.post_type !== 'APARTMENT_THREAD' && post.post_type !== 'BOARD_TOPIC';
       return sendJson(res, 201, {
         id: comment.id,
         post_id: post.id,
@@ -620,7 +842,10 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         author_badge: resolveAuthorBadge(
           comment.author_user_id,
           post.post_type,
-          post.target_apartment_ids?.[0] || null
+          useStrictCommentBadge
+            ? comment.author_apartment_id
+            : post.target_apartment_ids?.[0] || null,
+          useStrictCommentBadge
         ),
         is_mine: true,
         created_at: comment.created_at,
@@ -689,6 +914,7 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         target_scope: post.target_scope,
         target_entrance: post.target_entrance,
         target_apartment_ids: post.target_apartment_ids,
+        target_kinds: post.target_kinds ?? null,
         is_active: post.is_active,
         comments_enabled: post.comments_enabled,
         comments_count: post.comments.length,
@@ -879,6 +1105,7 @@ export async function handleCommunicationRoutes(ctx: RouteContext<SeedUser>): Pr
         target_scope: post.target_scope,
         target_entrance: post.target_entrance,
         target_apartment_ids: post.target_apartment_ids,
+        target_kinds: post.target_kinds ?? null,
         is_active: post.is_active,
         comments_enabled: post.comments_enabled,
         comments_count: post.comments.length,

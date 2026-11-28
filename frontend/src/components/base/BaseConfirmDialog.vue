@@ -36,7 +36,7 @@ const emit = defineEmits<{
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="px-4 py-2 rounded-lg border border-outline-variant text-xs font-semibold text-on-surface hover:bg-surface-container-low transition-colors disabled:opacity-50"
+          class="px-4 py-2 rounded-[var(--radius-control)] bg-surface-container-lowest border border-outline-variant/75 text-xs font-semibold text-on-surface hover:bg-surface-container-low transition-colors cursor-pointer disabled:opacity-50"
           :disabled="busy"
           @click="emit('cancel')"
         >
@@ -44,7 +44,7 @@ const emit = defineEmits<{
         </button>
         <button
           type="button"
-          class="px-4 py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
+          class="px-4 py-2 rounded-[var(--radius-control)] text-xs font-semibold transition-colors cursor-pointer shadow-xs disabled:opacity-50"
           :class="
             tone === 'danger'
               ? 'bg-error text-on-error hover:opacity-90'

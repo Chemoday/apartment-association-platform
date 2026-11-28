@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { PostOrigin, PostType } from '@/api/schema.js'
 import { useSessionStore } from '@/stores/session.js'
+import AppIcon from '@/components/base/AppIcon.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -47,9 +48,7 @@ const iconName = computed<string>(() => {
     ]"
     :title="session.t('postOrigin.fromMaintenanceCalendar')"
   >
-    <span class="material-symbols-outlined text-[13px] leading-none shrink-0" aria-hidden="true">
-      {{ iconName }}
-    </span>
+    <AppIcon :name="iconName" :size="13" />
     <span class="capitalize-first">{{ label }}</span>
   </span>
 </template>

@@ -36,9 +36,11 @@ export async function handleOfflineMeters(ctx) {
 
   // Helper shared by /readings and /consumption so histories stay 100% consistent
   function buildOfflineApartmentMeters(cardMeta) {
-    const baseApt =
-      BASE_APARTMENTS_2026_10.find((a) => a.apartment_id === cardMeta.apartment_id) ||
-      BASE_APARTMENTS_2026_10[0]
+    const exactApt = BASE_APARTMENTS_2026_10.find((a) => a.apartment_id === cardMeta.apartment_id)
+    if (!exactApt && (cardMeta.apartment_kind || 'APARTMENT') !== 'APARTMENT') {
+      return []
+    }
+    const baseApt = exactApt || BASE_APARTMENTS_2026_10[0]
     const meters = baseApt.meters.map((baseMeter, mIdx) => {
       const readings = []
       for (const p of getOfflinePeriods()) {
@@ -68,7 +70,7 @@ export async function handleOfflineMeters(ctx) {
         readings,
       }
     })
-    if (cardMeta.apartment_number === '14') {
+    if (cardMeta.apartment_number === '14' && (cardMeta.apartment_kind || 'APARTMENT') === 'APARTMENT') {
       meters.push({
         meter_id: '018f0000-0000-7000-8000-000000000599',
         resource_type: 'COLD_WATER',
@@ -118,6 +120,7 @@ export async function handleOfflineMeters(ctx) {
     return {
       apartment_id: cardMeta.apartment_id,
       apartment_number: cardMeta.apartment_number,
+      apartment_kind: cardMeta.apartment_kind || 'APARTMENT',
       periods: JSON.parse(JSON.stringify(getOfflinePeriods())),
       meters: buildOfflineApartmentMeters(cardMeta),
     }
@@ -149,6 +152,7 @@ export async function handleOfflineMeters(ctx) {
     return buildApartmentConsumptionResponse({
       apartmentId: cardMeta.apartment_id,
       apartmentNumber: cardMeta.apartment_number,
+      apartmentKind: cardMeta.apartment_kind || 'APARTMENT',
       periods: getOfflinePeriods(),
       meters: buildOfflineApartmentMeters(cardMeta),
       months: parsedMonths.months,
@@ -172,7 +176,7 @@ export async function handleOfflineMeters(ctx) {
       const cardMeta = OFFLINE_APARTMENT_CARDS.find((a) => a.apartment_id === baseApt.apartment_id)
       return {
         apartment_id: baseApt.apartment_id,
-        area_m2: cardMeta?.area_m2 || '0',
+        area_m2: cardMeta?.area_m2 ?? null,
         meters: buildOfflineApartmentMeters(cardMeta || baseApt),
       }
     })
@@ -213,39 +217,49 @@ export async function handleOfflineMeters(ctx) {
     const period =
       activePeriods.find((p) => p.period_code === periodCode) || activePeriods[0]
     const periodApts = getPeriodApartments(period.period_code)
+    const periodAptById = new Map(periodApts.map((a) => [a.apartment_id, a]))
 
     const baseCanSubmitByAptId = new Map(
       BASE_APARTMENTS_2026_10.map((a) => [a.apartment_id, Boolean(a.can_submit_readings)]),
     )
 
-    const apartments = periodApts
-      .filter((a) => userAptIds.has(a.apartment_id))
-      .map((a) => {
-        const memCanSubmit = Boolean(memByAptId.get(a.apartment_id)?.can_submit_readings)
-        const baseAptCanSubmit = baseCanSubmitByAptId.get(a.apartment_id) ?? false
+    const apartments = userMems.map((mem) => {
+      const a = periodAptById.get(mem.apartment_id)
+      const memCanSubmit = Boolean(mem.can_submit_readings)
+      if (!a) {
         return {
-          apartment_id: a.apartment_id,
-          apartment_number: a.apartment_number,
-          can_submit_readings: baseAptCanSubmit && memCanSubmit,
-          meters: a.meters.map((m) => ({
-            meter_id: m.meter_id,
-            resource_type: m.resource_type,
-            serial_number: m.serial_number ?? null,
-            location_label: m.location_label,
-            unit: m.unit,
-            previous_value: m.previous_value,
-            needs_start: Boolean(m.needs_start),
-            previous_delta: m.historical_avg ?? null,
-            average_delta: m.historical_avg ?? null,
-            reading: m.reading ? { ...m.reading } : null,
-            next_submission: computeOfflineNextSubmission(
-              m.meter_id,
-              baseAptCanSubmit,
-              memCanSubmit,
-            ),
-          })),
+          apartment_id: mem.apartment_id,
+          apartment_number: mem.apartment_number,
+          apartment_kind: mem.apartment_kind || 'APARTMENT',
+          can_submit_readings: memCanSubmit,
+          meters: [],
         }
-      })
+      }
+      const baseAptCanSubmit = baseCanSubmitByAptId.get(a.apartment_id) ?? false
+      return {
+        apartment_id: a.apartment_id,
+        apartment_number: a.apartment_number,
+        apartment_kind: a.apartment_kind || mem.apartment_kind || 'APARTMENT',
+        can_submit_readings: baseAptCanSubmit && memCanSubmit,
+        meters: a.meters.map((m) => ({
+          meter_id: m.meter_id,
+          resource_type: m.resource_type,
+          serial_number: m.serial_number ?? null,
+          location_label: m.location_label,
+          unit: m.unit,
+          previous_value: m.previous_value,
+          needs_start: Boolean(m.needs_start),
+          previous_delta: m.historical_avg ?? null,
+          average_delta: m.historical_avg ?? null,
+          reading: m.reading ? { ...m.reading } : null,
+          next_submission: computeOfflineNextSubmission(
+            m.meter_id,
+            baseAptCanSubmit,
+            memCanSubmit,
+          ),
+        })),
+      }
+    })
 
     return {
       period: { ...period },
@@ -611,6 +625,11 @@ export async function handleOfflineMeters(ctx) {
       throw makeOfflineError(403, 'FORBIDDEN', 'Board or Accountant role required.')
     }
     const periodCode = matrixMatch[1]
+    const rawKind = urlObj.searchParams.get('kind')
+    const kindFilter = rawKind ? rawKind.trim().toUpperCase() : ''
+    if (kindFilter && !['APARTMENT', 'PARKING', 'GARAGE'].includes(kindFilter)) {
+      throw makeOfflineError(422, 'VALIDATION_ERROR', 'Invalid object kind filter.')
+    }
     const periods = getOfflinePeriods()
     const period = periods.find((p) => p.period_code === periodCode)
     if (!period) {
@@ -665,6 +684,7 @@ export async function handleOfflineMeters(ctx) {
       return {
         apartment_id: a.apartment_id,
         apartment_number: a.apartment_number,
+        apartment_kind: a.apartment_kind || 'APARTMENT',
         entrance: a.entrance,
         floor: a.floor,
         status: aptStatus,
@@ -711,7 +731,9 @@ export async function handleOfflineMeters(ctx) {
         },
       ],
       master_meters: JSON.parse(JSON.stringify(masterMeters)),
-      apartments,
+      apartments: kindFilter
+        ? apartments.filter((a) => (a.apartment_kind || 'APARTMENT') === kindFilter)
+        : apartments,
     }
   }
 
