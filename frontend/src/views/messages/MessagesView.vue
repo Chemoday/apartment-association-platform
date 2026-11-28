@@ -5,6 +5,7 @@ import { useSessionStore } from '@/stores/session.js'
 import { createApartmentThread, listApartmentThreads, getPost } from '@/api/endpoints/communication.js'
 import { listApartments } from '@/api/endpoints/property.js'
 import { formatDateTime, formatRelativeTime } from '@/utils/dates.js'
+import { objectName, objectShortName } from '@/utils/objectName.js'
 import { localizeError } from '@/locales/index.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
@@ -66,17 +67,17 @@ function resolveThreadApartmentLabel(thread) {
   if (targetId) {
     const fromMem = userMemberships.value.find((m) => m.apartment_id === targetId)
     if (fromMem?.apartment_number) {
-      return session.t('common.aptShort', { number: fromMem.apartment_number })
+      return objectShortName(fromMem.apartment_kind, fromMem.apartment_number, session.t)
     }
     const fromMap = apartmentsMap.value[targetId]
     if (fromMap) {
-      return session.t('common.aptShort', { number: fromMap })
+      return objectShortName(fromMap.apartment_kind, fromMap.apartment_number, session.t)
     }
   }
   const badgeLabel = String(thread?.author_badge?.display_label || '')
   const match = badgeLabel.match(/Apt\.?\s*([0-9A-Za-z-]+)/i)
   if (match?.[1]) {
-    return session.t('common.aptShort', { number: match[1] })
+    return objectShortName('APARTMENT', match[1], session.t)
   }
   return session.t('messages.apartmentThreadBadge')
 }
@@ -153,12 +154,18 @@ async function fetchInbox() {
     const nextMap = {}
     for (const m of userMemberships.value) {
       if (m.apartment_id && m.apartment_number) {
-        nextMap[m.apartment_id] = m.apartment_number
+        nextMap[m.apartment_id] = {
+          apartment_number: m.apartment_number,
+          apartment_kind: m.apartment_kind,
+        }
       }
     }
     if (aptsRes?.apartments && Array.isArray(aptsRes.apartments)) {
       for (const a of aptsRes.apartments) {
-        nextMap[a.apartment_id] = a.apartment_number
+        nextMap[a.apartment_id] = {
+          apartment_number: a.apartment_number,
+          apartment_kind: a.apartment_kind,
+        }
       }
     }
     apartmentsMap.value = nextMap
@@ -353,7 +360,13 @@ watch(
             v-if="userMemberships.length === 1"
             class="px-2.5 py-1 rounded-lg bg-surface-container text-on-surface text-xs font-mono font-semibold"
           >
-            {{ session.t('common.aptShort', { number: userMemberships[0].apartment_number }) }}
+            {{
+              objectShortName(
+                userMemberships[0].apartment_kind,
+                userMemberships[0].apartment_number,
+                session.t,
+              )
+            }}
           </span>
         </div>
 
@@ -372,7 +385,7 @@ watch(
                 :key="m.membership_id"
                 :value="m.apartment_id"
               >
-                {{ session.t('common.apartmentNumber', { number: m.apartment_number }) }} ({{ m.relation_type }})
+                {{ objectName(m.apartment_kind, m.apartment_number, session.t) }} ({{ m.relation_type }})
               </option>
             </select>
           </div>

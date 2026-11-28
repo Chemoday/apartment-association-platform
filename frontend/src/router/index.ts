@@ -3,6 +3,7 @@ import { APP_ROUTES } from './routes.js'
 import { createAuthGuard } from './access.js'
 import { applyRouteA11yMetadata } from './title.js'
 import { useSessionStore } from '@/stores/session.js'
+import { isSafeHashSelector } from '@/utils/safeUrls.js'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -18,7 +19,7 @@ const router = createRouter({
     },
   ],
   scrollBehavior(to, _from, savedPosition) {
-    if (to.hash) {
+    if (isSafeHashSelector(to.hash)) {
       return { el: to.hash, behavior: 'smooth' }
     }
     if (savedPosition) return savedPosition

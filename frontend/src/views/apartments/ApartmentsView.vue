@@ -3,6 +3,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { listApartments } from '@/api/endpoints/property.js'
+import {
+  formatBadgeObjectToken,
+  formatObjectArea,
+  formatObjectLocation,
+  objectName,
+} from '@/utils/objectName.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const router = useRouter()
@@ -44,6 +50,12 @@ function isEmptyApartment(apt) {
   )
 }
 
+function objectBadgeText(apt) {
+  const kind = apt.apartment_kind || 'APARTMENT'
+  if (kind === 'APARTMENT') return apt.apartment_number
+  return formatBadgeObjectToken(kind, apt.apartment_number)
+}
+
 const entrances = computed(() => {
   const set = new Set()
   for (const apt of apartments.value) {
@@ -61,7 +73,13 @@ const filteredApartments = computed(() => {
     const empty = isEmptyApartment(apt)
     if (occupancyFilter.value === 'OCCUPIED' && empty) return false
     if (occupancyFilter.value === 'EMPTY' && !empty) return false
-    if (q && !String(apt.apartment_number || '').toLowerCase().includes(q)) return false
+    if (q) {
+      const numMatch = String(apt.apartment_number || '').toLowerCase().includes(q)
+      const nameMatch = objectName(apt.apartment_kind, apt.apartment_number, session.t)
+        .toLowerCase()
+        .includes(q)
+      if (!numMatch && !nameMatch) return false
+    }
     return true
   })
 })
@@ -395,27 +413,25 @@ watch(
                         : 'bg-primary-container text-on-primary'
                     "
                   >
-                    {{ apt.apartment_number }}
+                    {{ objectBadgeText(apt) }}
                   </div>
                   <div>
                     <h2 class="font-title-md text-title-md font-bold text-on-surface group-hover:text-primary transition-colors">
-                      {{ session.t('apartments.apartmentTitle', { number: apt.apartment_number }) }}
+                      {{ objectName(apt.apartment_kind, apt.apartment_number, session.t) }}
                     </h2>
-                    <p class="text-xs text-on-surface-variant">
-                      {{ session.t('apartments.entranceNumber', { entrance: apt.entrance }) }}
-                      ·
-                      {{ session.t('apartments.floorNumber', { floor: apt.floor }) }}
+                    <p v-if="formatObjectLocation(apt, session.t)" class="text-xs text-on-surface-variant">
+                      {{ formatObjectLocation(apt, session.t) }}
                     </p>
                   </div>
                 </div>
 
-                <!-- Heated Area (strictly string) -->
-                <div class="text-right shrink-0">
+                <!-- Area (hidden when null) -->
+                <div v-if="formatObjectArea(apt.area_m2)" class="text-right shrink-0">
                   <div class="text-[11px] font-label-md text-on-surface-variant uppercase">
                     {{ session.t('apartments.areaLabel') }}
                   </div>
                   <div class="font-mono text-xs font-bold text-on-surface">
-                    {{ apt.area_m2 }} {{ session.t('apartments.areaUnit') }}
+                    {{ formatObjectArea(apt.area_m2) }}
                   </div>
                 </div>
               </div>
@@ -479,12 +495,12 @@ watch(
         <div
           v-else
           data-testid="apartments-compact-table"
-          class="bg-surface-container-lowest border border-surface-container rounded-2xl overflow-hidden shadow-xs"
+          class="bg-surface-container-lowest border border-outline-variant/45 rounded-[var(--radius-card)] overflow-hidden shadow-card"
         >
           <div class="overflow-x-auto">
-            <table class="w-full text-left text-xs border-collapse">
+            <table class="w-full min-w-[760px] text-left text-xs border-collapse">
               <thead>
-                <tr class="bg-surface-container-low border-b border-surface-container text-on-surface-variant font-semibold">
+                <tr class="bg-surface-container-low border-b border-outline-variant/40 text-on-surface-variant font-semibold">
                   <th class="py-2.5 px-4 font-label-md">{{ session.t('apartments.title') }}</th>
                   <th class="py-2.5 px-4 font-label-md">{{ session.t('apartments.filterEntrance') }}</th>
                   <th class="py-2.5 px-4 font-label-md">{{ session.t('common.floorEntrance').split('•')[0].trim() }}</th>
@@ -495,7 +511,7 @@ watch(
                   <th class="py-2.5 px-4 font-label-md text-right">{{ session.t('common.preview') }}</th>
                 </tr>
               </thead>
-              <tbody class="divide-y divide-surface-container">
+              <tbody class="divide-y divide-outline-variant/35">
                 <tr
                   v-for="apt in paginatedApartments"
                   :key="apt.apartment_id"
@@ -512,19 +528,19 @@ watch(
                             : 'bg-primary-container text-on-primary'
                         "
                       >
-                        {{ apt.apartment_number }}
+                        {{ objectBadgeText(apt) }}
                       </span>
-                      <span>{{ session.t('apartments.apartmentTitle', { number: apt.apartment_number }) }}</span>
+                      <span>{{ objectName(apt.apartment_kind, apt.apartment_number, session.t) }}</span>
                     </div>
                   </td>
                   <td class="py-2.5 px-4 text-on-surface-variant">
-                    {{ session.t('apartments.entranceNumber', { entrance: apt.entrance }) }}
+                    {{ apt.entrance != null ? session.t('apartments.entranceNumber', { entrance: apt.entrance }) : '—' }}
                   </td>
                   <td class="py-2.5 px-4 text-on-surface-variant">
-                    {{ session.t('apartments.floorNumber', { floor: apt.floor }) }}
+                    {{ apt.floor != null ? session.t('apartments.floorNumber', { floor: apt.floor }) : '—' }}
                   </td>
                   <td class="py-2.5 px-4 text-right font-mono font-semibold text-on-surface">
-                    {{ apt.area_m2 }} {{ session.t('apartments.areaUnit') }}
+                    {{ formatObjectArea(apt.area_m2) || '—' }}
                   </td>
                   <td class="py-2.5 px-4 text-center font-mono">
                     <span :class="apt.owner_count > 0 ? 'text-on-surface font-semibold' : 'text-on-surface-variant/40'">

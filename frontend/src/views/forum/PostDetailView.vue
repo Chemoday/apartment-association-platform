@@ -15,6 +15,7 @@ import {
 } from '@/api/endpoints/communication.js'
 import { localizeError } from '@/locales/index.js'
 import { formatDateTime } from '@/utils/dates.js'
+import { formatTargetScopeLabel } from '@/utils/objectName.js'
 import {
   canEditPost,
   formatHiddenByBoardBanner,
@@ -140,16 +141,7 @@ const categoryTone = computed(() => {
   return 'neutral'
 })
 
-const targetScopeLabel = computed(() => {
-  if (!post.value) return ''
-  if (post.value.target_scope === 'ENTRANCE' && post.value.target_entrance) {
-    return session.t('forum.targetEntrance', { number: post.value.target_entrance })
-  }
-  if (post.value.target_scope === 'APARTMENT_LIST') {
-    return session.t('forum.targetApartments')
-  }
-  return session.t('forum.targetAllBuilding')
-})
+const targetScopeLabel = computed(() => formatTargetScopeLabel(post.value, session.t))
 
 const authorInitial = computed(() => {
   const label = post.value?.author_badge?.display_label || '?'
@@ -847,6 +839,7 @@ onMounted(() => {
             v-if="!post.hidden_at"
             :key="post.id"
             :post-id="post.id"
+            :post-target="post"
             :disabled="post.comments_enabled === false"
             @added="loadPost({ silent: true })"
           />

@@ -3,6 +3,8 @@
  * Calendar date arithmetic, recurrence rules, occurrence calculations, and validation.
  */
 
+import type { ObjectKind } from '../api/schema.js'
+
 export const PERIOD_UNITS = ['DAY', 'MONTH', 'YEAR']
 export const TASK_STATUSES = ['ACTIVE', 'PAUSED', 'ARCHIVED']
 export const OCCURRENCE_STATES = ['UPCOMING', 'DUE', 'OVERDUE', 'PAUSED']
@@ -26,6 +28,7 @@ export interface MaintenanceNoticeSpec {
   target_scope: string
   target_entrance: number | null
   target_apartment_ids: string[] | null
+  target_kinds?: Array<'APARTMENT' | 'PARKING' | 'GARAGE'> | null
   comments_enabled: boolean
 }
 
@@ -95,6 +98,7 @@ export interface MaintenanceNoticeDraftInput {
   target_scope?: unknown
   target_entrance?: unknown
   target_apartment_ids?: unknown
+  target_kinds?: unknown
   comments_enabled?: unknown
 }
 
@@ -144,6 +148,7 @@ export interface MaintenancePostLike {
   target_scope?: string
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: Array<'APARTMENT' | 'PARKING' | 'GARAGE'> | null
   is_active?: boolean
   comments_enabled?: boolean
   created_at?: string
@@ -158,6 +163,7 @@ export interface MaintenanceNotificationEvent {
   target_scope?: string
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: Array<'APARTMENT' | 'PARKING' | 'GARAGE'> | null
   author_user_id?: string
   created_at: string
 }
@@ -181,6 +187,7 @@ export interface PublishableMaintenanceNotice {
   target_scope: string
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: ObjectKind[] | null
   comments_enabled?: boolean
 }
 
@@ -437,7 +444,9 @@ export function validateTaskDraft(
         : 'MAINTENANCE'
     const targetScope =
       typeof n.target_scope === 'string' &&
-      ['ALL_BUILDING', 'ENTRANCE', 'APARTMENT_LIST'].includes(n.target_scope)
+      ['ALL_BUILDING', 'ALL_OBJECTS', 'KINDS', 'ENTRANCE', 'APARTMENT_LIST'].includes(
+        n.target_scope,
+      )
         ? n.target_scope
         : 'ALL_BUILDING'
 
@@ -455,6 +464,7 @@ export function validateTaskDraft(
 
     let targetEntrance: number | null = null
     let targetApartmentIds: string[] | null = null
+    let targetKinds: Array<'APARTMENT' | 'PARKING' | 'GARAGE'> | null = null
 
     if (targetScope === 'ENTRANCE') {
       const ent = Number(n.target_entrance)
@@ -472,6 +482,24 @@ export function validateTaskDraft(
       } else {
         targetApartmentIds = aptIds
       }
+    } else if (targetScope === 'KINDS') {
+      const validKinds = Array.isArray(n.target_kinds)
+        ? Array.from(
+            new Set(
+              n.target_kinds
+                .map((k) => String(k || '').toUpperCase())
+                .filter(
+                  (k): k is 'APARTMENT' | 'PARKING' | 'GARAGE' =>
+                    k === 'APARTMENT' || k === 'PARKING' || k === 'GARAGE',
+                ),
+            ),
+          )
+        : []
+      if (validKinds.length === 0) {
+        errors.notice_target = 'INVALID_TARGET_KINDS'
+      } else {
+        targetKinds = validKinds
+      }
     }
 
     cleanNotice = {
@@ -481,6 +509,7 @@ export function validateTaskDraft(
       target_scope: targetScope,
       target_entrance: targetEntrance,
       target_apartment_ids: targetApartmentIds,
+      ...(targetScope === 'KINDS' ? { target_kinds: targetKinds } : {}),
       comments_enabled: Boolean(n.comments_enabled),
     }
   }
@@ -1608,6 +1637,7 @@ export function publishMaintenanceTasksInStore({
               target_scope: task.notice.target_scope,
               target_entrance: task.notice.target_entrance,
               target_apartment_ids: task.notice.target_apartment_ids ? [...task.notice.target_apartment_ids] : null,
+              target_kinds: task.notice.target_kinds ? [...task.notice.target_kinds] : null,
               is_active: true,
               comments_enabled: task.notice.comments_enabled !== false,
               created_at: nowIso,
@@ -1627,6 +1657,7 @@ export function publishMaintenanceTasksInStore({
                 target_scope: task.notice.target_scope,
                 target_entrance: task.notice.target_entrance,
                 target_apartment_ids: task.notice.target_apartment_ids,
+                target_kinds: task.notice.target_kinds ?? null,
                 author_user_id: authorUserId,
                 created_at: nowIso,
               })

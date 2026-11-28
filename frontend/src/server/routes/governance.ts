@@ -2,6 +2,7 @@ import type { SeedUser } from '../state.js';
 import { type RouteContext, sendJson, sendError, readBody } from '../http.js';
 import {
   pollsStore,
+  membershipsByUser,
   emitPollOpenedNotifications,
   refreshExpiredPolls,
   isPollVisibleToUser,
@@ -15,6 +16,7 @@ import {
   validateIncomingBallotAnswers,
   type InternalPoll,
 } from '../state.js';
+import { resolveAutoPickedObjectId } from '../../utils/objectName.js';
 
 export async function handleGovernanceRoutes(ctx: RouteContext<SeedUser>): Promise<boolean> {
   const { req, res, urlObj, pathname, method, user, isBoard } = ctx;
@@ -261,15 +263,21 @@ export async function handleGovernanceRoutes(ctx: RouteContext<SeedUser>): Promi
             return sendError(res, 403, 'NOT_ELIGIBLE', 'You cannot answer for this apartment.');
           }
           targetApartmentId = String(body.apartment_id);
-        } else if (answerableApartmentIds.length === 1) {
-          targetApartmentId = answerableApartmentIds[0];
         } else {
-          return sendError(
-            res,
-            422,
-            'VALIDATION_ERROR',
-            'Select which apartment is answering.'
+          const autoPicked = resolveAutoPickedObjectId(
+            answerableApartmentIds,
+            membershipsByUser[user.user_id] || []
           );
+          if (autoPicked) {
+            targetApartmentId = autoPicked;
+          } else {
+            return sendError(
+              res,
+              422,
+              'VALIDATION_ERROR',
+              'Select which apartment is answering.'
+            );
+          }
         }
       }
 

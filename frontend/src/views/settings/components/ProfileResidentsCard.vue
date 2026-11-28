@@ -13,6 +13,7 @@ import {
 } from '@/api/endpoints/invitations.js'
 import { localizeError } from '@/locales/index.js'
 import { formatShortDate } from '@/utils/dates.js'
+import { objectName } from '@/utils/objectName.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const props = defineProps({
@@ -342,7 +343,7 @@ async function confirmRemoveTenant() {
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-surface-container">
           <div>
             <h3 class="font-headline-md text-base font-bold text-on-surface">
-              {{ session.t('common.apartmentNumber', { number: m.apartment_number }) }}
+              {{ objectName(m.apartment_kind, m.apartment_number, session.t) }}
             </h3>
           </div>
 
@@ -499,8 +500,12 @@ async function confirmRemoveTenant() {
           <div class="flex items-center justify-between gap-2">
             <h3 class="font-headline-md text-lg font-bold text-on-surface">
               {{
-                session.t('profile.residents.inviteModalTitle', {
-                  number: inviteModalApt.apartment_number,
+                session.t('profile.residents.inviteObjectModalTitle', {
+                  object: objectName(
+                    inviteModalApt.apartment_kind,
+                    inviteModalApt.apartment_number,
+                    session.t,
+                  ),
                 })
               }}
             </h3>

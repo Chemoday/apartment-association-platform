@@ -155,6 +155,17 @@ export const useSessionStore = defineStore('session', () => {
 
   const memberships = computed<MembershipView[]>(() => me.value?.memberships || [])
 
+  const sharedAccess = computed<boolean>(() => {
+    if (!me.value) return false
+    if (typeof me.value.shared_access === 'boolean') return me.value.shared_access
+    return (me.value.memberships || []).some(
+      (m) =>
+        m.relation_type === 'OWNER' ||
+        m.apartment_kind === 'APARTMENT' ||
+        m.apartment_kind == null,
+    )
+  })
+
   const activeMembership = computed<MembershipView | null>(() => {
     if (!memberships.value.length) return null
     return (
@@ -197,6 +208,29 @@ export const useSessionStore = defineStore('session', () => {
       building.value?.total_area_m2 ??
       '329.20',
   )
+  const objectCounts = computed<Record<'APARTMENT' | 'PARKING' | 'GARAGE', number>>(() => {
+    const raw = building.value?.object_counts
+    if (raw && typeof raw === 'object') {
+      return {
+        APARTMENT: Number(raw.APARTMENT) || 0,
+        PARKING: Number(raw.PARKING) || 0,
+        GARAGE: Number(raw.GARAGE) || 0,
+      }
+    }
+    return {
+      APARTMENT: knownBuildingApartmentsCount.value ?? 0,
+      PARKING: 0,
+      GARAGE: 0,
+    }
+  })
+  const availableObjectKinds = computed<Array<'APARTMENT' | 'PARKING' | 'GARAGE'>>(() => {
+    const counts = objectCounts.value
+    const kinds: Array<'APARTMENT' | 'PARKING' | 'GARAGE'> = []
+    if (counts.APARTMENT > 0) kinds.push('APARTMENT')
+    if (counts.PARKING > 0) kinds.push('PARKING')
+    if (counts.GARAGE > 0) kinds.push('GARAGE')
+    return kinds
+  })
   const buildingRegistryFacts = computed<BuildingResponse['registry_facts']>(
     () => building.value?.registry_facts ?? null,
   )
@@ -721,8 +755,11 @@ export const useSessionStore = defineStore('session', () => {
     buildingRole,
     notificationLocale,
     memberships,
+    sharedAccess,
     activeMembership,
     selectedApartmentId,
+    objectCounts,
+    availableObjectKinds,
     lang,
     locale,
     supportedLocales: SUPPORTED_LOCALES,

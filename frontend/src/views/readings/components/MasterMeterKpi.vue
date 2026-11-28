@@ -30,6 +30,10 @@ const props = defineProps({
     type: String,
     default: 'OPEN_FOR_RESIDENTS',
   },
+  filteredByKind: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['master-saved', 'open-history'])
@@ -92,6 +96,16 @@ function handleMasterSaved(reading) {
 
 <template>
   <div>
+    <!-- Whole-building notice when matrix is filtered by object kind (#068) -->
+    <div
+      v-if="filteredByKind"
+      data-testid="master-kpi-whole-building-note"
+      class="mb-2.5 inline-flex items-center gap-1.5 rounded-lg bg-surface-container-low border border-surface-container px-3 py-1.5 text-xs text-on-surface-variant"
+    >
+      <span class="material-symbols-outlined text-[15px] text-primary shrink-0" aria-hidden="true">domain</span>
+      <span>{{ session.t('accounting.wholeBuildingBalancesNote') }}</span>
+    </div>
+
     <!-- CLEAN KPI STRIP (4 cards in one row matching chairman_view_streamlined_meter_matrix_accounting) -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-space-md mb-space-md">
       <!-- 1. Basement Intake (Main) -->

@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { sumMeterValues } from '@/utils/meterValue.js'
 import { formatMonthName, formatPeriodLabel } from '@/utils/dates.js'
 import { summarizeNextSubmissions } from '@/utils/nextSubmission.js'
+import { objectShortName } from '@/utils/objectName.js'
+import { canAccessIssues } from '@/router/access.js'
 import { useSessionStore } from '@/stores/session.js'
 
 const props = defineProps({
@@ -70,6 +72,10 @@ const activeMonthLabel = computed(() => {
   return code ? formatMonthName(code, session.lang, { capitalize: true }) : ''
 })
 
+const hasActiveMeters = computed(
+  () => Array.isArray(activeApartment.value?.meters) && activeApartment.value.meters.length > 0,
+)
+
 const periodName = computed(() =>
   props.period ? formatPeriodLabel(props.period.period_code, session.lang) : 'October 2026',
 )
@@ -88,9 +94,19 @@ const periodName = computed(() =>
             {{ session.t('dashboard.summary.monthlyUtilities') }}
             <template v-if="activeMonthLabel">· {{ activeMonthLabel }}</template>
           </span>
-          <span class="font-headline-lg text-headline-lg font-bold text-on-surface mt-1 font-numeric-display tabular-nums">
+          <span
+            v-if="hasActiveMeters"
+            class="font-headline-lg text-headline-lg font-bold text-on-surface mt-1 font-numeric-display tabular-nums"
+          >
             {{ waterConsumptionM3 }}
             <span class="font-body-md text-body-md text-on-surface-variant font-normal">m³</span>
+          </span>
+          <span
+            v-else
+            data-testid="dashboard-summary-no-meters"
+            class="font-headline-md text-lg font-bold text-on-surface-variant mt-1"
+          >
+            {{ session.t('dashboard.summary.noMetersForObject') }}
           </span>
         </div>
         <div class="w-10 h-10 rounded-lg bg-surface-container flex items-center justify-center text-primary">
@@ -98,7 +114,11 @@ const periodName = computed(() =>
         </div>
       </div>
       <div class="mt-space-md pt-space-sm bg-surface-container-low/50 -mx-space-md -mb-space-md px-space-md py-space-sm rounded-b-xl flex items-center justify-between">
-        <div class="flex items-center gap-1.5" :class="allMetersSubmitted ? 'text-secondary' : 'text-amber-700'">
+        <div
+          v-if="hasActiveMeters"
+          class="flex items-center gap-1.5"
+          :class="allMetersSubmitted ? 'text-secondary' : 'text-amber-700'"
+        >
           <span class="material-symbols-outlined text-[16px]">
             {{ allMetersSubmitted ? 'check_circle' : 'schedule' }}
           </span>
@@ -106,6 +126,12 @@ const periodName = computed(() =>
             {{ submittedCount }}/{{ totalMeterCount }} {{ session.t('dashboard.summary.metersReported') }}
           </span>
         </div>
+        <span
+          v-else
+          class="font-label-md text-label-md text-on-surface-variant"
+        >
+          {{ session.t('dashboard.summary.noMetersObjectHint') }}
+        </span>
         <button
           type="button"
           class="font-label-md text-label-md text-primary font-semibold hover:underline"
@@ -148,7 +174,10 @@ const periodName = computed(() =>
     </div>
 
     <!-- 2. Maintenance & Work Orders (Active building repairs / issues) -->
-    <div class="bg-surface-container-lowest rounded-xl p-space-md shadow-xs border border-surface-container flex flex-col justify-between group hover:shadow-md transition-shadow">
+    <div
+      v-if="canAccessIssues(session)"
+      class="bg-surface-container-lowest rounded-xl p-space-md shadow-xs border border-surface-container flex flex-col justify-between group hover:shadow-md transition-shadow"
+    >
       <div class="flex items-start justify-between">
         <div class="flex flex-col">
           <span class="font-label-md text-label-md uppercase tracking-wider text-on-surface-variant font-semibold">
@@ -257,7 +286,13 @@ const periodName = computed(() =>
           <span>
             {{
               activeApartment
-                ? session.t('dashboard.summary.aptArrearsZero', { number: activeApartment.apartment_number })
+                ? session.t('dashboard.summary.objectArrearsZero', {
+                    object: objectShortName(
+                      activeApartment.apartment_kind,
+                      activeApartment.apartment_number,
+                      session.t,
+                    ),
+                  })
                 : session.t('dashboard.summary.unitsBalanced')
             }}
           </span>

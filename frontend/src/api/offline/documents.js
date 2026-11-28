@@ -9,6 +9,7 @@ import {
 } from './state.js'
 import {
   addDocumentInStore,
+  canUserAccessDocumentsModule,
   checkDocumentUploadPreflight,
   deleteDocumentInStore,
   editDocumentInStore,
@@ -42,11 +43,8 @@ export async function handleOfflineDocuments(ctx) {
       headers?.['x-simulate-uploads-disabled'] === '1'
 
     if (pathname === '/documents/upload-options' && method === 'GET') {
-      if (
-        !['CHAIRMAN', 'BOARD', 'ACCOUNTANT'].includes(user.building_role) &&
-        userMems.length === 0
-      ) {
-        throw makeOfflineError(403, 'FORBIDDEN', 'Only active members and staff can access documents.')
+      if (!canUserAccessDocumentsModule(user, userMems)) {
+        throw makeOfflineError(403, 'FORBIDDEN', 'Only active members with shared access and staff can access documents.')
       }
       return getUploadOptionsForUser(user, { uploadsDisabled: simulatedDocUploadsDisabled })
     }

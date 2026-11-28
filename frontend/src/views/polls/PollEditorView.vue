@@ -52,6 +52,7 @@ const form = reactive({
   target_scope: 'ALL_BUILDING',
   target_entrance: 1,
   target_apartment_ids: [],
+  target_kinds: [],
   eligibility: 'RESIDENTS',
   unit: 'APARTMENT',
   closes_date: defaultDeadlineDate(),
@@ -95,6 +96,7 @@ const targetModel = computed({
       target_scope: form.target_scope,
       target_entrance: form.target_entrance,
       target_apartment_ids: form.target_apartment_ids,
+      target_kinds: form.target_kinds,
     }
   },
   set(val) {
@@ -102,6 +104,7 @@ const targetModel = computed({
     form.target_scope = val.target_scope || 'ALL_BUILDING'
     form.target_entrance = val.target_entrance ?? 1
     form.target_apartment_ids = Array.isArray(val.target_apartment_ids) ? val.target_apartment_ids : []
+    form.target_kinds = Array.isArray(val.target_kinds) ? val.target_kinds : []
     delete fieldErrors.target
   },
 })
@@ -183,6 +186,9 @@ async function loadInitialData() {
       form.target_entrance = existingPoll.target_entrance || 1
       form.target_apartment_ids = Array.isArray(existingPoll.target_apartment_ids)
         ? [...existingPoll.target_apartment_ids]
+        : []
+      form.target_kinds = Array.isArray(existingPoll.target_kinds)
+        ? [...existingPoll.target_kinds]
         : []
       form.eligibility = existingPoll.eligibility || 'RESIDENTS'
       form.unit = existingPoll.unit || 'APARTMENT'
@@ -497,7 +503,7 @@ onBeforeUnmount(() => {
         data-testid="poll-editor-privacy-note"
         class="flex items-start gap-2.5 rounded-xl border px-4 py-3 text-xs"
         :class="
-          form.target_scope !== 'ALL_BUILDING'
+          form.target_scope !== 'ALL_BUILDING' && form.target_scope !== 'ALL_OBJECTS'
             ? 'border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200'
             : 'border-surface-container bg-surface-container-low text-on-surface-variant'
         "

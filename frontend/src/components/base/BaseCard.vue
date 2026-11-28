@@ -11,7 +11,7 @@ withDefaults(
 
 <template>
   <div
-    class="bg-surface-container-lowest rounded-xl border border-surface-container shadow-xs"
+    class="bg-surface-container-lowest rounded-[var(--radius-card)] border border-outline-variant/45 shadow-card"
     :class="padding"
   >
     <slot />

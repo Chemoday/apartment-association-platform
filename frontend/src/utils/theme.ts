@@ -50,12 +50,23 @@ export interface CreateThemeTokensInput {
   primaryFixed: string
   primaryFixedDim?: string
   onPrimaryFixed?: string
+  onPrimaryFixedVariant?: string
   secondary: string
   onSecondary?: string
   secondaryContainer: string
   onSecondaryContainer: string
   secondaryFixed?: string
+  secondaryFixedDim?: string
   onSecondaryFixed?: string
+  onSecondaryFixedVariant?: string
+  tertiary?: string
+  onTertiary?: string
+  tertiaryContainer?: string
+  onTertiaryContainer?: string
+  tertiaryFixed?: string
+  tertiaryFixedDim?: string
+  onTertiaryFixed?: string
+  onTertiaryFixedVariant?: string
   inverseSurface?: string
   inverseOnSurface?: string
   error?: string
@@ -113,8 +124,8 @@ function getLuminance(hex: string): number {
 
 function pickContrastOn(
   bgHex: string,
-  darkInk: string = '#0f172a',
-  lightInk: string = '#f8fafc',
+  darkInk: string = '#221d17',
+  lightInk: string = '#fbf8f3',
 ): string {
   return getLuminance(bgHex) > 0.36 ? darkInk : lightInk
 }
@@ -141,19 +152,33 @@ function createTokens({
   primaryFixed,
   primaryFixedDim,
   onPrimaryFixed,
+  onPrimaryFixedVariant,
   secondary,
   onSecondary = '#ffffff',
   secondaryContainer,
   onSecondaryContainer,
   secondaryFixed,
+  secondaryFixedDim,
   onSecondaryFixed,
+  onSecondaryFixedVariant,
+  tertiary,
+  onTertiary = '#ffffff',
+  tertiaryContainer,
+  onTertiaryContainer,
+  tertiaryFixed,
+  tertiaryFixedDim,
+  onTertiaryFixed,
+  onTertiaryFixedVariant,
   inverseSurface,
   inverseOnSurface,
-  error = '#ba1a1a',
+  error = '#b3261e',
   onError = '#ffffff',
-  errorContainer = '#ffdad6',
-  onErrorContainer = '#93000a',
+  errorContainer = '#fce8e6',
+  onErrorContainer = '#831b15',
 }: CreateThemeTokensInput): Record<string, string> {
+  const resolvedTertiary = tertiary || secondary
+  const resolvedTertiaryContainer = tertiaryContainer || secondaryContainer
+  const resolvedOnTertiaryContainer = onTertiaryContainer || onSecondaryContainer
   return {
     '--color-surface': surface,
     '--color-surface-dim': surfaceDim || surfaceLow,
@@ -179,6 +204,10 @@ function createTokens({
     '--color-on-secondary': onSecondary,
     '--color-secondary-container': secondaryContainer,
     '--color-on-secondary-container': onSecondaryContainer,
+    '--color-tertiary': resolvedTertiary,
+    '--color-on-tertiary': onTertiary,
+    '--color-tertiary-container': resolvedTertiaryContainer,
+    '--color-on-tertiary-container': resolvedOnTertiaryContainer,
     '--color-error': error,
     '--color-on-error': onError,
     '--color-error-container': errorContainer,
@@ -186,11 +215,15 @@ function createTokens({
     '--color-primary-fixed': primaryFixed,
     '--color-primary-fixed-dim': primaryFixedDim || primaryFixed,
     '--color-on-primary-fixed': onPrimaryFixed || onSurface,
-    '--color-on-primary-fixed-variant': onSurfaceVariant,
+    '--color-on-primary-fixed-variant': onPrimaryFixedVariant || onSurfaceVariant,
     '--color-secondary-fixed': secondaryFixed || secondaryContainer,
-    '--color-secondary-fixed-dim': secondaryContainer,
+    '--color-secondary-fixed-dim': secondaryFixedDim || secondaryContainer,
     '--color-on-secondary-fixed': onSecondaryFixed || onSecondaryContainer,
-    '--color-on-secondary-fixed-variant': onSecondaryContainer,
+    '--color-on-secondary-fixed-variant': onSecondaryFixedVariant || onSecondaryContainer,
+    '--color-tertiary-fixed': tertiaryFixed || resolvedTertiaryContainer,
+    '--color-tertiary-fixed-dim': tertiaryFixedDim || resolvedTertiaryContainer,
+    '--color-on-tertiary-fixed': onTertiaryFixed || resolvedOnTertiaryContainer,
+    '--color-on-tertiary-fixed-variant': onTertiaryFixedVariant || resolvedOnTertiaryContainer,
     '--color-background': surface,
     '--color-on-background': onSurface,
     '--color-surface-variant': surfaceHighest,
@@ -204,34 +237,49 @@ export const THEME_PRESETS: ThemePreset[] = [
   {
     id: 'default',
     category: 'nordic',
-    name: 'Nordic Fjord',
-    subtitle: 'Original crisp ice-blue surfaces with deep navy and emerald accents',
-    swatches: ['#f8f9ff', '#e5eeff', '#0f172a', '#006c4a'],
+    name: 'Warm Nordic',
+    subtitle: 'Warm Nordic editorial surfaces with deep pine forest and terracotta accents',
+    swatches: ['#fbf8f3', '#f4efe6', '#1e4d3b', '#a64422'],
     tokens: createTokens({
-      surface: '#f8f9ff',
-      surfaceDim: '#cbdbf5',
+      surface: '#fbf8f3',
+      surfaceDim: '#d4c8b4',
       surfaceLowest: '#ffffff',
-      surfaceLow: '#eff4ff',
-      surfaceContainer: '#e5eeff',
-      surfaceHigh: '#dce9ff',
-      surfaceHighest: '#d3e4fe',
-      onSurface: '#0b1c30',
-      onSurfaceVariant: '#45464d',
-      outline: '#76777d',
-      outlineVariant: '#c6c6cd',
-      primary: '#0f172a',
-      primaryContainer: '#131b2e',
-      onPrimaryContainer: '#7c839b',
-      primaryFixed: '#dae2fd',
-      primaryFixedDim: '#bec6e0',
-      onPrimaryFixed: '#131b2e',
-      secondary: '#006c4a',
-      secondaryContainer: '#82f5c1',
-      onSecondaryContainer: '#00714e',
-      secondaryFixed: '#85f8c4',
-      onSecondaryFixed: '#002114',
-      inverseSurface: '#213145',
-      inverseOnSurface: '#eaf1ff',
+      surfaceLow: '#f4efe6',
+      surfaceContainer: '#ede6da',
+      surfaceHigh: '#e4dbcc',
+      surfaceHighest: '#dbd0be',
+      onSurface: '#221d17',
+      onSurfaceVariant: '#574f45',
+      outline: '#756b5e',
+      outlineVariant: '#d5cbb9',
+      primary: '#1e4d3b',
+      primaryContainer: '#15382b',
+      onPrimaryContainer: '#d2e5dc',
+      primaryFixed: '#d9eae1',
+      primaryFixedDim: '#b8d5c7',
+      onPrimaryFixed: '#123226',
+      onPrimaryFixedVariant: '#2b5b47',
+      secondary: '#a64422',
+      secondaryContainer: '#f8e2d7',
+      onSecondaryContainer: '#772b11',
+      secondaryFixed: '#f5d6c6',
+      secondaryFixedDim: '#e6b8a2',
+      onSecondaryFixed: '#3a1205',
+      onSecondaryFixedVariant: '#772b11',
+      tertiary: '#6e3824',
+      onTertiary: '#ffffff',
+      tertiaryContainer: '#f6e3da',
+      onTertiaryContainer: '#582716',
+      tertiaryFixed: '#f6e3da',
+      tertiaryFixedDim: '#e6c4b5',
+      onTertiaryFixed: '#3a170b',
+      onTertiaryFixedVariant: '#6e3824',
+      inverseSurface: '#2a241d',
+      inverseOnSurface: '#f6f1e9',
+      error: '#b3261e',
+      onError: '#ffffff',
+      errorContainer: '#fce8e6',
+      onErrorContainer: '#831b15',
     }),
   },
   {
@@ -1601,7 +1649,7 @@ export function getRotatedSwatches(
 ): string[] {
   const swatches = Array.isArray(preset?.swatches)
     ? preset.swatches
-    : ['#f8f9fa', '#eff4ff', '#0f172a', '#005ac2']
+    : ['#fbf8f3', '#f4efe6', '#1e4d3b', '#a64422']
   const cycle = normalizeCycleIndex(rawCycleIndex)
   if (cycle === 0) {
     return [...swatches]
@@ -1761,6 +1809,7 @@ export function applyTheme(themeId?: string | null, rawCycleIndex?: number): str
     const root = document.documentElement
     root.dataset.theme = preset.id
     root.dataset.themeCycle = String(cycleIndex)
+    root.dataset.themeMode = getLuminance(tokens['--color-surface']) < 0.2 ? 'dark' : 'light'
     for (const [token, value] of Object.entries(tokens)) {
       root.style.setProperty(token, value)
     }

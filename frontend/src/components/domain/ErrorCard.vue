@@ -5,6 +5,7 @@ import { asApiErrorLike } from '@/api/client.js'
 import { useSessionStore } from '@/stores/session.js'
 import { localizeError } from '@/locales/index.js'
 import { buildDiagnosticReport } from '@/utils/telemetry.js'
+import AppIcon from '@/components/base/AppIcon.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -97,12 +98,12 @@ async function copyDiagnostics(): Promise<void> {
 
 <template>
   <div
-    class="bg-surface-container-lowest border border-error/30 rounded-xl p-space-md shadow-xs"
+    class="bg-surface-container-lowest border border-error/30 rounded-[var(--radius-card)] p-space-md shadow-card"
     role="alert"
   >
     <div class="flex items-start gap-3">
       <div class="w-8 h-8 rounded-full bg-error-container text-on-error-container flex items-center justify-center shrink-0">
-        <span class="material-symbols-outlined text-[18px]" aria-hidden="true">error</span>
+        <AppIcon name="error" :size="18" />
       </div>
       <div class="flex-1 min-w-0">
         <h4 class="font-label-lg text-label-lg font-bold text-error">
@@ -117,7 +118,7 @@ async function copyDiagnostics(): Promise<void> {
         <div class="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            class="bg-primary text-on-primary hover:bg-primary-container text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+            class="bg-primary text-on-primary hover:bg-primary-container text-xs font-semibold px-3 py-1.5 rounded-[var(--radius-control)] transition-colors cursor-pointer shadow-xs"
             @click="$emit('retry')"
           >
             {{ session.t('common.tryAgain') }}
@@ -125,12 +126,10 @@ async function copyDiagnostics(): Promise<void> {
           <button
             v-if="traceId || errorCode"
             type="button"
-            class="inline-flex items-center gap-1 border border-outline-variant text-on-surface-variant hover:bg-surface-container-low text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+            class="inline-flex items-center gap-1 border border-outline-variant/75 text-on-surface-variant hover:bg-surface-container-low text-xs font-semibold px-3 py-1.5 rounded-[var(--radius-control)] transition-colors cursor-pointer"
             @click="copyDiagnostics"
           >
-            <span class="material-symbols-outlined text-[14px]" aria-hidden="true">
-              {{ copied ? 'check' : 'content_copy' }}
-            </span>
+            <AppIcon :name="copied ? 'check' : 'content_copy'" :size="14" />
             <span>
               {{ copied ? session.t('common.copied') : session.t('common.copyDiagnostics') }}
             </span>

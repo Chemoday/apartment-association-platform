@@ -434,7 +434,7 @@ async function handleConfirmClearUrgent() {
               <RouterLink
                 :to="{ name: 'messages' }"
                 data-testid="decline-modal-messages-link"
-                class="inline-flex items-center gap-1 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                class="inline-flex items-center gap-1 rounded-[var(--radius-control)] bg-secondary px-3 py-1.5 text-xs font-semibold text-on-secondary hover:opacity-90"
               >
                 <span class="material-symbols-outlined text-[15px]">mail</span>
                 {{ session.t('issues.board.writeToApartment') }}
@@ -504,7 +504,7 @@ async function handleConfirmClearUrgent() {
               type="button"
               data-testid="confirm-clear-urgent-button"
               :disabled="isBoardActionBusy"
-              class="rounded-xl bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-amber-700 cursor-pointer disabled:opacity-60 transition-colors"
+              class="rounded-[var(--radius-control)] bg-secondary px-3.5 py-2 text-xs font-semibold text-on-secondary hover:opacity-90 cursor-pointer disabled:opacity-60 transition-colors"
               @click="handleConfirmClearUrgent"
             >
               {{ session.t('issues.board.confirmClearUrgentButton') }}

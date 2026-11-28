@@ -4,6 +4,12 @@ import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { formatSignedDelta, sumMeterValues } from '@/utils/meterValue.js'
 import { collectMeterStartOrigins } from '@/utils/matrixStarts.js'
+import {
+  formatBadgeObjectToken,
+  formatObjectLocation,
+  normalizeObjectKind,
+  objectName,
+} from '@/utils/objectName.js'
 import StatusChip from '@/components/domain/StatusChip.vue'
 
 const props = defineProps({
@@ -83,6 +89,20 @@ const firstReadingId = computed(() => {
 })
 
 const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
+
+const objectBadgeText = computed(() => {
+  const kind = normalizeObjectKind(props.apartment.apartment_kind)
+  if (kind === 'APARTMENT') return props.apartment.apartment_number
+  return formatBadgeObjectToken(kind, props.apartment.apartment_number)
+})
+
+const objectDisplayName = computed(() =>
+  objectName(props.apartment.apartment_kind, props.apartment.apartment_number, session.t),
+)
+
+const objectLocationText = computed(() =>
+  formatObjectLocation(props.apartment, session.t),
+)
 </script>
 
 <template>
@@ -100,7 +120,7 @@ const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
     <td class="py-space-md px-space-md">
       <div class="flex items-center gap-2.5">
         <span
-          class="w-7 h-7 rounded flex items-center justify-center font-bold font-label-md text-label-md shrink-0"
+          class="min-w-7 h-7 px-1 rounded flex items-center justify-center font-bold font-label-md text-label-md shrink-0"
           :class="
             isAnomaly
               ? 'bg-error text-on-error'
@@ -109,12 +129,12 @@ const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
                 : 'bg-surface-container text-on-surface'
           "
         >
-          {{ apartment.apartment_number }}
+          {{ objectBadgeText }}
         </span>
         <div>
           <div class="flex items-center gap-1.5">
             <span class="font-label-lg text-label-lg text-on-surface block leading-tight font-semibold">
-              {{ session.t('matrix.unitLabel', { number: apartment.apartment_number }) }}
+              {{ objectDisplayName }}
             </span>
             <span
               v-if="isMyApartment"
@@ -123,8 +143,11 @@ const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
               {{ session.t('matrix.myUnitBadge') }}
             </span>
           </div>
-          <span class="text-on-surface-variant font-label-md text-[11px]">
-            {{ session.t('common.floorEntrance', { floor: apartment.floor, entrance: apartment.entrance }) }}
+          <span
+            v-if="objectLocationText"
+            class="text-on-surface-variant font-label-md text-[11px]"
+          >
+            {{ objectLocationText }}
           </span>
         </div>
       </div>
@@ -272,7 +295,7 @@ const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
           $emit(
             'open-history',
             firstReadingId,
-            session.t('matrix.consumptionReviewTitle', { number: apartment.apartment_number }),
+            session.t('matrix.objectConsumptionReviewTitle', { object: objectDisplayName }),
           )
         "
       >
@@ -288,7 +311,7 @@ const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
         <button
           v-if="firstReadingId"
           type="button"
-          :aria-label="session.t('matrix.viewHistoryAria', { number: apartment.apartment_number })"
+          :aria-label="session.t('matrix.viewObjectHistoryAria', { object: objectDisplayName })"
           class="p-1.5 rounded-lg transition-colors"
           :class="
             isAnomaly
@@ -299,7 +322,7 @@ const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
             $emit(
               'open-history',
               firstReadingId,
-              session.t('matrix.unitLabel', { number: apartment.apartment_number }),
+              objectDisplayName,
             )
           "
         >
@@ -312,7 +335,7 @@ const isAnomaly = computed(() => props.apartment.status === 'ANOMALY_CONFIRMED')
           v-if="canSubmitAnyMeter"
           type="button"
           :data-testid="`matrix-edit-apt-${apartment.apartment_number}`"
-          :aria-label="session.t('matrix.editReadingsAria', { number: apartment.apartment_number })"
+          :aria-label="session.t('matrix.editObjectReadingsAria', { object: objectDisplayName })"
           class="p-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors"
           @click="$emit('edit-apartment', apartment)"
         >

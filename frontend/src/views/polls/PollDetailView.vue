@@ -20,6 +20,7 @@ import {
   validateBallotDraft,
 } from '@/utils/pollValidation.js'
 import { localizeError } from '@/locales/index.js'
+import { formatTargetScopeLabel, objectName, resolveAutoPickedObjectId } from '@/utils/objectName.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 import PollResults from '@/views/polls/components/PollResults.vue'
 
@@ -63,9 +64,10 @@ const answerableApartmentOptions = computed(() => {
     return {
       apartment_id: aptId,
       label: found?.apartment_number
-        ? session.t('common.apartmentNumber', { number: found.apartment_number })
+        ? objectName(found.apartment_kind, found.apartment_number, session.t)
         : aptId,
       apartment_number: found?.apartment_number || null,
+      apartment_kind: found?.apartment_kind || null,
     }
   })
 })
@@ -113,20 +115,13 @@ function formatApartmentLabel(apartmentId) {
   if (!apartmentId) return ''
   const mem = userMemberships.value.find((m) => m.apartment_id === apartmentId)
   if (mem?.apartment_number) {
-    return session.t('common.apartmentNumber', { number: mem.apartment_number })
+    return objectName(mem.apartment_kind, mem.apartment_number, session.t)
   }
   return ''
 }
 
 function formatTargetScope(p) {
-  if (!p) return ''
-  if (p.target_scope === 'ENTRANCE' && p.target_entrance != null) {
-    return session.t('polls.target.entrance', { entrance: p.target_entrance })
-  }
-  if (p.target_scope === 'APARTMENT_LIST') {
-    return session.t('polls.target.selectedApartments')
-  }
-  return session.t('polls.target.allBuilding')
+  return formatTargetScopeLabel(p, session.t)
 }
 
 function statusBadgeClass(status) {
@@ -297,7 +292,9 @@ async function fetchPollDetail(preserveBanner = false) {
     ) {
       const activeAptId = session.activeMembership?.apartment_id
       selectedApartmentId.value =
-        activeAptId && aptIds.includes(activeAptId) ? activeAptId : aptIds[0]
+        (activeAptId && aptIds.includes(activeAptId) ? activeAptId : null) ||
+        resolveAutoPickedObjectId(aptIds, userMemberships.value) ||
+        aptIds[0]
     }
     syncDraftFromBallot()
   } catch (err) {

@@ -16,6 +16,7 @@ import {
 } from '@/api/endpoints/communication.js'
 import { localizeError } from '@/locales/index.js'
 import { formatDateTime } from '@/utils/dates.js'
+import { formatTargetScopeLabel } from '@/utils/objectName.js'
 import {
   canEditPost,
   formatHiddenByBoardBanner,
@@ -44,7 +45,10 @@ import ErrorCard from '@/components/domain/ErrorCard.vue'
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
-const { canDeleteForumTopic, canModerateForum } = useRole()
+const { canDeleteForumTopic, canModerateForum, canPublishOfficial } = useRole()
+const canStartForumTopic = computed(
+  () => canPublishOfficial.value || (session.memberships?.length || 0) > 0,
+)
 
 const posts = ref([])
 const loading = ref(false)
@@ -167,14 +171,7 @@ function getCategoryTone(post) {
 }
 
 function getTargetScopeLabel(post) {
-  if (!post) return ''
-  if (post.target_scope === 'ENTRANCE' && post.target_entrance) {
-    return session.t('forum.targetEntrance', { number: post.target_entrance })
-  }
-  if (post.target_scope === 'APARTMENT_LIST') {
-    return session.t('forum.targetApartments')
-  }
-  return session.t('forum.targetAllBuilding')
+  return formatTargetScopeLabel(post, session.t)
 }
 
 let loadPostsSeq = 0
@@ -819,8 +816,13 @@ watch(
         <!-- Compact Privacy Signature Popover Chip (for Residents with an Apartment Membership) -->
         <ForumPrivacyChip @changed="loadPosts" />
 
-        <!-- New Post Button -->
-        <BaseButton variant="primary" size="sm" @click="composerOpen = true">
+        <!-- New Post Button (board or any active membership of any kind, #067) -->
+        <BaseButton
+          v-if="canStartForumTopic"
+          variant="primary"
+          size="sm"
+          @click="composerOpen = true"
+        >
           <span class="material-symbols-outlined text-[17px]">edit_square</span>
           <span>{{ session.t('forum.newDiscussionBtn') }}</span>
         </BaseButton>
@@ -1143,6 +1145,7 @@ watch(
                   v-if="!selectedPostDetail.hidden_at"
                   :key="selectedPostDetail.id"
                   :post-id="selectedPostDetail.id"
+                  :post-target="selectedPostDetail"
                   :disabled="selectedPostDetail.comments_enabled === false"
                   @added="handleCommentAdded"
                 />

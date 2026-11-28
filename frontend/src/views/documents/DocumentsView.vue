@@ -13,6 +13,7 @@ import DocumentUploadModal from './components/DocumentUploadModal.vue'
 import DocumentEditModal from './components/DocumentEditModal.vue'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import ForbiddenView from '@/views/errors/ForbiddenView.vue'
 
 const DOCUMENTS_PAGE_SIZE = 50
 
@@ -242,6 +243,10 @@ watch(
   },
 )
 
+const isForbidden = computed(
+  () => error.value?.status === 403 || docsError.value?.status === 403,
+)
+
 onMounted(() => {
   if (session.actingUserId) {
     loadDocumentsData()
@@ -256,7 +261,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="w-full max-w-[1280px] mx-auto px-gutter py-space-lg space-y-6">
+  <ForbiddenView v-if="isForbidden" />
+
+  <div v-else class="w-full max-w-[1280px] mx-auto px-gutter py-space-lg space-y-6">
     <div>
       <span class="text-[11px] font-bold uppercase tracking-widest text-primary block mb-1">
         {{ session.buildingName }} • Reg {{ session.buildingRegistryCode }}

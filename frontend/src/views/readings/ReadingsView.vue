@@ -12,6 +12,7 @@ import {
   sumMeterValues,
 } from '@/utils/meterValue.js'
 import { formatDate, formatMonthName, formatPeriodLabel } from '@/utils/dates.js'
+import { objectName } from '@/utils/objectName.js'
 import MeterCard from './components/MeterCard.vue'
 import ReadingHistoryModal from './components/ReadingHistoryModal.vue'
 import ConsumptionChart from '@/components/domain/ConsumptionChart.vue'
@@ -401,7 +402,15 @@ function openHistory(readingId, label) {
         <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md pb-space-lg border-b border-surface-container-high/70">
           <div>
             <h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">
-              {{ session.t('readings.aptMeterSubmissionTitle', { number: activeApartment.apartment_number }) }}
+              {{
+                session.t('readings.objectMeterSubmissionTitle', {
+                  object: objectName(
+                    activeApartment.apartment_kind,
+                    activeApartment.apartment_number,
+                    session.t,
+                  ),
+                })
+              }}
             </h1>
             <p class="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
               {{ session.t('readings.billingPeriodLabel') }}
@@ -436,7 +445,7 @@ function openHistory(readingId, label) {
                 v-for="apt in apartments"
                 :key="apt.apartment_id"
                 type="button"
-                class="px-3 py-1 rounded-full font-label-md text-xs transition-colors"
+                class="px-3 py-1 rounded-full font-label-md text-xs transition-colors inline-flex items-center gap-1.5"
                 :class="
                   apt.apartment_id === activeApartment?.apartment_id
                     ? 'bg-primary text-on-primary font-semibold'
@@ -444,7 +453,13 @@ function openHistory(readingId, label) {
                 "
                 @click="session.selectApartment(apt.apartment_id)"
               >
-                {{ session.t('common.apartmentNumber', { number: apt.apartment_number }) }}
+                <span>{{ objectName(apt.apartment_kind, apt.apartment_number, session.t) }}</span>
+                <span
+                  v-if="!apt.meters || apt.meters.length === 0"
+                  class="text-[10px] opacity-80"
+                >
+                  ({{ session.t('readings.noMetersBadge') }})
+                </span>
               </button>
             </div>
 
@@ -506,8 +521,29 @@ function openHistory(readingId, label) {
           </button>
         </div>
 
+        <!-- Unmetered object empty state (e.g. parking space with meters: []) -->
+        <div
+          v-if="!activeApartment.meters || activeApartment.meters.length === 0"
+          data-testid="readings-object-no-meters"
+          class="mt-space-lg"
+        >
+          <BaseEmptyState
+            icon="speed"
+            :title="
+              session.t('readings.noMetersForObjectTitle', {
+                object: objectName(
+                  activeApartment.apartment_kind,
+                  activeApartment.apartment_number,
+                  session.t,
+                ),
+              })
+            "
+            :description="session.t('readings.noMetersForObjectDesc')"
+          />
+        </div>
+
         <!-- Two-Column Layout: Left (Meters Form) & Right (Consumption Summary & Action) -->
-        <div class="mt-space-lg grid grid-cols-1 lg:grid-cols-12 gap-space-lg items-start">
+        <div v-else class="mt-space-lg grid grid-cols-1 lg:grid-cols-12 gap-space-lg items-start">
           <!-- Left: Cohesive Apartment Meters Form (8 cols) -->
           <div class="lg:col-span-8 flex flex-col gap-space-lg">
             <div class="bg-surface-container-lowest rounded-xl border border-surface-container-high shadow-2xs overflow-hidden">

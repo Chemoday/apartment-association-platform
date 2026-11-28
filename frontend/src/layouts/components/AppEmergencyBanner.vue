@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useEmergencies } from '@/composables/useEmergencies.js'
 import { useRole } from '@/composables/useRole.js'
 import { useSessionStore } from '@/stores/session.js'
+import { formatTargetKindsList } from '@/utils/objectName.js'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -19,6 +20,17 @@ const targetLabel = computed<string>(() => {
   if (!item) return ''
   if (item.target_scope === 'ENTRANCE' && item.target_entrance) {
     return session.t('emergency.urgentEntrance', { entrance: item.target_entrance })
+  }
+  if (item.target_scope === 'ALL_OBJECTS') {
+    return session.t('emergency.urgentTarget', {
+      target: session.t('notifications.targets.ALL_OBJECTS').toUpperCase(),
+    })
+  }
+  if (item.target_scope === 'KINDS') {
+    const kinds = formatTargetKindsList(item.target_kinds, session.t)
+    if (kinds) {
+      return session.t('emergency.urgentTarget', { target: kinds.toUpperCase() })
+    }
   }
   return session.t('emergency.urgent')
 })

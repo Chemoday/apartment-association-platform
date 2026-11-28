@@ -138,6 +138,7 @@ export function createInitialMockNotificationsForUser(
             params: {
               apartment_id: '018f0000-0000-7000-8000-000000000314',
               apartment_number: '14',
+              apartment_kind: 'APARTMENT',
               from_board: false,
             },
             created_at: '2026-10-24T12:40:00Z',
@@ -152,6 +153,7 @@ export function createInitialMockNotificationsForUser(
             params: {
               apartment_id: '018f0000-0000-7000-8000-000000000314',
               apartment_number: '14',
+              apartment_kind: 'APARTMENT',
               from_board: true,
             },
             created_at: '2026-10-24T10:15:00Z',
@@ -168,6 +170,7 @@ export function createInitialMockNotificationsForUser(
       params: {
         apartment_id: '018f0000-0000-7000-8000-000000000314',
         apartment_number: '14',
+        apartment_kind: 'APARTMENT',
         from_board: true,
       },
       created_at: '2026-10-24T10:15:00Z',
@@ -183,6 +186,7 @@ export function createInitialMockNotificationsForUser(
       params: {
         apartment_id: '018f0000-0000-7000-8000-000000000314',
         apartment_number: '14',
+        apartment_kind: 'APARTMENT',
         from_board: false,
       },
       created_at: '2026-10-24T12:40:00Z',
@@ -293,6 +297,7 @@ export function getMockNoticeRecipientUserIds(
     target_scope?: string | null
     target_entrance?: number | null
     target_apartment_ids?: string[] | null
+    target_kinds?: string[] | null
   },
   authorUserId?: string | null,
 ): string[] {
@@ -305,28 +310,53 @@ export function getMockNoticeRecipientUserIds(
       userId: '018f0000-0000-7000-8000-000000000101',
       entrance: 1,
       aptId: '018f0000-0000-7000-8000-000000000301',
+      kind: 'APARTMENT',
+    },
+    {
+      userId: '018f0000-0000-7000-8000-000000000101',
+      entrance: null,
+      aptId: '018f0000-0000-7000-8000-000000000412',
+      kind: 'GARAGE',
     },
     {
       userId: '018f0000-0000-7000-8000-000000000105',
       entrance: 1,
       aptId: '018f0000-0000-7000-8000-000000000302',
+      kind: 'APARTMENT',
     },
     {
       userId: '018f0000-0000-7000-8000-000000000104',
       entrance: 1,
       aptId: '018f0000-0000-7000-8000-000000000302',
+      kind: 'APARTMENT',
     },
     {
       userId: '018f0000-0000-7000-8000-000000000102',
       entrance: 2,
       aptId: '018f0000-0000-7000-8000-000000000314',
+      kind: 'APARTMENT',
+    },
+    {
+      userId: '018f0000-0000-7000-8000-000000000102',
+      entrance: null,
+      aptId: '018f0000-0000-7000-8000-000000000401',
+      kind: 'PARKING',
     },
   ]
   for (const u of userApts) {
     if (!notice.target_scope || notice.target_scope === 'ALL_BUILDING') {
+      if (u.kind === 'APARTMENT') recipients.add(u.userId)
+    } else if (notice.target_scope === 'ALL_OBJECTS') {
+      recipients.add(u.userId)
+    } else if (
+      notice.target_scope === 'KINDS' &&
+      Array.isArray(notice.target_kinds) &&
+      notice.target_kinds.includes(u.kind)
+    ) {
       recipients.add(u.userId)
     } else if (
       notice.target_scope === 'ENTRANCE' &&
+      u.entrance !== null &&
       Number(notice.target_entrance) === u.entrance
     ) {
       recipients.add(u.userId)

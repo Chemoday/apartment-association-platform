@@ -6,6 +6,7 @@ import type {
   DashboardResponse,
   EstimateResponse,
   MatrixResponse,
+  ObjectKind,
   PeriodDTO,
   PeriodListResponse,
   PeriodStatus,
@@ -67,13 +68,15 @@ export function getReadingHistory(
 
 /**
  * Get period consumption matrix for board/chairman/accountant.
+ * Supports optional `?kind=APARTMENT|PARKING|GARAGE` filter (#068).
  */
 export function getPeriodMatrix(
   periodCode: string,
-  { signal }: { signal?: AbortSignal } = {},
+  { kind = null, signal }: { kind?: ObjectKind | string | null; signal?: AbortSignal } = {},
 ): Promise<MatrixResponse> {
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : ''
   return apiRequest<MatrixResponse>(
-    `/meters/periods/${encodeURIComponent(periodCode)}/matrix`,
+    `/meters/periods/${encodeURIComponent(periodCode)}/matrix${qs}`,
     signal ? { signal } : {},
   )
 }

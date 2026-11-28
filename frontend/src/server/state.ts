@@ -8,6 +8,7 @@ import type {
   MembershipView,
   MeterUnit,
   NotificationEventType,
+  ObjectKind,
   PeriodDTO,
   PostCategory,
   PostOrigin,
@@ -56,7 +57,9 @@ import {
 } from '../utils/pollValidation.js';
 import {
   MOCK_APARTMENT_CARDS,
+  MOCK_APARTMENT_ID_TO_KIND,
   MOCK_APARTMENT_ID_TO_NUMBER,
+  MOCK_BASE_APARTMENTS_2026_10,
   MOCK_BUILDING_ID,
   MOCK_KNOWN_APARTMENT_ENTRANCES,
   MOCK_NUMBER_TO_APARTMENT_ID,
@@ -81,6 +84,7 @@ import {
 
 export const BUILDING_ID = MOCK_BUILDING_ID;
 export const DEMO_APARTMENT_CARDS = MOCK_APARTMENT_CARDS;
+export const APARTMENT_ID_TO_KIND = MOCK_APARTMENT_ID_TO_KIND;
 
 
 export interface SeedUser extends DemoUserView {
@@ -139,9 +143,10 @@ export const DEMO_USERS: SeedUser[] = [
 export function computePreviewBadge(
   user: SeedUser,
   apartmentNumber: string | null,
-  mode: DisplayMode
+  mode: DisplayMode,
+  apartmentKind?: ObjectKind | null
 ): AuthorBadgeDTO {
-  return computeMockPreviewBadge(user, apartmentNumber, mode);
+  return computeMockPreviewBadge(user, apartmentNumber, mode, apartmentKind);
 }
 
 export const membershipsByUser: Record<string, MembershipView[]> = {
@@ -150,6 +155,7 @@ export const membershipsByUser: Record<string, MembershipView[]> = {
       membership_id: '018f0000-0000-7000-8000-000000000214',
       apartment_id: '018f0000-0000-7000-8000-000000000314',
       apartment_number: '14',
+      apartment_kind: 'APARTMENT',
       entrance: 1,
       floor: 4,
       relation_type: 'OWNER',
@@ -163,12 +169,31 @@ export const membershipsByUser: Record<string, MembershipView[]> = {
         role_badge: 'OWNER',
       },
     },
+    {
+      membership_id: '018f0000-0000-7000-8000-000000000241',
+      apartment_id: '018f0000-0000-7000-8000-000000000401',
+      apartment_number: '1',
+      apartment_kind: 'PARKING',
+      entrance: null,
+      floor: null,
+      relation_type: 'OWNER',
+      can_submit_readings: true,
+      can_view_bills: true,
+      can_vote: true,
+      privacy_display_mode: 'FULL_NAME',
+      since: '2026-01-12T10:00:00Z',
+      preview_badge: {
+        display_label: 'Kati Kask (P1)',
+        role_badge: 'OWNER',
+      },
+    },
   ],
   '018f0000-0000-7000-8000-000000000101': [
     {
       membership_id: '018f0000-0000-7000-8000-000000000201',
       apartment_id: '018f0000-0000-7000-8000-000000000301',
       apartment_number: '01',
+      apartment_kind: 'APARTMENT',
       entrance: 1,
       floor: 1,
       relation_type: 'OWNER',
@@ -182,6 +207,24 @@ export const membershipsByUser: Record<string, MembershipView[]> = {
         role_badge: 'BOARD',
       },
     },
+    {
+      membership_id: '018f0000-0000-7000-8000-000000000242',
+      apartment_id: '018f0000-0000-7000-8000-000000000412',
+      apartment_number: '12',
+      apartment_kind: 'GARAGE',
+      entrance: null,
+      floor: 0,
+      relation_type: 'OWNER',
+      can_submit_readings: true,
+      can_view_bills: true,
+      can_vote: true,
+      privacy_display_mode: 'FULL_NAME',
+      since: '2026-01-01T09:00:00Z',
+      preview_badge: {
+        display_label: 'Peeter Tamm (G12)',
+        role_badge: 'BOARD',
+      },
+    },
   ],
   '018f0000-0000-7000-8000-000000000103': [],
   '018f0000-0000-7000-8000-000000000104': [
@@ -189,6 +232,7 @@ export const membershipsByUser: Record<string, MembershipView[]> = {
       membership_id: '018f0000-0000-7000-8000-000000000202',
       apartment_id: '018f0000-0000-7000-8000-000000000302',
       apartment_number: '02',
+      apartment_kind: 'APARTMENT',
       entrance: 1,
       floor: 1,
       relation_type: 'TENANT',
@@ -208,6 +252,7 @@ export const membershipsByUser: Record<string, MembershipView[]> = {
       membership_id: '018f0000-0000-7000-8000-000000000209',
       apartment_id: '018f0000-0000-7000-8000-000000000309',
       apartment_number: '09',
+      apartment_kind: 'APARTMENT',
       entrance: 2,
       floor: 3,
       relation_type: 'OWNER',
@@ -263,8 +308,9 @@ export interface InternalMeter {
 export interface InternalApartment {
   apartment_id: string;
   apartment_number: string;
-  entrance: number;
-  floor: number;
+  apartment_kind: ObjectKind;
+  entrance: number | null;
+  floor: number | null;
   can_submit_readings: boolean;
   meters: InternalMeter[];
 }
@@ -321,298 +367,7 @@ export const masterMetersByPeriod: Record<string, MasterMeterRow[]> = {
 };
 
 export const apartmentsByPeriod: Record<string, InternalApartment[]> = {
-  '2026-10': [
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000301',
-      apartment_number: '01',
-      entrance: 1,
-      floor: 1,
-      can_submit_readings: true,
-      meters: [
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000501',
-          resource_type: 'COLD_WATER',
-          serial_number: 'CW-0101-K',
-          location_label: 'Kitchen Cold Water',
-          unit: 'm3',
-          previous_value: '110.200',
-          needs_start: false,
-          historical_avg: '2.100',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000801',
-            value: '112.400',
-            previous_value: '110.200',
-            consumption_delta: '2.200',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'HISTORY',
-          },
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000502',
-          resource_type: 'HOT_WATER',
-          serial_number: 'HW-0101-B',
-          location_label: 'Bathroom Hot Water',
-          unit: 'm3',
-          previous_value: '78.400',
-          needs_start: false,
-          historical_avg: '1.800',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000802',
-            value: '80.250',
-            previous_value: '78.400',
-            consumption_delta: '1.850',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'HISTORY',
-          },
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000520',
-          resource_type: 'COLD_WATER',
-          serial_number: null,
-          location_label: 'Utility Room Cold Water',
-          unit: 'm3',
-          previous_value: '45.000',
-          needs_start: true,
-          historical_avg: null,
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000820',
-            value: '45.000',
-            previous_value: '45.000',
-            consumption_delta: '0.000',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'START',
-          },
-        },
-      ],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000302',
-      apartment_number: '02',
-      entrance: 1,
-      floor: 1,
-      can_submit_readings: true,
-      meters: [
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000503',
-          resource_type: 'COLD_WATER',
-          serial_number: 'CW-0201-B',
-          location_label: 'Bathroom Cold Water',
-          unit: 'm3',
-          previous_value: '184.000',
-          needs_start: false,
-          historical_avg: '3.900',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000803',
-            value: '187.850',
-            previous_value: '184.000',
-            consumption_delta: '3.850',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'HISTORY',
-          },
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000504',
-          resource_type: 'HOT_WATER',
-          serial_number: 'HW-0201-B',
-          location_label: 'Bathroom Hot Water',
-          unit: 'm3',
-          previous_value: '95.500',
-          needs_start: true,
-          historical_avg: null,
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000804',
-            value: '97.950',
-            previous_value: '95.500',
-            consumption_delta: '2.450',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'SUBMITTED',
-          },
-        },
-      ],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000305',
-      apartment_number: '05',
-      entrance: 1,
-      floor: 2,
-      can_submit_readings: true,
-      meters: [
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000505',
-          resource_type: 'COLD_WATER',
-          serial_number: 'CW-0501-B',
-          location_label: 'Bathroom Cold Water',
-          unit: 'm3',
-          previous_value: '302.150',
-          needs_start: false,
-          historical_avg: '4.500',
-          reading: null,
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000506',
-          resource_type: 'HOT_WATER',
-          serial_number: 'HW-0501-B',
-          location_label: 'Bathroom Hot Water',
-          unit: 'm3',
-          previous_value: '140.200',
-          needs_start: false,
-          historical_avg: '3.100',
-          reading: null,
-        },
-      ],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000309',
-      apartment_number: '09',
-      entrance: 2,
-      floor: 3,
-      can_submit_readings: true,
-      meters: [
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000509',
-          resource_type: 'COLD_WATER',
-          serial_number: 'CW-0901-B',
-          location_label: 'Bathroom Cold Water',
-          unit: 'm3',
-          previous_value: '165.000',
-          needs_start: false,
-          historical_avg: '3.600',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000809',
-            value: '179.400',
-            previous_value: '165.000',
-            consumption_delta: '14.400',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: true,
-            previous_origin: 'HISTORY',
-          },
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000510',
-          resource_type: 'HOT_WATER',
-          serial_number: 'HW-0901-B',
-          location_label: 'Bathroom Hot Water',
-          unit: 'm3',
-          previous_value: '88.300',
-          needs_start: false,
-          historical_avg: '2.200',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000810',
-            value: '90.500',
-            previous_value: '88.300',
-            consumption_delta: '2.200',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'HISTORY',
-          },
-        },
-      ],
-    },
-    {
-      apartment_id: '018f0000-0000-7000-8000-000000000314',
-      apartment_number: '14',
-      entrance: 2,
-      floor: 4,
-      can_submit_readings: true,
-      meters: [
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000514',
-          resource_type: 'COLD_WATER',
-          serial_number: 'CW-1429-K',
-          location_label: 'Kitchen Cold Water',
-          unit: 'm3',
-          previous_value: '84.100',
-          needs_start: false,
-          historical_avg: '2.100',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000901',
-            value: '86.200',
-            previous_value: '84.100',
-            consumption_delta: '2.100',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'HISTORY',
-          },
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000515',
-          resource_type: 'HOT_WATER',
-          serial_number: 'HW-1429-K',
-          location_label: 'Kitchen Hot Water',
-          unit: 'm3',
-          previous_value: '52.400',
-          needs_start: false,
-          historical_avg: '1.300',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000902',
-            value: '53.750',
-            previous_value: '52.400',
-            consumption_delta: '1.350',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'HISTORY',
-          },
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000516',
-          resource_type: 'COLD_WATER',
-          serial_number: 'CW-1429-B',
-          location_label: 'Bathroom Cold Water',
-          unit: 'm3',
-          previous_value: '142.350',
-          needs_start: false,
-          historical_avg: '3.200',
-          reading: null,
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000517',
-          resource_type: 'HOT_WATER',
-          serial_number: 'HW-1429-B',
-          location_label: 'Bathroom Hot Water',
-          unit: 'm3',
-          previous_value: '88.120',
-          needs_start: false,
-          historical_avg: '2.100',
-          reading: null,
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000518',
-          resource_type: 'ELECTRICITY',
-          serial_number: 'EL-1429-EV',
-          location_label: 'Basement Storage & EV Charger',
-          unit: 'kWh',
-          previous_value: '1240.000',
-          needs_start: false,
-          historical_avg: '65.000',
-          reading: {
-            reading_id: '018f0000-0000-7000-8000-000000000905',
-            value: '1304.500',
-            previous_value: '1240.000',
-            consumption_delta: '64.500',
-            source: 'RESIDENT',
-            is_anomaly_confirmed: false,
-            previous_origin: 'HISTORY',
-          },
-        },
-        {
-          meter_id: '018f0000-0000-7000-8000-000000000519',
-          resource_type: 'HOT_WATER',
-          serial_number: null,
-          location_label: 'Laundry Hot Water',
-          unit: 'm3',
-          previous_value: null,
-          needs_start: true,
-          historical_avg: null,
-          reading: null,
-        },
-      ],
-    },
-  ],
+  '2026-10': JSON.parse(JSON.stringify(MOCK_BASE_APARTMENTS_2026_10)),
 };
 
 // Populate historical periods 2026-09, 2026-08, 2026-07
@@ -795,6 +550,7 @@ export interface InternalPost {
   target_scope: TargetScope;
   target_entrance: number | null;
   target_apartment_ids: string[] | null;
+  target_kinds?: ObjectKind[] | null;
   is_active: boolean;
   comments_enabled: boolean;
   created_at: string;
@@ -858,7 +614,12 @@ export function getUserPreferences(userId: string): MockPreference[] {
 }
 
 export function getServerNoticeRecipientUserIds(
-  notice: { target_scope?: string | null; target_entrance?: number | null; target_apartment_ids?: string[] | null },
+  notice: {
+    target_scope?: string | null;
+    target_entrance?: number | null;
+    target_apartment_ids?: string[] | null;
+    target_kinds?: string[] | null;
+  },
   authorUserId?: string | null
 ): string[] {
   return getMockNoticeRecipientUserIds(notice, authorUserId);
@@ -872,6 +633,7 @@ export function dispatchServerMaintenanceAndNoticeNotifications(notif: {
   target_scope?: string | null;
   target_entrance?: number | null;
   target_apartment_ids?: string[] | null;
+  target_kinds?: string[] | null;
   author_user_id?: string | null;
   created_at?: string;
 }) {
@@ -963,6 +725,7 @@ export function emitApartmentThreadNotifications(
     const userMems = membershipsByUser[demoUser.user_id] || [];
     const isResidentOfTarget = userMems.some((m) => m.apartment_id === targetApartmentId);
     const prefs = getUserPreferences(demoUser.user_id);
+    const aptKind = APARTMENT_ID_TO_KIND[targetApartmentId] || 'APARTMENT';
 
     if (isResidentOfTarget) {
       const inAppPref = prefs.find(
@@ -978,6 +741,7 @@ export function emitApartmentThreadNotifications(
           params: {
             apartment_id: targetApartmentId,
             apartment_number: aptNum,
+            apartment_kind: aptKind,
             from_board: fromBoard,
           },
           created_at: createdAtIso,
@@ -998,6 +762,7 @@ export function emitApartmentThreadNotifications(
           params: {
             apartment_id: targetApartmentId,
             apartment_number: aptNum,
+            apartment_kind: aptKind,
             from_board: false,
           },
           created_at: createdAtIso,
@@ -1020,7 +785,8 @@ export const bindingsByUser: Record<string, MockBinding[]> = {};
 export function resolveAuthorBadge(
   userId: string,
   postType?: PostType,
-  targetApartmentId?: string | null
+  targetApartmentId?: string | null,
+  strictApartment = false
 ): AuthorBadgeDTO {
   const user = DEMO_USERS.find((u) => u.user_id === userId) || DEMO_USERS[0];
   if (postType === 'APARTMENT_THREAD') {
@@ -1044,10 +810,14 @@ export function resolveAuthorBadge(
   const mems = membershipsByUser[userId] || [];
   const matchingMem =
     (targetApartmentId ? mems.find((m) => m.apartment_id === targetApartmentId) : null) ||
-    mems[0] ||
-    null;
+    (strictApartment ? null : mems[0] || null);
   const mode = matchingMem?.privacy_display_mode || 'FULL_NAME';
-  return computePreviewBadge(user, matchingMem?.apartment_number || null, mode);
+  return computePreviewBadge(
+    user,
+    matchingMem?.apartment_number || null,
+    mode,
+    matchingMem?.apartment_kind,
+  );
 }
 
 // Stateful demo auth session state for testing Epic E7 scenarios 1-9 & A4/A5
@@ -1075,6 +845,7 @@ interface MockPersonMembership {
   membership_id: string;
   apartment_id: string;
   apartment_number: string;
+  apartment_kind?: ObjectKind;
   relation_type: 'OWNER' | 'TENANT';
   display_label: string;
   invited_email: string | null;
@@ -1100,6 +871,7 @@ export interface MockInvitation {
   invited_by_user_id: string;
   apartment_id: string | null;
   apartment_number: string | null;
+  apartment_kind?: ObjectKind | null;
   building_role: 'CHAIRMAN' | 'BOARD' | 'ACCOUNTANT' | null;
   created_at: string;
   expires_at: string;
@@ -1120,11 +892,23 @@ let buildingUsersStore: MockPersonSummary[] = [
         membership_id: '018f0000-0000-7000-8000-000000000201',
         apartment_id: '018f0000-0000-7000-8000-000000000301',
         apartment_number: '01',
+        apartment_kind: 'APARTMENT',
         relation_type: 'OWNER',
         display_label: 'Oleg Sidorov (Apt. 01)',
         invited_email: null,
         invited_by_user_id: null,
         since: '2021-03-10T10:00:00Z',
+      },
+      {
+        membership_id: '018f0000-0000-7000-8000-000000000242',
+        apartment_id: '018f0000-0000-7000-8000-000000000412',
+        apartment_number: '12',
+        apartment_kind: 'GARAGE',
+        relation_type: 'OWNER',
+        display_label: 'Oleg Sidorov (G12)',
+        invited_email: null,
+        invited_by_user_id: null,
+        since: '2026-01-01T09:00:00Z',
       },
     ],
   },
@@ -1139,6 +923,7 @@ let buildingUsersStore: MockPersonSummary[] = [
         membership_id: '018f0000-0000-7000-8000-000000000214',
         apartment_id: '018f0000-0000-7000-8000-000000000314',
         apartment_number: '14',
+        apartment_kind: 'APARTMENT',
         relation_type: 'OWNER',
         display_label: 'I. P. (Apt. 14)',
         invited_email: 'ivan.petrov@demo.invalid',
@@ -1149,11 +934,23 @@ let buildingUsersStore: MockPersonSummary[] = [
         membership_id: '018f0000-0000-7000-8000-000000000215',
         apartment_id: '018f0000-0000-7000-8000-000000000315',
         apartment_number: '15',
+        apartment_kind: 'APARTMENT',
         relation_type: 'TENANT',
         display_label: 'Apt. 15',
         invited_email: 'i***@demo.invalid',
         invited_by_user_id: '018f0000-0000-7000-8000-000000000105',
         since: '2025-05-01T10:00:00Z',
+      },
+      {
+        membership_id: '018f0000-0000-7000-8000-000000000241',
+        apartment_id: '018f0000-0000-7000-8000-000000000401',
+        apartment_number: '1',
+        apartment_kind: 'PARKING',
+        relation_type: 'OWNER',
+        display_label: 'I. P. (P1)',
+        invited_email: 'ivan.petrov@demo.invalid',
+        invited_by_user_id: '018f0000-0000-7000-8000-000000000101',
+        since: '2026-01-12T10:00:00Z',
       },
     ],
   },
@@ -1168,6 +965,7 @@ let buildingUsersStore: MockPersonSummary[] = [
         membership_id: '018f0000-0000-7000-8000-000000000399',
         apartment_id: '018f0000-0000-7000-8000-000000000314',
         apartment_number: '14',
+        apartment_kind: 'APARTMENT',
         relation_type: 'TENANT',
         display_label: 'M. T. (Apt. 14)',
         invited_email: 'martin.tenant@demo.invalid',
@@ -1187,6 +985,7 @@ let buildingUsersStore: MockPersonSummary[] = [
         membership_id: '018f0000-0000-7000-8000-000000000388',
         apartment_id: '018f0000-0000-7000-8000-000000000315',
         apartment_number: '15',
+        apartment_kind: 'APARTMENT',
         relation_type: 'OWNER',
         display_label: 'P. S. (Apt. 15)',
         invited_email: 'priit.saar@demo.invalid',
@@ -1215,6 +1014,7 @@ let buildingInvitationsStore: MockInvitation[] = [
     invited_by_user_id: '018f0000-0000-7000-8000-000000000102',
     apartment_id: '018f0000-0000-7000-8000-000000000314',
     apartment_number: '14',
+    apartment_kind: 'APARTMENT',
     building_role: null,
     created_at: '2026-10-30T10:00:00Z',
     expires_at: new Date(Date.now() + 5 * 86400 * 1000).toISOString(),
@@ -1228,6 +1028,7 @@ let buildingInvitationsStore: MockInvitation[] = [
     invited_by_user_id: '018f0000-0000-7000-8000-000000000101',
     apartment_id: '018f0000-0000-7000-8000-000000000305',
     apartment_number: '05',
+    apartment_kind: 'APARTMENT',
     building_role: null,
     created_at: '2026-10-29T12:00:00Z',
     expires_at: new Date(Date.now() + 6 * 86400 * 1000).toISOString(),
@@ -1241,6 +1042,7 @@ let buildingInvitationsStore: MockInvitation[] = [
     invited_by_user_id: '018f0000-0000-7000-8000-000000000101',
     apartment_id: null,
     apartment_number: null,
+    apartment_kind: null,
     building_role: 'BOARD',
     created_at: '2026-10-28T09:30:00Z',
     expires_at: new Date(Date.now() + 4 * 86400 * 1000).toISOString(),
@@ -1254,6 +1056,7 @@ let buildingInvitationsStore: MockInvitation[] = [
     invited_by_user_id: '018f0000-0000-7000-8000-000000000102',
     apartment_id: '018f0000-0000-7000-8000-000000000314',
     apartment_number: '14',
+    apartment_kind: 'APARTMENT',
     building_role: null,
     created_at: '2025-09-03T10:00:00Z',
     expires_at: '2025-09-10T10:00:00Z',
@@ -1267,6 +1070,7 @@ let buildingInvitationsStore: MockInvitation[] = [
     invited_by_user_id: '018f0000-0000-7000-8000-000000000101',
     apartment_id: '018f0000-0000-7000-8000-000000000309',
     apartment_number: '09',
+    apartment_kind: 'APARTMENT',
     building_role: null,
     created_at: '2026-08-11T10:00:00Z',
     expires_at: '2026-08-18T10:00:00Z',
@@ -1280,6 +1084,7 @@ let buildingInvitationsStore: MockInvitation[] = [
     invited_by_user_id: '018f0000-0000-7000-8000-000000000199',
     apartment_id: '018f0000-0000-7000-8000-000000000322',
     apartment_number: '22',
+    apartment_kind: 'APARTMENT',
     building_role: null,
     created_at: '2026-07-04T10:00:00Z',
     expires_at: '2026-07-11T10:00:00Z',
@@ -1298,6 +1103,7 @@ export function toInvitationView(inv: MockInvitation, viewerUserId?: string) {
     email: mine ? inv.raw_email : inv.masked_email,
     apartment_id: inv.apartment_id,
     apartment_number: inv.apartment_number,
+    apartment_kind: inv.kind === 'STAFF' ? null : (inv.apartment_kind ?? 'APARTMENT'),
     building_role: inv.building_role,
     status: inv.status,
     mine,
@@ -1382,6 +1188,7 @@ export interface InternalPoll {
   target_scope: TargetScope;
   target_entrance: number | null;
   target_apartment_ids: string[] | null;
+  target_kinds?: ObjectKind[] | null;
   eligibility: 'RESIDENTS' | 'OWNERS';
   unit: 'APARTMENT' | 'PERSON';
   closes_at: string;
@@ -1428,7 +1235,7 @@ export function toPollView(poll: InternalPoll, user: SeedUser) {
   return toMockPollView(poll, user, membershipsByUser);
 }
 
-export const KNOWN_APARTMENT_ENTRANCES: Record<string, number> = MOCK_KNOWN_APARTMENT_ENTRANCES;
+export const KNOWN_APARTMENT_ENTRANCES: Record<string, number | null> = MOCK_KNOWN_APARTMENT_ENTRANCES;
 
 export function computePollElectorateCount(poll: InternalPoll): number {
   return computeMockPollElectorateCount(poll, membershipsByUser);
@@ -1474,7 +1281,7 @@ export function validateAndBuildServerPollDraft(body: Record<string, unknown>): 
   }
 
   const targetScope = body?.target_scope as TargetScope;
-  if (!['ALL_BUILDING', 'ENTRANCE', 'APARTMENT_LIST'].includes(targetScope)) {
+  if (!['ALL_BUILDING', 'ALL_OBJECTS', 'KINDS', 'ENTRANCE', 'APARTMENT_LIST'].includes(targetScope)) {
     return {
       errorStatus: 422,
       errorCode: 'INVALID_TARGET',
@@ -1484,18 +1291,49 @@ export function validateAndBuildServerPollDraft(body: Record<string, unknown>): 
 
   let targetEntrance: number | null = null;
   let targetApartmentIds: string[] | null = null;
+  let targetKinds: Array<'APARTMENT' | 'PARKING' | 'GARAGE'> | null = null;
 
-  if (targetScope === 'ALL_BUILDING') {
-    if (body.target_entrance != null || (Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0)) {
+  const hasKindsInput = Array.isArray(body.target_kinds) && body.target_kinds.length > 0;
+
+  if (targetScope === 'ALL_BUILDING' || targetScope === 'ALL_OBJECTS') {
+    if (
+      body.target_entrance != null ||
+      (Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0) ||
+      hasKindsInput
+    ) {
       return {
         errorStatus: 422,
         errorCode: 'INVALID_TARGET',
-        errorMessage: 'target_entrance and target_apartment_ids must be null for ALL_BUILDING.',
+        errorMessage: `target_entrance, target_apartment_ids, and target_kinds must be null for ${targetScope}.`,
       };
     }
+  } else if (targetScope === 'KINDS') {
+    if (
+      body.target_entrance != null ||
+      (Array.isArray(body.target_apartment_ids) && body.target_apartment_ids.length > 0) ||
+      !Array.isArray(body.target_kinds) ||
+      body.target_kinds.length === 0
+    ) {
+      return {
+        errorStatus: 422,
+        errorCode: 'INVALID_TARGET',
+        errorMessage: 'Non-empty target_kinds is required for KINDS scope.',
+      };
+    }
+    const rawKinds = Array.from(new Set(body.target_kinds.map((k: unknown) => String(k).toUpperCase())));
+    const unknownKinds = rawKinds.filter((k) => !['APARTMENT', 'PARKING', 'GARAGE'].includes(k));
+    if (unknownKinds.length > 0) {
+      return {
+        errorStatus: 422,
+        errorCode: 'INVALID_TARGET',
+        errorMessage: 'Unknown object kind in target_kinds.',
+        errorExtra: { unknown_kinds: unknownKinds },
+      };
+    }
+    targetKinds = rawKinds as Array<'APARTMENT' | 'PARKING' | 'GARAGE'>;
   } else if (targetScope === 'ENTRANCE') {
     const ent = Number(body.target_entrance);
-    if (!Number.isInteger(ent) || ![1, 2].includes(ent) || body.target_apartment_ids != null) {
+    if (!Number.isInteger(ent) || ![1, 2].includes(ent) || body.target_apartment_ids != null || hasKindsInput) {
       return {
         errorStatus: 422,
         errorCode: 'INVALID_TARGET',
@@ -1506,6 +1344,7 @@ export function validateAndBuildServerPollDraft(body: Record<string, unknown>): 
   } else if (targetScope === 'APARTMENT_LIST') {
     if (
       body.target_entrance != null ||
+      hasKindsInput ||
       !Array.isArray(body.target_apartment_ids) ||
       body.target_apartment_ids.length === 0
     ) {
@@ -1519,7 +1358,7 @@ export function validateAndBuildServerPollDraft(body: Record<string, unknown>): 
       new Set<string>(body.target_apartment_ids.map((id: unknown) => String(id)))
     );
     for (const aptId of deduped) {
-      if (!KNOWN_APARTMENT_ENTRANCES[aptId]) {
+      if (!(aptId in KNOWN_APARTMENT_ENTRANCES)) {
         return {
           errorStatus: 422,
           errorCode: 'INVALID_TARGET',
@@ -1805,6 +1644,7 @@ export function validateAndBuildServerPollDraft(body: Record<string, unknown>): 
       target_scope: targetScope,
       target_entrance: targetEntrance,
       target_apartment_ids: targetApartmentIds,
+      target_kinds: targetKinds,
       eligibility: eligibility as InternalPoll['eligibility'],
       unit: unit as InternalPoll['unit'],
       closes_at: closesAt,
@@ -2025,4 +1865,87 @@ export const serverStore = {
   set buildingRegistryState(val) { buildingRegistryState = val; },
   get registryDailyCalls() { return registryDailyCalls; },
   set registryDailyCalls(val) { registryDailyCalls = val; },
+  get paperApartmentIds() { return paperApartmentIds; },
+  set paperApartmentIds(val) { paperApartmentIds = val; },
+  get joinCodesStore() { return joinCodesStore; },
+  set joinCodesStore(val) { joinCodesStore = val; },
+  get joinRequestsStore() { return joinRequestsStore; },
+  set joinRequestsStore(val) { joinRequestsStore = val; },
+  get joinDecisionsStore() { return joinDecisionsStore; },
+  set joinDecisionsStore(val) { joinDecisionsStore = val; },
 };
+
+export interface MockJoinCodeRecord {
+  code_id: string;
+  apartment_id: string;
+  apartment_number: string;
+  apartment_kind: 'APARTMENT' | 'PARKING' | 'GARAGE';
+  join_code: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface MockJoinRequestRecord {
+  request_id: string;
+  apartment_id: string;
+  apartment_number: string;
+  apartment_kind: 'APARTMENT' | 'PARKING' | 'GARAGE';
+  full_name: string;
+  phone: string;
+  email: string;
+  locale: 'en' | 'et' | 'ru' | null;
+  created_at: string;
+}
+
+export interface MockJoinDecisionRecord {
+  apartment_id: string | null;
+  apartment_number: string | null;
+  apartment_kind: 'APARTMENT' | 'PARKING' | 'GARAGE' | null;
+  outcome: 'CONFIRMED' | 'REJECTED' | 'EXPIRED';
+  decided_by_user_id: string | null;
+  decided_at: string;
+}
+
+let paperApartmentIds = new Set<string>(['018f0000-0000-7000-8000-000000000303']);
+let joinCodesStore: MockJoinCodeRecord[] = [
+  {
+    code_id: '018f0000-0000-7000-8000-000000007101',
+    apartment_id: '018f0000-0000-7000-8000-000000000302',
+    apartment_number: '02',
+    apartment_kind: 'APARTMENT',
+    join_code: 'K7QF-M3TX-9R',
+    created_at: '2026-11-20T09:00:00Z',
+    expires_at: new Date(Date.now() + 25 * 86400 * 1000).toISOString(),
+  },
+];
+let joinRequestsStore: MockJoinRequestRecord[] = [
+  {
+    request_id: '018f0000-0000-7000-8000-000000007201',
+    apartment_id: '018f0000-0000-7000-8000-000000000304',
+    apartment_number: '04',
+    apartment_kind: 'APARTMENT',
+    full_name: 'Liis Mägi',
+    phone: '+37255512345',
+    email: 'liis.magi@demo.invalid',
+    locale: 'et',
+    created_at: '2026-11-24T14:20:00Z',
+  },
+];
+let joinDecisionsStore: MockJoinDecisionRecord[] = [
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000301',
+    apartment_number: '01',
+    apartment_kind: 'APARTMENT',
+    outcome: 'CONFIRMED',
+    decided_by_user_id: '018f0000-0000-7000-8000-000000000101',
+    decided_at: '2026-11-18T11:15:00Z',
+  },
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000402',
+    apartment_number: 'P-2',
+    apartment_kind: 'PARKING',
+    outcome: 'EXPIRED',
+    decided_by_user_id: null,
+    decided_at: '2026-11-10T00:00:00Z',
+  },
+];

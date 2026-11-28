@@ -946,3 +946,185 @@ test('formatNotificationText formats human-readable text in English and Estonian
   setI18nLocale('en')
 })
 
+test('E14 #063 per-kind notifications render PARKING, GARAGE, and default APARTMENT cleanly across en/et/ru', () => {
+  const cases = [
+    {
+      event_type: 'APARTMENT_MESSAGE',
+      params: { apartment_number: 'P-2', apartment_kind: 'PARKING', from_board: false },
+      subject_type: 'post',
+      subject_id: 'thread-p2',
+      expectedKey: 'notifications.events.APARTMENT_MESSAGE_PEER_PARKING',
+      expectedRoute: '/messages/thread-p2',
+      enMustInclude: "parking space's conversation",
+      etMustInclude: 'parkimiskoha vestluses',
+      ruMustInclude: 'парковочного места',
+    },
+    {
+      event_type: 'APARTMENT_MESSAGE',
+      params: { apartment_number: '12', apartment_kind: 'GARAGE', from_board: false },
+      subject_type: 'post',
+      subject_id: 'thread-g12',
+      expectedKey: 'notifications.events.APARTMENT_MESSAGE_PEER_GARAGE',
+      expectedRoute: '/messages/thread-g12',
+      enMustInclude: "garage's conversation",
+      etMustInclude: 'garaaži vestluses',
+      ruMustInclude: 'гаража',
+    },
+    {
+      event_type: 'APARTMENT_MESSAGE_TO_BOARD',
+      params: { apartment_number: '1', apartment_kind: 'PARKING' },
+      subject_type: 'post',
+      subject_id: 'thread-p1',
+      expectedKey: 'notifications.events.APARTMENT_MESSAGE_TO_BOARD_PARKING',
+      expectedRoute: '/messages/thread-p1',
+      enMustInclude: 'parking space 1',
+      etMustInclude: 'parkimiskohalt 1',
+      ruMustInclude: 'парковочного места 1',
+    },
+    {
+      event_type: 'APARTMENT_MESSAGE_TO_BOARD',
+      params: { apartment_number: '12', apartment_kind: 'GARAGE' },
+      subject_type: 'post',
+      subject_id: 'thread-g12',
+      expectedKey: 'notifications.events.APARTMENT_MESSAGE_TO_BOARD_GARAGE',
+      expectedRoute: '/messages/thread-g12',
+      enMustInclude: 'garage 12',
+      etMustInclude: 'garaažilt 12',
+      ruMustInclude: 'гаража 12',
+    },
+    {
+      event_type: 'JOIN_REQUEST_SUBMITTED',
+      params: { apartment_number: '14' }, // missing apartment_kind defaults to APARTMENT
+      subject_type: 'join_request',
+      subject_id: 'jr-1',
+      expectedKey: 'notifications.events.JOIN_REQUEST_SUBMITTED',
+      expectedRoute: '/people',
+      enMustInclude: 'apartment 14',
+      etMustInclude: 'korterile 14',
+      ruMustInclude: 'квартире 14',
+    },
+    {
+      event_type: 'JOIN_REQUEST_SUBMITTED',
+      params: { apartment_number: 'P-2', apartment_kind: 'PARKING' },
+      subject_type: 'join_request',
+      subject_id: 'jr-2',
+      expectedKey: 'notifications.events.JOIN_REQUEST_SUBMITTED_PARKING',
+      expectedRoute: '/people',
+      enMustInclude: 'parking space P-2',
+      etMustInclude: 'parkimiskohale P-2',
+      ruMustInclude: 'парковочному месту P-2',
+    },
+    {
+      event_type: 'JOIN_REQUEST_SUBMITTED',
+      params: { apartment_number: '12', apartment_kind: 'GARAGE' },
+      subject_type: 'join_request',
+      subject_id: 'jr-3',
+      expectedKey: 'notifications.events.JOIN_REQUEST_SUBMITTED_GARAGE',
+      expectedRoute: '/people',
+      enMustInclude: 'garage 12',
+      etMustInclude: 'garaažile 12',
+      ruMustInclude: 'гаражу 12',
+    },
+  ]
+
+  for (const c of cases) {
+    const item = {
+      id: `test-${c.subject_id}`,
+      event_type: c.event_type,
+      params: c.params,
+      subject_type: c.subject_type,
+      subject_id: c.subject_id,
+      created_at: '2026-11-26T09:00:00Z',
+      read_at: null,
+    }
+    const desc = buildNotificationDescriptor(item, 'en')
+    assert.equal(desc.key, c.expectedKey)
+    assert.equal(desc.route, c.expectedRoute)
+
+    setI18nLocale('en')
+    assert.ok(
+      formatNotificationText(item, translate, 'en').includes(c.enMustInclude),
+      `en text missing "${c.enMustInclude}" for ${c.expectedKey}`,
+    )
+
+    setI18nLocale('et')
+    assert.ok(
+      formatNotificationText(item, translate, 'et').includes(c.etMustInclude),
+      `et text missing "${c.etMustInclude}" for ${c.expectedKey}`,
+    )
+
+    setI18nLocale('ru')
+    assert.ok(
+      formatNotificationText(item, translate, 'ru').includes(c.ruMustInclude),
+      `ru text missing "${c.ruMustInclude}" for ${c.expectedKey}`,
+    )
+  }
+
+  setI18nLocale('en')
+})
+
+test('#065 EMERGENCY_PUBLISHED and EMERGENCY_RESOLVED render ALL_OBJECTS, KINDS, and legacy missing target_kinds across en/et/ru', () => {
+  const cases = [
+    {
+      event_type: 'EMERGENCY_PUBLISHED',
+      params: { category: 'GENERAL', target_scope: 'ALL_OBJECTS', target_kinds: [] },
+      enMustInclude: 'everyone',
+      etMustInclude: 'kõigile',
+      ruMustInclude: 'все объекты',
+    },
+    {
+      event_type: 'EMERGENCY_PUBLISHED',
+      params: { category: 'MAINTENANCE', target_scope: 'KINDS', target_kinds: ['PARKING'] },
+      enMustInclude: 'parking spaces',
+      etMustInclude: 'parkimiskohad',
+      ruMustInclude: 'парковочные места',
+    },
+    {
+      event_type: 'EMERGENCY_RESOLVED',
+      params: { category: 'WATER_SHUTOFF', target_scope: 'KINDS', target_kinds: ['GARAGE', 'PARKING'] },
+      enMustInclude: 'parking spaces, garages',
+      etMustInclude: 'parkimiskohad, garaažid',
+      ruMustInclude: 'парковочные места, гаражи',
+    },
+    {
+      // Old row without target_kinds still renders safely without raw interpolation placeholders
+      event_type: 'EMERGENCY_PUBLISHED',
+      params: { category: 'GENERAL', target_scope: 'KINDS' },
+      enMustInclude: 'selected object kinds',
+      etMustInclude: 'valitud objektitüübid',
+      ruMustInclude: 'выбранных типов объектов',
+    },
+  ]
+
+  for (const c of cases) {
+    const item = {
+      id: `test-emerg-${c.event_type}-${c.params.target_scope}`,
+      event_type: c.event_type,
+      params: c.params,
+      subject_type: 'post',
+      subject_id: 'post-emerg-65',
+      created_at: '2026-11-26T10:00:00Z',
+      read_at: null,
+    }
+
+    setI18nLocale('en')
+    const enText = formatNotificationText(item, translate, 'en')
+    assert.ok(enText.includes(c.enMustInclude), `en text "${enText}" missing "${c.enMustInclude}"`)
+    assert.ok(!enText.includes('{'), `en text leaked placeholder: ${enText}`)
+
+    setI18nLocale('et')
+    const etText = formatNotificationText(item, translate, 'et')
+    assert.ok(etText.includes(c.etMustInclude), `et text "${etText}" missing "${c.etMustInclude}"`)
+    assert.ok(!etText.includes('{'), `et text leaked placeholder: ${etText}`)
+
+    setI18nLocale('ru')
+    const ruText = formatNotificationText(item, translate, 'ru')
+    assert.ok(ruText.includes(c.ruMustInclude), `ru text "${ruText}" missing "${c.ruMustInclude}"`)
+    assert.ok(!ruText.includes('{'), `ru text leaked placeholder: ${ruText}`)
+  }
+
+  setI18nLocale('en')
+})
+
+
+

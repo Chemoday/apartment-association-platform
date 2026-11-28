@@ -8,6 +8,7 @@ import { setChatScreenOpen, useChatState } from '@/composables/useChatState.js'
 import { localizeError } from '@/locales/index.js'
 import { formatDateTime } from '@/utils/dates.js'
 import { CHAT_MAX_LENGTH } from '@/utils/chat.js'
+import { normalizeObjectKind, objectName } from '@/utils/objectName.js'
 import AuthorBadge from '@/components/domain/AuthorBadge.vue'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
@@ -39,7 +40,9 @@ const listRef = ref(null)
 const effectiveMaxLength = computed(() => stateMaxLength.value || CHAT_MAX_LENGTH)
 
 const memberships = computed(() =>
-  Array.isArray(session.me?.memberships) ? session.me.memberships : [],
+  (Array.isArray(session.me?.memberships) ? session.me.memberships : []).filter(
+    (m) => normalizeObjectKind(m?.apartment_kind) === 'APARTMENT',
+  ),
 )
 
 const hasMultipleApartments = computed(() => memberships.value.length > 1)
@@ -343,7 +346,7 @@ onBeforeUnmount(() => {
               :key="m.apartment_id"
               :value="m.apartment_id"
             >
-              {{ session.t('common.apartmentNumber', { number: m.apartment_number }) }}
+              {{ objectName(m.apartment_kind, m.apartment_number, session.t) }}
             </option>
           </select>
         </div>

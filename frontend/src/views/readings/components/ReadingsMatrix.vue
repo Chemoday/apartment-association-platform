@@ -1,8 +1,9 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useSessionStore } from '@/stores/session.js'
 import { useRole } from '@/composables/useRole.js'
 import { sumMeterValues } from '@/utils/meterValue.js'
+import { formatObjectLocation, objectName } from '@/utils/objectName.js'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseEmptyState from '@/components/base/BaseEmptyState.vue'
 import ReadingsMatrixRow from './ReadingsMatrixRow.vue'
@@ -40,14 +41,40 @@ const editingApartment = computed(
   () => props.apartments.find((a) => a.apartment_id === editingApartmentId.value) || null,
 )
 
+const editingModalSubtitle = computed(() => {
+  if (!editingApartment.value) return ''
+  const loc = formatObjectLocation(editingApartment.value, session.t)
+  if (loc) {
+    return session.t('matrix.editModalSubtitleWithLocation', {
+      location: loc,
+      period: props.periodCode,
+    })
+  }
+  return session.t('matrix.editModalSubtitlePeriodOnly', { period: props.periodCode })
+})
+
 const myApartmentIds = computed(() =>
   new Set((session.me?.memberships || []).map((m) => m.apartment_id)),
 )
 
 const entrances = computed(() => {
-  const set = new Set(props.apartments.map((a) => a.entrance))
+  const set = new Set(
+    props.apartments
+      .map((a) => a.entrance)
+      .filter((e) => typeof e === 'number' && !Number.isNaN(e)),
+  )
   return Array.from(set).sort((a, b) => a - b)
 })
+
+watch(
+  () => props.apartments,
+  () => {
+    currentPage.value = 1
+    if (entranceFilter.value !== 'ALL' && !entrances.value.includes(entranceFilter.value)) {
+      entranceFilter.value = 'ALL'
+    }
+  },
+)
 
 const filteredApartments = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -59,10 +86,10 @@ const filteredApartments = computed(() => {
       return false
     }
     if (q) {
-      const unitLabel = session.t('matrix.unitLabel', { number: apt.apartment_number }).toLowerCase()
+      const nameLabel = objectName(apt.apartment_kind, apt.apartment_number, session.t).toLowerCase()
       const matchNum =
         `apt ${apt.apartment_number}`.toLowerCase().includes(q) ||
-        unitLabel.includes(q) ||
+        nameLabel.includes(q) ||
         String(apt.apartment_number).toLowerCase().includes(q)
       const matchStatus = apt.status.toLowerCase().includes(q)
       return matchNum || matchStatus
@@ -230,8 +257,8 @@ function handleSavedInModal(reading) {
     </div>
 
     <!-- APARTMENT CONSUMPTION LEDGER TABLE -->
-    <div class="rounded-xl bg-surface-container-lowest shadow-2xs border border-surface-container overflow-hidden mb-space-xl">
-      <div class="px-space-lg py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-space-sm bg-surface-container-low/80 border-b border-surface-container">
+    <div class="rounded-[var(--radius-card)] bg-surface-container-lowest shadow-card border border-outline-variant/45 overflow-hidden mb-space-xl">
+      <div class="px-space-lg py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-space-sm bg-surface-container-low/80 border-b border-outline-variant/40">
         <div class="flex items-center gap-space-sm">
           <span class="font-label-lg text-label-lg font-bold text-on-surface">
             {{ session.t('matrix.ledgerTitle') }}
@@ -242,7 +269,7 @@ function handleSavedInModal(reading) {
         </div>
 
         <div class="flex items-center flex-wrap gap-space-md font-label-md text-label-md">
-          <span class="text-secondary font-semibold">
+          <span class="text-primary font-semibold">
             {{ session.t('matrix.verifiedCount', { count: summaryCounts.verified }) }}
           </span>
           <span class="text-on-surface-variant">•</span>
@@ -257,8 +284,8 @@ function handleSavedInModal(reading) {
       </div>
 
       <div v-if="pagedApartments.length > 0" class="overflow-x-auto">
-        <table class="w-full text-left font-body-sm text-body-sm">
-          <thead class="bg-surface-container/60 text-on-surface-variant font-label-md text-label-md uppercase tracking-wider border-b border-surface-container">
+        <table class="w-full min-w-[780px] text-left font-body-sm text-body-sm">
+          <thead class="bg-surface-container-low/70 text-on-surface-variant font-label-md text-label-md uppercase tracking-wider border-b border-outline-variant/40">
             <tr>
               <th class="py-space-sm px-space-md">{{ session.t('matrix.colUnit') }}</th>
               <th class="py-space-sm px-space-md">{{ session.t('matrix.colLedgerMode') }}</th>
@@ -269,7 +296,7 @@ function handleSavedInModal(reading) {
               <th class="py-space-sm px-space-md text-right whitespace-nowrap">{{ session.t('matrix.colActions') }}</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-surface-container">
+          <tbody class="divide-y divide-outline-variant/35">
             <ReadingsMatrixRow
               v-for="apt in pagedApartments"
               :key="apt.apartment_id"
@@ -291,7 +318,7 @@ function handleSavedInModal(reading) {
       </div>
 
       <!-- Table Footer with Subtotals & Pagination -->
-      <div class="p-space-md bg-surface-container-low flex flex-col md:flex-row items-center justify-between gap-space-sm text-on-surface font-label-md text-label-md border-t border-surface-container">
+      <div class="p-space-md bg-surface-container-low flex flex-col md:flex-row items-center justify-between gap-space-sm text-on-surface font-label-md text-label-md border-t border-outline-variant/40">
         <div class="flex items-center flex-wrap gap-space-md">
           <span>
             {{
@@ -353,18 +380,16 @@ function handleSavedInModal(reading) {
       :open="Boolean(editingApartment)"
       :title="
         editingApartment
-          ? session.t('matrix.editModalTitle', { number: editingApartment.apartment_number })
-          : ''
-      "
-      :subtitle="
-        editingApartment
-          ? session.t('matrix.editModalSubtitle', {
-              entrance: editingApartment.entrance,
-              floor: editingApartment.floor,
-              period: periodCode,
+          ? session.t('matrix.editObjectModalTitle', {
+              object: objectName(
+                editingApartment.apartment_kind,
+                editingApartment.apartment_number,
+                session.t,
+              ),
             })
           : ''
       "
+      :subtitle="editingModalSubtitle"
       max-width="max-w-2xl"
       @close="editingApartmentId = null"
     >

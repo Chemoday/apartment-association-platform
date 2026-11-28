@@ -4,6 +4,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
 import { listPolls } from '@/api/endpoints/governance.js'
 import { formatPollDateTime } from '@/utils/pollValidation.js'
+import { formatTargetScopeLabel } from '@/utils/objectName.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const router = useRouter()
@@ -94,13 +95,7 @@ async function fetchPolls() {
 }
 
 function formatTargetScope(poll) {
-  if (poll.target_scope === 'ENTRANCE' && poll.target_entrance != null) {
-    return session.t('polls.target.entrance', { entrance: poll.target_entrance })
-  }
-  if (poll.target_scope === 'APARTMENT_LIST') {
-    return session.t('polls.target.selectedApartments')
-  }
-  return session.t('polls.target.allBuilding')
+  return formatTargetScopeLabel(poll, session.t)
 }
 
 function statusBadgeClass(status) {
@@ -174,7 +169,7 @@ onMounted(() => {
           :class="
             statusFilter === tab.key
               ? tab.key === 'NEEDS_VOTE'
-                ? 'bg-amber-600 text-white shadow-2xs'
+                ? 'bg-secondary text-on-secondary shadow-2xs'
                 : 'bg-primary text-on-primary shadow-2xs'
               : tab.highlight
                 ? 'bg-amber-50 text-amber-900 border border-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700 hover:bg-amber-100'

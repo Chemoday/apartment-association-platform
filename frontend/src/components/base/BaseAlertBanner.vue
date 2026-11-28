@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import AppIcon from './AppIcon.vue'
 
 export type AlertBannerVariant = 'info' | 'success' | 'warning' | 'error'
 
@@ -42,11 +43,11 @@ const iconName = computed(() => {
 const variantClasses = computed(() => {
   switch (props.variant) {
     case 'success':
-      return 'bg-emerald-50/90 border-emerald-200 text-emerald-900'
+      return 'bg-primary-fixed/65 border-primary/25 text-on-primary-fixed'
     case 'warning':
-      return 'bg-amber-50/90 border-amber-200 text-amber-900'
+      return 'bg-secondary-container/80 border-secondary/25 text-on-secondary-container'
     case 'error':
-      return 'bg-error-container/50 border-error/30 text-on-error-container'
+      return 'bg-error-container/70 border-error/30 text-on-error-container'
     default:
       return 'bg-surface-container-low border-outline-variant/60 text-on-surface'
   }
@@ -56,12 +57,10 @@ const variantClasses = computed(() => {
 <template>
   <div
     :role="role"
-    class="rounded-xl border px-4 py-3 flex items-start gap-3 text-sm"
+    class="rounded-[var(--radius-card)] border px-4 py-3 flex items-start gap-3 text-sm"
     :class="variantClasses"
   >
-    <span class="material-symbols-outlined text-[18px] shrink-0 mt-0.5" aria-hidden="true">
-      {{ iconName }}
-    </span>
+    <AppIcon :name="iconName" :size="18" class="mt-0.5" />
     <div class="min-w-0 flex-1 space-y-0.5">
       <p v-if="title" class="font-semibold leading-snug">{{ title }}</p>
       <p v-if="message" class="leading-relaxed opacity-90">{{ message }}</p>
@@ -71,10 +70,10 @@ const variantClasses = computed(() => {
       v-if="dismissible"
       type="button"
       :aria-label="dismissLabel"
-      class="shrink-0 p-1 rounded-md opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      class="shrink-0 p-1 rounded-md opacity-70 hover:opacity-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       @click="$emit('dismiss')"
     >
-      <span class="material-symbols-outlined text-[16px]" aria-hidden="true">close</span>
+      <AppIcon name="close" :size="16" />
     </button>
   </div>
 </template>

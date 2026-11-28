@@ -132,8 +132,9 @@ export function escapeCsvCell(raw: unknown, { numeric = false }: { numeric?: boo
 }
 
 /**
- * Build the 15-column period CSV per docs/API.md §3 (`GET /meters/periods/{code}/export-csv`).
- * Includes both apartment rows and `MASTER` building meter rows, without resident names.
+ * Build the 16-column period CSV per docs/API.md §3 (`GET /meters/periods/{code}/export-csv`, E14 #068).
+ * Includes both object rows (with `apartment_kind`) and `MASTER` building meter rows (empty `apartment_kind`),
+ * without resident names.
  */
 export interface CsvReadingLike {
   previous_value?: string | number | null
@@ -158,6 +159,7 @@ export interface CsvMeterRowLike {
 export interface CsvApartmentRowLike {
   entrance?: number | string | null
   apartment_number?: string | null
+  apartment_kind?: string | null
   meters?: CsvMeterRowLike[] | null
 }
 
@@ -167,10 +169,11 @@ export function buildPeriodCsv(
   masterMeters: CsvMeterRowLike[] = [],
 ): string {
   const lines = [
-    'period_code,entrance,apartment_number,meter_id,resource_type,serial_number,location_label,unit,previous_value,value,consumption_delta,source,is_anomaly_confirmed,recorded_at,previous_origin',
+    'period_code,entrance,apartment_number,meter_id,resource_type,serial_number,location_label,unit,previous_value,value,consumption_delta,source,is_anomaly_confirmed,recorded_at,previous_origin,apartment_kind',
   ]
 
   for (const apt of apartments) {
+    const kind = apt.apartment_kind || 'APARTMENT'
     for (const m of apt.meters || []) {
       const r = m.reading || null
       lines.push(
@@ -190,6 +193,7 @@ export function buildPeriodCsv(
           escapeCsvCell(r ? String(Boolean(r.is_anomaly_confirmed)) : 'false'),
           escapeCsvCell(r?.recorded_at ?? ''),
           escapeCsvCell(r?.previous_origin ?? ''),
+          escapeCsvCell(kind),
         ].join(','),
       )
     }
@@ -214,6 +218,7 @@ export function buildPeriodCsv(
         escapeCsvCell(r ? String(Boolean(r.is_anomaly_confirmed)) : 'false'),
         escapeCsvCell(r?.recorded_at ?? ''),
         escapeCsvCell(r?.previous_origin ?? ''),
+        '',
       ].join(','),
     )
   }

@@ -7,6 +7,7 @@ import PostOriginBadge from '@/components/domain/PostOriginBadge.vue'
 import BaseChip from '@/components/base/BaseChip.vue'
 import { formatDateTime } from '@/utils/dates.js'
 import { isPostHidden, isPostHideable } from '@/utils/communication.js'
+import { formatTargetScopeLabel } from '@/utils/objectName.js'
 
 const props = defineProps({
   post: {
@@ -34,6 +35,10 @@ const { canDeleteForumTopic, canModerateForum } = useRole()
 const isPinnedNotice = computed(() => props.post.post_type === 'OFFICIAL_NOTICE')
 const hidden = computed(() => isPostHidden(props.post))
 const hideable = computed(() => canModerateForum.value && isPostHideable(props.post))
+const targetChipLabel = computed(() => {
+  if (!props.post?.target_scope || props.post.target_scope === 'ALL_BUILDING') return ''
+  return formatTargetScopeLabel(props.post, session.t)
+})
 
 const categoryLabel = computed(() => {
   if (props.post.post_type === 'OFFICIAL_NOTICE') {
@@ -79,6 +84,10 @@ const displayTimestamp = computed(() => {
         <BaseChip :tone="categoryTone">
           <span v-if="isPinnedNotice" class="material-symbols-outlined text-[13px] mr-0.5">campaign</span>
           <span>{{ categoryLabel }}</span>
+        </BaseChip>
+        <BaseChip v-if="targetChipLabel" tone="neutral" data-testid="post-list-target-chip">
+          <span class="material-symbols-outlined text-[13px] mr-0.5" aria-hidden="true">group</span>
+          <span>{{ targetChipLabel }}</span>
         </BaseChip>
         <BaseChip v-if="post.hidden_at" tone="warning">
           <span class="material-symbols-outlined text-[13px] mr-0.5" aria-hidden="true">visibility_off</span>

@@ -1,6 +1,7 @@
 import type { SeedUser } from '../state.js';
 import type { DisplayMode } from '../../api/schema.js';
 import { type RouteContext, sendJson, sendError, readBody } from '../http.js';
+import { computeMockSharedAccess } from '../../mocks/domains/index.js';
 import {
   BUILDING_ID,
   DEMO_APARTMENT_CARDS,
@@ -31,6 +32,7 @@ export async function handlePropertyRoutes(ctx: RouteContext<SeedUser>): Promise
         building_role: user.building_role,
         privacy_display_mode: userMems[0]?.privacy_display_mode || 'FULL_NAME',
         locale: userLocales[user.user_id] ?? null,
+        shared_access: computeMockSharedAccess(userMems),
         memberships: userMems,
       });
     }
@@ -47,7 +49,7 @@ export async function handlePropertyRoutes(ctx: RouteContext<SeedUser>): Promise
       return sendJson(res, 200, { locale: nextLocale });
     }
 
-    // 2b. GET /api/v1/property/building (Added in PR #31, updated #034/#035)
+    // 2b. GET /api/v1/property/building (Added in PR #31, updated #034/#035/#063)
     if (pathname === '/api/v1/property/building' && method === 'GET') {
       return sendJson(res, 200, {
         building_id: BUILDING_ID,
@@ -64,6 +66,11 @@ export async function handlePropertyRoutes(ctx: RouteContext<SeedUser>): Promise
         entrances_count: 2,
         total_entrances: 2,
         heated_area_m2: '329.20',
+        object_counts: {
+          APARTMENT: DEMO_APARTMENT_CARDS.filter((a) => (a.apartment_kind || 'APARTMENT') === 'APARTMENT').length,
+          PARKING: DEMO_APARTMENT_CARDS.filter((a) => a.apartment_kind === 'PARKING').length,
+          GARAGE: DEMO_APARTMENT_CARDS.filter((a) => a.apartment_kind === 'GARAGE').length,
+        },
         registry_facts: serverStore.buildingRegistryState.accepted
           ? JSON.parse(JSON.stringify(serverStore.buildingRegistryState.accepted))
           : null,
@@ -192,89 +199,11 @@ export async function handlePropertyRoutes(ctx: RouteContext<SeedUser>): Promise
     }
 
     // 2c. GET /api/v1/property/apartments & GET /api/v1/property/apartments/{apartment_id} (E8/P1)
-    const DEMO_APARTMENT_CARDS = [
-      {
-        apartment_id: '018f0000-0000-7000-8000-000000000301',
-        apartment_number: '01',
-        entrance: 1,
-        floor: 1,
-        area_m2: '48.50',
-        owner_count: 1,
-        tenant_count: 0,
-        resident_count: 0,
-        residents: [{ relation_type: 'OWNER' as const, since: '2021-03-10T10:00:00Z' }],
-      },
-      {
-        apartment_id: '018f0000-0000-7000-8000-000000000302',
-        apartment_number: '02',
-        entrance: 1,
-        floor: 1,
-        area_m2: '54.30',
-        owner_count: 0,
-        tenant_count: 1,
-        resident_count: 0,
-        residents: [{ relation_type: 'TENANT' as const, since: '2026-06-15T10:00:00Z' }],
-      },
-      {
-        apartment_id: '018f0000-0000-7000-8000-000000000305',
-        apartment_number: '05',
-        entrance: 1,
-        floor: 2,
-        area_m2: '62.10',
-        owner_count: 0,
-        tenant_count: 0,
-        resident_count: 0,
-        residents: [],
-      },
-      {
-        apartment_id: '018f0000-0000-7000-8000-000000000309',
-        apartment_number: '09',
-        entrance: 2,
-        floor: 3,
-        area_m2: '51.00',
-        owner_count: 1,
-        tenant_count: 0,
-        resident_count: 1,
-        residents: [
-          { relation_type: 'OWNER' as const, since: '2023-04-01T09:00:00Z' },
-          { relation_type: 'RESIDENT' as const, since: '2024-09-01T12:00:00Z' },
-        ],
-      },
-      {
-        apartment_id: '018f0000-0000-7000-8000-000000000314',
-        apartment_number: '14',
-        entrance: 2,
-        floor: 4,
-        area_m2: '54.30',
-        owner_count: 1,
-        tenant_count: 1,
-        resident_count: 0,
-        residents: [
-          { relation_type: 'OWNER' as const, since: '2022-01-12T10:00:00Z' },
-          { relation_type: 'TENANT' as const, since: '2025-09-03T10:00:00Z' },
-        ],
-      },
-      {
-        apartment_id: '018f0000-0000-7000-8000-000000000315',
-        apartment_number: '15',
-        entrance: 2,
-        floor: 4,
-        area_m2: '59.00',
-        owner_count: 1,
-        tenant_count: 1,
-        resident_count: 0,
-        residents: [
-          { relation_type: 'OWNER' as const, since: '2022-05-18T10:00:00Z' },
-          { relation_type: 'TENANT' as const, since: '2025-05-01T10:00:00Z' },
-        ],
-      },
-    ];
-
     if (pathname === '/api/v1/property/apartments' && method === 'GET') {
       if (!isBoard) {
         return sendError(res, 403, 'FORBIDDEN', 'Chairman or Board role required.');
       }
-      const summaries = DEMO_APARTMENT_CARDS.map(({ residents, ...rest }) => rest);
+      const summaries = DEMO_APARTMENT_CARDS.map(({ residents: _residents, ...rest }) => rest);
       return sendJson(res, 200, { apartments: summaries });
     }
 
@@ -306,7 +235,12 @@ export async function handlePropertyRoutes(ctx: RouteContext<SeedUser>): Promise
           ? (body.privacy_display_mode as DisplayMode)
           : 'FULL_NAME';
       target.privacy_display_mode = newMode;
-      target.preview_badge = computePreviewBadge(user, target.apartment_number, newMode);
+      target.preview_badge = computePreviewBadge(
+        user,
+        target.apartment_number,
+        newMode,
+        target.apartment_kind,
+      );
       return sendJson(res, 200, {
         membership_id: target.membership_id,
         privacy_display_mode: target.privacy_display_mode,

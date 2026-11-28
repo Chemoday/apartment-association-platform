@@ -10,6 +10,7 @@ import {
 } from '@/utils/issues.js'
 import { formatDate as formatTallinnDate } from '@/utils/dates.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
+import ForbiddenView from '@/views/errors/ForbiddenView.vue'
 import IssueFormModal from './components/IssueFormModal.vue'
 
 const route = useRoute()
@@ -265,7 +266,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="w-full max-w-[1280px] mx-auto px-gutter py-space-lg space-y-6">
+  <ForbiddenView v-if="loadError?.status === 403" />
+
+  <div v-else class="w-full max-w-[1280px] mx-auto px-gutter py-space-lg space-y-6">
     <!-- Page Header -->
     <header
       class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b border-surface-container pb-5"

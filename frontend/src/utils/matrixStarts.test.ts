@@ -318,6 +318,7 @@ test('metersMockHelpers handles signed BigInt, status state machine, MWh thresho
     [
       {
         apartment_number: '14',
+        apartment_kind: 'APARTMENT',
         entrance: 2,
         meters: [
           {
@@ -334,6 +335,29 @@ test('metersMockHelpers handles signed BigInt, status state machine, MWh thresho
               source: 'RESIDENT',
               is_anomaly_confirmed: false,
               previous_origin: 'START',
+            },
+          },
+        ],
+      },
+      {
+        apartment_number: '12',
+        apartment_kind: 'GARAGE',
+        entrance: null,
+        meters: [
+          {
+            meter_id: 'm-gar-1',
+            resource_type: 'ELECTRICITY',
+            serial_number: 'EL-12',
+            location_label: 'Garage',
+            unit: 'kWh',
+            previous_value: '100.000',
+            reading: {
+              value: '115.000',
+              previous_value: '100.000',
+              consumption_delta: '15.000',
+              source: 'RESIDENT',
+              is_anomaly_confirmed: false,
+              previous_origin: 'HISTORY',
             },
           },
         ],
@@ -359,12 +383,16 @@ test('metersMockHelpers handles signed BigInt, status state machine, MWh thresho
     ],
   )
   const rows = csv.split('\n')
-  assert.equal(rows.length, 3)
-  assert.equal(rows[0].split(',').length, 15)
-  assert.ok(rows[0].endsWith(',previous_origin'))
+  assert.equal(rows.length, 4)
+  assert.equal(rows[0].split(',').length, 16)
+  assert.ok(rows[0].endsWith(',previous_origin,apartment_kind'))
   assert.equal(rows[1].includes(',null,'), false)
   assert.ok(rows[1].includes("'=FormulaRoom"))
-  assert.ok(rows[1].endsWith(',START'))
-  assert.ok(rows[2].startsWith('2026-10,,MASTER,m-master,'))
-  assert.ok(rows[2].endsWith(',HISTORY'))
+  assert.ok(rows[1].endsWith(',START,APARTMENT'))
+  // Garage row has empty entrance and ends with GARAGE
+  assert.ok(rows[2].startsWith('2026-10,,12,m-gar-1,'))
+  assert.ok(rows[2].endsWith(',HISTORY,GARAGE'))
+  // MASTER row has empty apartment_kind as 16th column
+  assert.ok(rows[3].startsWith('2026-10,,MASTER,m-master,'))
+  assert.ok(rows[3].endsWith(',HISTORY,'))
 })

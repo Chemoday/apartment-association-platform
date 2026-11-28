@@ -1,17 +1,38 @@
 /**
  * Generated from docs/openapi.json (OpenAPI 3.1.0 - Apartment Association Platform v0.1.0)
- * Handed-over backend commit: 0f2613b
+ * Handed-over backend commit: 484b641
  */
 
 export type AnswerMode = 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE' | 'OWN_VALUE'
 export type AuthMethod = 'MAGIC_LINK' | 'PASSWORD' | 'REGISTRATION'
 export type BuildingRole = 'CHAIRMAN' | 'BOARD' | 'ACCOUNTANT' | 'USER'
+export type BulkRowOutcome =
+  | 'INVALID_ROW'
+  | 'INVALID_EMAIL'
+  | 'INVALID_LOCALE'
+  | 'INVALID_KIND'
+  | 'APARTMENT_NOT_FOUND'
+  | 'DUPLICATE_IN_LIST'
+  | 'ALREADY_PENDING'
+  | 'READY'
+  | 'INVITED'
 export type Channel = 'in_app' | 'email' | 'telegram' | 'webpush'
+export type ConnectionStatus =
+  | 'CONNECTED'
+  | 'JOIN_REQUEST'
+  | 'INVITED'
+  | 'CODE_ISSUED'
+  | 'TENANT_ONLY'
+  | 'PAPER'
+  | 'EXPIRED'
+  | 'NOT_INVITED'
 export type DeviceKind = 'DESKTOP_BROWSER' | 'MOBILE_BROWSER' | 'UNKNOWN'
 export type DisplayMode = 'APARTMENT_ONLY' | 'INITIALS' | 'FULL_NAME'
 export type Eligibility = 'RESIDENTS' | 'OWNERS'
+export type InvitationDelivery = 'QUEUED' | 'SENT' | 'FAILED'
 export type InvitationKind = 'OWNER' | 'TENANT' | 'STAFF'
 export type InvitationStatus = 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'NO_LONGER_VALID'
+export type JoinOutcome = 'CONFIRMED' | 'REJECTED' | 'EXPIRED'
 export type Locale = 'et' | 'ru' | 'en'
 export type MeterUnit = 'm3' | 'kWh' | 'MWh'
 export type NotificationEventType =
@@ -29,6 +50,8 @@ export type NotificationEventType =
   | 'NOTICE_PUBLISHED'
   | 'STORAGE_ALMOST_FULL'
   | 'ENERGY_CERTIFICATE_EXPIRING'
+  | 'JOIN_REQUEST_SUBMITTED'
+export type ObjectKind = 'APARTMENT' | 'PARKING' | 'GARAGE'
 export type PeriodStatus = 'OPEN_FOR_RESIDENTS' | 'REVIEW_BY_BOARD' | 'LOCKED'
 export type PollKind = 'INFORMATIVE'
 export type PollStatus = 'DRAFT' | 'OPEN' | 'CLOSED' | 'CANCELLED'
@@ -56,8 +79,14 @@ export type SubjectType =
   | 'maintenance_task'
   | 'storage'
   | 'building'
+  | 'join_request'
 export type SubmissionStatus = 'SUBMITTED' | 'MISSING' | 'AUTO_ESTIMATED' | 'ANOMALY_CONFIRMED'
-export type TargetScope = 'ALL_BUILDING' | 'ENTRANCE' | 'APARTMENT_LIST'
+export type TargetScope =
+  | 'ALL_BUILDING'
+  | 'ENTRANCE'
+  | 'APARTMENT_LIST'
+  | 'ALL_OBJECTS'
+  | 'KINDS'
 export type UnavailableReason = 'DEMO_MODE' | 'CHANNEL_NOT_ENABLED' | 'NO_EMAIL' | 'NOT_LINKED'
 export type ValueType = 'TEXT' | 'NUMBER' | 'DATE'
 
@@ -105,6 +134,7 @@ export interface BuildingResponse {
   total_entrances?: number
   heated_area_m2: string
   total_area_m2?: string
+  object_counts?: Record<ObjectKind, number>
   registry_facts?: EEBuildingFacts | null
 }
 
@@ -112,8 +142,9 @@ export interface MembershipView {
   membership_id: string
   apartment_id: string
   apartment_number: string
-  entrance: number
-  floor: number
+  apartment_kind?: ObjectKind
+  entrance: number | null
+  floor: number | null
   relation_type: RelationType
   can_submit_readings: boolean
   can_view_bills: boolean
@@ -129,6 +160,7 @@ export interface MeResponse {
   building_role: BuildingRole
   privacy_display_mode: DisplayMode
   locale: Locale | null
+  shared_access?: boolean
   memberships: MembershipView[]
 }
 
@@ -149,9 +181,10 @@ export interface PrivacyUpdateResponse {
 export interface ApartmentSummary {
   apartment_id: string
   apartment_number: string
-  entrance: number
-  floor: number
-  area_m2: string
+  apartment_kind?: ObjectKind
+  entrance: number | null
+  floor: number | null
+  area_m2: string | null
   owner_count: number
   tenant_count: number
   resident_count: number
@@ -193,6 +226,7 @@ export interface ApartmentMeterHistory {
 export interface ApartmentReadingsResponse {
   apartment_id: string
   apartment_number: string
+  apartment_kind?: ObjectKind
   periods: PeriodDTO[]
   meters: ApartmentMeterHistory[]
 }
@@ -212,6 +246,7 @@ export interface ApartmentConsumptionSeries {
 export interface ApartmentConsumptionResponse {
   apartment_id: string
   apartment_number: string
+  apartment_kind?: ObjectKind
   periods: PeriodDTO[]
   resources: ApartmentConsumptionSeries[]
 }
@@ -258,7 +293,9 @@ export interface SessionResponse {
 export interface InvitationPreview {
   kind: InvitationKind
   apartment_number: string | null
+  apartment_kind?: ObjectKind | null
   building_role: StaffRole | null
+  country_code?: string
 }
 
 export interface SignInResponse {
@@ -318,9 +355,12 @@ export interface InvitationView {
   email: string
   apartment_id: string | null
   apartment_number: string | null
+  apartment_kind?: ObjectKind | null
   building_role: StaffRole | null
   status: InvitationStatus
   mine: boolean
+  locale?: Locale | null
+  delivery?: InvitationDelivery
   created_at: string
   expires_at: string
 }
@@ -329,18 +369,22 @@ export interface OwnerInvitationCreate {
   kind: 'OWNER'
   email: string
   apartment_number: string
+  apartment_kind?: ObjectKind
+  locale?: Locale | null
 }
 
 export interface TenantInvitationCreate {
   kind: 'TENANT'
   email: string
   apartment_id: string
+  locale?: Locale | null
 }
 
 export interface StaffInvitationCreate {
   kind: 'STAFF'
   email: string
   building_role: StaffRole
+  locale?: Locale | null
 }
 
 export interface ReplaceTenantRequest {
@@ -365,6 +409,7 @@ export interface PersonMembershipView {
   membership_id: string
   apartment_id: string
   apartment_number: string
+  apartment_kind?: ObjectKind
   relation_type: RelationType
   display_label: string
   since: string
@@ -525,6 +570,7 @@ export interface DashboardMeter {
 export interface DashboardApartment {
   apartment_id: string
   apartment_number: string
+  apartment_kind?: ObjectKind
   can_submit_readings: boolean
   meters: DashboardMeter[]
 }
@@ -604,8 +650,9 @@ export interface MatrixMeter {
 export interface MatrixApartment {
   apartment_id: string
   apartment_number: string
-  entrance: number
-  floor: number
+  apartment_kind?: ObjectKind
+  entrance: number | null
+  floor: number | null
   status: SubmissionStatus
   meters: MatrixMeter[]
 }
@@ -653,6 +700,7 @@ export interface EmergencyView {
   target_scope: TargetScope
   target_entrance: number | null
   target_apartment_ids: string[] | null
+  target_kinds?: ObjectKind[] | null
   is_active: boolean
   comments_enabled: boolean
   comments_count: number
@@ -686,6 +734,7 @@ export interface PostView {
   target_scope: TargetScope
   target_entrance: number | null
   target_apartment_ids: string[] | null
+  target_kinds?: ObjectKind[] | null
   is_active: boolean
   comments_enabled: boolean
   comments_count: number
@@ -721,6 +770,7 @@ export interface PostCreateRequest {
   target_scope?: TargetScope
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: ObjectKind[] | null
   comments_enabled?: boolean
   author_apartment_id?: string | null
 }
@@ -959,6 +1009,7 @@ export interface PollSummary {
   target_scope: TargetScope
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: ObjectKind[] | null
   eligibility: Eligibility
   unit: PollUnit
   closes_at: string
@@ -981,6 +1032,7 @@ export interface PollView {
   target_scope: TargetScope
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: ObjectKind[] | null
   eligibility: Eligibility
   unit: PollUnit
   closes_at: string
@@ -1024,6 +1076,7 @@ export interface PollDraftRequest {
   target_scope?: TargetScope
   target_entrance?: number | null
   target_apartment_ids?: string[] | null
+  target_kinds?: ObjectKind[] | null
   eligibility?: Eligibility
   unit?: PollUnit
   closes_at: string
@@ -1072,13 +1125,13 @@ export interface PollResults {
   questions: QuestionResult[]
 }
 
-export type SettingType = 'INTEGER' | 'BOOLEAN'
+export type SettingType = 'INTEGER' | 'BOOLEAN' | 'URL'
 
 export interface SettingView {
   key: string
   type: SettingType
-  value: number | boolean
-  default: number | boolean
+  value: number | boolean | string
+  default: number | boolean | string
   minimum: number | null
   maximum: number | null
   is_default: boolean
@@ -1086,7 +1139,7 @@ export interface SettingView {
 }
 
 export interface SettingsUpdate {
-  values: Record<string, boolean | number | null>
+  values: Record<string, boolean | number | string | null>
 }
 
 export interface SettingsView {
@@ -1223,6 +1276,7 @@ export interface NoticeDraft {
   target_scope: TargetScope
   target_entrance: number | null
   target_apartment_ids: string[] | null
+  target_kinds?: ObjectKind[] | null
   comments_enabled: boolean
 }
 
@@ -1373,6 +1427,7 @@ export interface NoticeView {
   target_scope: TargetScope
   target_entrance: number | null
   target_apartment_ids: string[] | null
+  target_kinds?: ObjectKind[] | null
   comments_enabled: boolean
 }
 
@@ -1536,6 +1591,143 @@ export interface RegistryState {
   accepted_at: string | null
   proposal: EEBuildingFacts | null
   proposal_fetched_at: string | null
+}
+
+export interface BulkInvitationRequest {
+  text: string
+}
+
+export interface BulkInvitationRow {
+  line: number
+  apartment_number: string | null
+  apartment_kind: ObjectKind | null
+  email: string | null
+  locale: string | null
+  outcome: BulkRowOutcome
+}
+
+export interface BulkInvitationReport {
+  rows: BulkInvitationRow[]
+  counts: Record<BulkRowOutcome, number>
+  limit_remaining: number
+}
+
+export interface KindSummary {
+  objects: number
+  connected: number
+}
+
+export interface ConnectionSummary {
+  apartments: number
+  connected: number
+  by_status: Record<ConnectionStatus, number>
+  by_kind: Record<ObjectKind, KindSummary>
+}
+
+export interface ConnectionItem {
+  apartment_id: string
+  apartment_number: string
+  apartment_kind: ObjectKind
+  entrance: number | null
+  status: ConnectionStatus
+  owners: number
+  tenants: number
+  on_paper: boolean
+  last_invited_at: string | null
+  invitation_delivery: InvitationDelivery | null
+}
+
+export interface ConnectionOverview {
+  summary: ConnectionSummary
+  matching: number
+  items: ConnectionItem[]
+}
+
+export interface PaperUpdate {
+  on_paper: boolean
+}
+
+export interface ResendExpiredResponse {
+  queued: number
+  left: number
+}
+
+export interface JoinCodesIssue {
+  apartment_ids?: string[] | null
+}
+
+export interface IssuedJoinCode {
+  code_id: string
+  apartment_id: string
+  apartment_number: string
+  apartment_kind: ObjectKind
+  join_code: string
+  expires_at: string
+}
+
+export interface JoinCodesIssued {
+  association_name: string
+  join_url: string
+  codes: IssuedJoinCode[]
+}
+
+export interface JoinCodeView {
+  code_id: string
+  apartment_id: string
+  apartment_number: string
+  apartment_kind: ObjectKind
+  created_at: string
+  expires_at: string
+}
+
+export interface JoinLookup {
+  join_code: string
+}
+
+export interface JoinTarget {
+  association_name: string
+  apartment_number: string
+  apartment_kind: ObjectKind
+  country_code: string
+}
+
+export interface JoinSubmit {
+  join_code: string
+  full_name: string
+  phone: string
+  email: string
+  locale?: Locale | null
+}
+
+export interface JoinAccepted {
+  accepted?: boolean
+}
+
+export interface JoinRequestView {
+  request_id: string
+  apartment_id: string
+  apartment_number: string
+  apartment_kind: ObjectKind
+  full_name: string
+  phone: string
+  email: string
+  locale: Locale | null
+  created_at: string
+}
+
+export interface JoinDecisionView {
+  apartment_id: string | null
+  apartment_number: string | null
+  apartment_kind: ObjectKind | null
+  outcome: JoinOutcome
+  decided_by_user_id: string | null
+  decided_at: string
+}
+
+export interface PrivacyNotice {
+  custom_url: string | null
+  locale: Locale
+  text: string | null
 }
 
 

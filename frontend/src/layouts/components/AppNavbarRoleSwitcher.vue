@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
+import { objectShortName } from '@/utils/objectName.js'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -75,7 +76,7 @@ onBeforeUnmount(() => {
         <div class="flex flex-col min-w-0">
           <span class="text-on-surface truncate">{{ u.label }}</span>
           <span class="text-[11px] text-on-surface-variant">
-            {{ u.building_role }}{{ u.apartment_number ? ` • Apt ${u.apartment_number}` : '' }}
+            {{ u.building_role }}{{ u.apartment_number ? ` • ${objectShortName((u as { apartment_kind?: string | null }).apartment_kind, u.apartment_number, session.t)}` : '' }}
           </span>
         </div>
         <span

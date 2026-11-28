@@ -4,7 +4,14 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ref } from 'vue'
-import { canAccessRoute, createAuthGuard } from './access.js'
+import {
+  canAccessChat,
+  canAccessDocuments,
+  canAccessIssues,
+  canAccessRoute,
+  createAuthGuard,
+  hasSharedAccess,
+} from './access.js'
 import { useUnsavedChangesGuard } from '../composables/useUnsavedChangesGuard.js'
 
 const SRC_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -335,3 +342,150 @@ test('loadOfflineDemoModule resets cachedModulePromise on transient import error
     setOfflineDemoImporterForTest(null)
   }
 })
+
+test('#066 shared_access and chat predicates enforce E14 access matrix across all personas', async () => {
+  const { canUserAccessDocumentsModule } = await import('../utils/documents.js')
+  const { canUserAccessIssues } = await import('../utils/issues.js')
+  const { canUserParticipateInChat } = await import('../utils/chat.js')
+
+  const docsRoute = {
+    name: 'documents',
+    path: '/documents',
+    fullPath: '/documents',
+    meta: { roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'], requiresSharedAccess: 'documents' as const },
+  }
+  const issuesRoute = {
+    name: 'issues',
+    path: '/issues',
+    fullPath: '/issues',
+    meta: { roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'], requiresSharedAccess: 'issues' as const },
+  }
+  const chatRoute = {
+    name: 'chat',
+    path: '/chat',
+    fullPath: '/chat',
+    meta: { roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'], requiresChatAccess: true },
+  }
+  const messagesRoute = {
+    name: 'messages',
+    path: '/messages',
+    fullPath: '/messages',
+    meta: { roles: ['USER', 'BOARD', 'CHAIRMAN', 'ACCOUNTANT'], requiresApartmentOrBoard: true },
+  }
+
+  // 1. Tenant of only a parking space: no documents, no issues, no chat; YES messages
+  const parkingTenantMems = [
+    { apartment_id: 'park-1', apartment_kind: 'PARKING', relation_type: 'TENANT' },
+  ]
+  const parkingTenantSession = {
+    authMode: 'signed_in',
+    buildingRole: 'USER',
+    sharedAccess: false,
+    memberships: parkingTenantMems,
+    me: { building_role: 'USER', shared_access: false, memberships: parkingTenantMems },
+  }
+  assert.equal(hasSharedAccess(parkingTenantSession), false)
+  assert.equal(canAccessDocuments(parkingTenantSession), false)
+  assert.equal(canAccessIssues(parkingTenantSession), false)
+  assert.equal(canAccessChat(parkingTenantSession), false)
+  assert.equal(canAccessRoute(docsRoute, parkingTenantSession), false)
+  assert.equal(canAccessRoute(issuesRoute, parkingTenantSession), false)
+  assert.equal(canAccessRoute(chatRoute, parkingTenantSession), false)
+  assert.equal(canAccessRoute(messagesRoute, parkingTenantSession), true)
+  assert.equal(canUserAccessDocumentsModule({ building_role: 'USER' }, parkingTenantMems), false)
+  assert.equal(canUserAccessIssues({ building_role: 'USER' }, parkingTenantMems), false)
+  assert.equal(canUserParticipateInChat({ building_role: 'USER' }, parkingTenantMems), false)
+
+  // Direct link for parking-only tenant gives forbidden page
+  const guard = createAuthGuard(() => parkingTenantSession)
+  assert.deepEqual(await guard(docsRoute), {
+    name: 'forbidden',
+    query: { from: '/documents' },
+    replace: true,
+  })
+  assert.deepEqual(await guard(issuesRoute), {
+    name: 'forbidden',
+    query: { from: '/issues' },
+    replace: true,
+  })
+  assert.deepEqual(await guard(chatRoute), {
+    name: 'forbidden',
+    query: { from: '/chat' },
+    replace: true,
+  })
+
+  // 2. Owner of only a garage: YES documents & issues, NO chat
+  const garageOwnerMems = [
+    { apartment_id: 'gar-12', apartment_kind: 'GARAGE', relation_type: 'OWNER' },
+  ]
+  const garageOwnerSession = {
+    authMode: 'signed_in',
+    buildingRole: 'USER',
+    sharedAccess: true,
+    memberships: garageOwnerMems,
+    me: { building_role: 'USER', shared_access: true, memberships: garageOwnerMems },
+  }
+  assert.equal(hasSharedAccess(garageOwnerSession), true)
+  assert.equal(canAccessRoute(docsRoute, garageOwnerSession), true)
+  assert.equal(canAccessRoute(issuesRoute, garageOwnerSession), true)
+  assert.equal(canAccessRoute(chatRoute, garageOwnerSession), false)
+  assert.equal(canUserAccessDocumentsModule({ building_role: 'USER' }, garageOwnerMems), true)
+  assert.equal(canUserAccessIssues({ building_role: 'USER' }, garageOwnerMems), true)
+  assert.equal(canUserParticipateInChat({ building_role: 'USER' }, garageOwnerMems), false)
+
+  // 3. Tenant of an apartment: YES documents, issues, and chat
+  const aptTenantMems = [
+    { apartment_id: 'apt-2', apartment_kind: 'APARTMENT', relation_type: 'TENANT' },
+  ]
+  const aptTenantSession = {
+    buildingRole: 'USER',
+    sharedAccess: true,
+    memberships: aptTenantMems,
+  }
+  assert.equal(canAccessRoute(docsRoute, aptTenantSession), true)
+  assert.equal(canAccessRoute(issuesRoute, aptTenantSession), true)
+  assert.equal(canAccessRoute(chatRoute, aptTenantSession), true)
+
+  // 4. Staff without memberships: Accountant keeps documents only; Board & Chairman keep all three
+  const accountantSession = {
+    buildingRole: 'ACCOUNTANT',
+    sharedAccess: false,
+    memberships: [],
+  }
+  assert.equal(canAccessRoute(docsRoute, accountantSession), true)
+  assert.equal(canAccessRoute(issuesRoute, accountantSession), false)
+  assert.equal(canAccessRoute(chatRoute, accountantSession), false)
+  assert.equal(canUserAccessDocumentsModule({ building_role: 'ACCOUNTANT' }, []), true)
+  assert.equal(canUserAccessIssues({ building_role: 'ACCOUNTANT' }, []), false)
+  assert.equal(canUserParticipateInChat({ building_role: 'ACCOUNTANT' }, []), false)
+
+  for (const role of ['BOARD', 'CHAIRMAN'] as const) {
+    const staffSession = { buildingRole: role, sharedAccess: false, memberships: [] }
+    assert.equal(canAccessRoute(docsRoute, staffSession), true)
+    assert.equal(canAccessRoute(issuesRoute, staffSession), true)
+    assert.equal(canAccessRoute(chatRoute, staffSession), true)
+    assert.equal(canUserAccessDocumentsModule({ building_role: role }, []), true)
+    assert.equal(canUserAccessIssues({ building_role: role }, []), true)
+    assert.equal(canUserParticipateInChat({ building_role: role }, []), true)
+  }
+
+  // 4. Fail-closed on unloaded session (me: null) and unknown future apartment_kind (CTO audit P1-9, P2-7)
+  const unloadedSession = { buildingRole: 'USER', me: null, memberships: [] }
+  assert.equal(hasSharedAccess(unloadedSession), false)
+  assert.equal(canAccessDocuments(unloadedSession), false)
+  assert.equal(canAccessIssues(unloadedSession), false)
+  assert.equal(canAccessChat(unloadedSession), false)
+
+  const unknownKindTenant = {
+    buildingRole: 'USER',
+    memberships: [{ apartment_id: 'st-1', apartment_kind: 'STORAGE', relation_type: 'TENANT' }],
+  }
+  assert.equal(hasSharedAccess(unknownKindTenant), false)
+  assert.equal(canAccessDocuments(unknownKindTenant), false)
+  assert.equal(canAccessIssues(unknownKindTenant), false)
+  assert.equal(canAccessChat(unknownKindTenant), false)
+  assert.equal(canUserAccessDocumentsModule({ building_role: 'USER' }, unknownKindTenant.memberships), false)
+  assert.equal(canUserAccessIssues({ building_role: 'USER' }, unknownKindTenant.memberships), false)
+  assert.equal(canUserParticipateInChat({ building_role: 'USER' }, unknownKindTenant.memberships), false)
+})
+

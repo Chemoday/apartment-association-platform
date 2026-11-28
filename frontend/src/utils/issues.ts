@@ -4,6 +4,7 @@
  */
 
 import { parseJpegDimensions } from './photoScaling.js'
+import { isApartmentKindStrict } from './objectName.js'
 
 export const ISSUE_CATEGORIES = [
   'LIGHTING',
@@ -172,6 +173,7 @@ export interface IssueActorLike {
 export interface IssueMembershipLike {
   apartment_id: string
   apartment_number?: string | number
+  apartment_kind?: string | null
 }
 
 export interface IssueSettingLike {
@@ -381,7 +383,12 @@ export function canUserAccessIssues(
 ): boolean {
   if (!user) return false
   if (user.building_role && ['CHAIRMAN', 'BOARD'].includes(user.building_role)) return true
-  return Array.isArray(memberships) && memberships.length > 0
+  if (!Array.isArray(memberships) || memberships.length === 0) return false
+  return memberships.some((raw) => {
+    const m = raw && typeof raw === 'object' ? (raw as { apartment_kind?: string | null; relation_type?: string | null }) : null
+    if (!m) return false
+    return isApartmentKindStrict(m.apartment_kind) || m.relation_type === 'OWNER'
+  })
 }
 
 /**
@@ -1088,9 +1095,12 @@ export function createIssueInStore({
     }
   }
 
-  const aptIds = userMemberships
+  const sortedMemberships = userMemberships
     .slice()
     .sort((a, b) => String(a.apartment_number).localeCompare(String(b.apartment_number)))
+  const aptIds = sortedMemberships.map((m) => m.apartment_id)
+  const apartmentOnlyIds = sortedMemberships
+    .filter((m) => !m.apartment_kind || m.apartment_kind === 'APARTMENT')
     .map((m) => m.apartment_id)
 
   let targetApartmentId: string | null = null
@@ -1107,6 +1117,8 @@ export function createIssueInStore({
     targetApartmentId = requestedAptId
   } else if (aptIds.length === 1 && body?.apartment_id !== null) {
     targetApartmentId = aptIds[0]
+  } else if (aptIds.length > 1 && apartmentOnlyIds.length === 1 && body?.apartment_id !== null) {
+    targetApartmentId = apartmentOnlyIds[0]
   } else if (aptIds.length > 1 && body?.apartment_id !== null) {
     return {
       ok: false,

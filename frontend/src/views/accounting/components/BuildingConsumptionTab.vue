@@ -221,10 +221,10 @@ const tables = computed(() => {
 
         <div class="overflow-x-auto">
           <table
-            class="w-full text-left font-body-sm text-xs sm:text-sm"
+            class="w-full min-w-[680px] text-left font-body-sm text-xs sm:text-sm"
             :aria-label="session.t('buildingConsumption.tableAriaLabel', { resource: tbl.resourceName })"
           >
-            <thead class="bg-surface-container/50 text-on-surface-variant font-label-md text-[11px] uppercase tracking-wider border-b border-surface-container">
+            <thead class="bg-surface-container-low/70 text-on-surface-variant font-label-md text-[11px] uppercase tracking-wider border-b border-outline-variant/40">
               <tr>
                 <th class="py-3 px-space-md whitespace-nowrap">
                   {{ session.t('buildingConsumption.colMonth') }}
@@ -246,7 +246,7 @@ const tables = computed(() => {
                 </th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-surface-container">
+            <tbody class="divide-y divide-outline-variant/35">
               <tr
                 v-for="row in tbl.rows"
                 :key="row.periodCode"

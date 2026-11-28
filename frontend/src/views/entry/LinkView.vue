@@ -5,6 +5,7 @@ import { useSessionStore } from '@/stores/session.js'
 import { refreshSession } from '@/api/client.js'
 import { acceptInvitation, completeRegistration, redeemLink } from '@/api/endpoints/auth.js'
 import { takeLinkToken } from '@/utils/linkToken.js'
+import { formatBadgeObjectToken, objectName } from '@/utils/objectName.js'
 import ErrorCard from '@/components/domain/ErrorCard.vue'
 
 const router = useRouter()
@@ -46,14 +47,15 @@ const headingText = computed(() => {
 const invitationHeadingText = computed(() => {
   const inv = invitation.value
   if (!inv) return session.t('auth.link.title')
+  const objLabel = objectName(inv.apartment_kind, inv.apartment_number || '14', session.t)
   if (inv.kind === 'OWNER') {
-    return session.t('auth.registration.invitedAsOwner', {
-      number: inv.apartment_number || '14',
+    return session.t('auth.registration.invitedAsOwnerOfObject', {
+      object: objLabel,
     })
   }
   if (inv.kind === 'TENANT') {
-    return session.t('auth.registration.invitedAsTenant', {
-      number: inv.apartment_number || '14',
+    return session.t('auth.registration.invitedAsTenantOfObject', {
+      object: objLabel,
     })
   }
   const roleKey = inv.building_role || 'BOARD'
@@ -73,16 +75,17 @@ function computeInitialsFromName(name) {
 
 function getRegistrationPrivacyPreview(mode) {
   const apt = invitation.value?.apartment_number || '14'
+  const tokenLabel = formatBadgeObjectToken(invitation.value?.apartment_kind, apt, 'Apt.')
   const typedName = regForm.fullName.trim()
   if (mode === 'APARTMENT_ONLY') {
-    return `Apt. ${apt}`
+    return tokenLabel
   }
   if (mode === 'INITIALS') {
     const initials = computeInitialsFromName(typedName)
-    return `${initials} (Apt. ${apt})`
+    return `${initials} (${tokenLabel})`
   }
   const displayName = typedName || 'Kati Kask'
-  return `${displayName} (Apt. ${apt})`
+  return `${displayName} (${tokenLabel})`
 }
 
 const formattedRetryTime = computed(() => {

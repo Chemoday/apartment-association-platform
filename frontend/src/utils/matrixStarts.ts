@@ -135,6 +135,7 @@ export function collectMeterStartOrigins(
 export interface SkippedMeterDescriptor {
   meter_id: string
   apartment_number: string | null
+  apartment_kind?: 'APARTMENT' | 'PARKING' | 'GARAGE' | null
   resource_type: string | null
   location_label: string | null
 }
@@ -148,6 +149,7 @@ export function resolveSkippedMetersWithoutStart(
   skippedIds: string[] | null | undefined,
   apartments: Array<{
     apartment_number: string
+    apartment_kind?: string
     meters?: Array<{ meter_id: string; resource_type?: string | null; location_label?: string | null }>
   }> | null | undefined = [],
 ): SkippedMeterDescriptor[] {
@@ -157,12 +159,16 @@ export function resolveSkippedMetersWithoutStart(
   for (const apt of Array.isArray(apartments) ? apartments : []) {
     for (const m of apt?.meters || []) {
       if (m?.meter_id) {
-        lookup.set(m.meter_id, {
+        const entry: SkippedMeterDescriptor = {
           meter_id: m.meter_id,
           apartment_number: apt.apartment_number ?? null,
           resource_type: m.resource_type ?? null,
           location_label: m.location_label ?? null,
-        })
+        }
+        if (apt.apartment_kind !== undefined) {
+          entry.apartment_kind = apt.apartment_kind as SkippedMeterDescriptor['apartment_kind']
+        }
+        lookup.set(m.meter_id, entry)
       }
     }
   }

@@ -6,6 +6,7 @@
 import type {
   MasterMeterRow,
   MeterUnit,
+  ObjectKind,
   PeriodDTO,
   PreviousOrigin,
   ReadingSource,
@@ -30,8 +31,9 @@ export interface MockInternalMeter {
 export interface MockInternalApartment {
   apartment_id: string
   apartment_number: string
-  entrance: number
-  floor: number
+  apartment_kind: ObjectKind
+  entrance: number | null
+  floor: number | null
   can_submit_readings: boolean
   meters: MockInternalMeter[]
 }
@@ -117,6 +119,7 @@ export const MOCK_BASE_APARTMENTS_2026_10: MockInternalApartment[] = [
   {
     apartment_id: '018f0000-0000-7000-8000-000000000301',
     apartment_number: '01',
+    apartment_kind: 'APARTMENT',
     entrance: 1,
     floor: 1,
     can_submit_readings: true,
@@ -183,6 +186,7 @@ export const MOCK_BASE_APARTMENTS_2026_10: MockInternalApartment[] = [
   {
     apartment_id: '018f0000-0000-7000-8000-000000000302',
     apartment_number: '02',
+    apartment_kind: 'APARTMENT',
     entrance: 1,
     floor: 1,
     can_submit_readings: true,
@@ -230,6 +234,7 @@ export const MOCK_BASE_APARTMENTS_2026_10: MockInternalApartment[] = [
   {
     apartment_id: '018f0000-0000-7000-8000-000000000305',
     apartment_number: '05',
+    apartment_kind: 'APARTMENT',
     entrance: 1,
     floor: 2,
     can_submit_readings: true,
@@ -261,6 +266,7 @@ export const MOCK_BASE_APARTMENTS_2026_10: MockInternalApartment[] = [
   {
     apartment_id: '018f0000-0000-7000-8000-000000000309',
     apartment_number: '09',
+    apartment_kind: 'APARTMENT',
     entrance: 2,
     floor: 3,
     can_submit_readings: true,
@@ -308,6 +314,7 @@ export const MOCK_BASE_APARTMENTS_2026_10: MockInternalApartment[] = [
   {
     apartment_id: '018f0000-0000-7000-8000-000000000314',
     apartment_number: '14',
+    apartment_kind: 'APARTMENT',
     entrance: 2,
     floor: 4,
     can_submit_readings: true,
@@ -402,6 +409,35 @@ export const MOCK_BASE_APARTMENTS_2026_10: MockInternalApartment[] = [
         starts_in_period: '2026-11',
         historical_avg: null,
         reading: null,
+      },
+    ],
+  },
+  {
+    apartment_id: '018f0000-0000-7000-8000-000000000412',
+    apartment_number: '12',
+    apartment_kind: 'GARAGE',
+    entrance: null,
+    floor: 0,
+    can_submit_readings: true,
+    meters: [
+      {
+        meter_id: '018f0000-0000-7000-8000-000000000531',
+        resource_type: 'ELECTRICITY',
+        serial_number: 'EL-G12-01',
+        location_label: 'Garage 12 Power Outlet',
+        unit: 'kWh',
+        previous_value: '310.000',
+        needs_start: false,
+        historical_avg: '18.000',
+        reading: {
+          reading_id: '018f0000-0000-7000-8000-000000000931',
+          value: '328.500',
+          previous_value: '310.000',
+          consumption_delta: '18.500',
+          source: 'RESIDENT',
+          is_anomaly_confirmed: false,
+          previous_origin: 'HISTORY',
+        },
       },
     ],
   },

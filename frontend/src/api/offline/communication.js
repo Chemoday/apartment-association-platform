@@ -1,7 +1,10 @@
 import {
   UNHANDLED,
+  OFFLINE_APARTMENT_CARDS,
+  OFFLINE_DEMO_USERS,
   OFFLINE_MEMBERSHIPS_BY_USER,
   OFFLINE_POSTS,
+  getOfflineUserNotifications,
   makeOfflineError,
   dispatchMaintenanceAndNoticeNotifications,
 } from './state.js'
@@ -9,6 +12,7 @@ import {
   COMMENT_BODY_MAX_LENGTH,
   POST_BODY_MAX_LENGTH,
   POST_TITLE_MAX_LENGTH,
+  canAuthorForumTopicTarget,
   canViewerSeePost,
   getEditWindowDeadlineMs,
   hasDisallowedControlChars,
@@ -16,9 +20,26 @@ import {
   isPostHideable,
   isWithinEditWindow,
   projectCommentForViewer,
+  resolveAuthorApartmentForTarget,
   validateCommentEdit,
   validateHideReason,
 } from '../../utils/communication.js'
+
+const VALID_POST_TARGET_SCOPES = [
+  'ALL_BUILDING',
+  'ALL_OBJECTS',
+  'KINDS',
+  'ENTRANCE',
+  'APARTMENT_LIST',
+]
+
+function getOfflineAvailableObjectKinds() {
+  const kinds = new Set()
+  for (const card of OFFLINE_APARTMENT_CARDS) {
+    kinds.add(card.apartment_kind || 'APARTMENT')
+  }
+  return Array.from(kinds)
+}
 
 export async function handleOfflineCommunication(ctx) {
   const { urlObj, pathname, method, body, raw, user } = ctx
@@ -46,6 +67,7 @@ export async function handleOfflineCommunication(ctx) {
       target_scope: p.target_scope,
       target_entrance: p.target_entrance,
       target_apartment_ids: p.target_apartment_ids,
+      target_kinds: p.target_kinds ?? null,
       is_active: p.is_active,
       comments_enabled: p.comments_enabled,
       comments_count: p.comments.length,
@@ -149,6 +171,7 @@ export async function handleOfflineCommunication(ctx) {
       target_scope: p.target_scope,
       target_entrance: p.target_entrance,
       target_apartment_ids: p.target_apartment_ids,
+      target_kinds: p.target_kinds ?? null,
       is_active: p.is_active,
       comments_enabled: p.comments_enabled,
       comments_count: p.comments.length,
@@ -180,12 +203,26 @@ export async function handleOfflineCommunication(ctx) {
     if (!cleanTitle || !cleanBody || hasControlChars(cleanTitle) || hasControlChars(cleanBody)) {
       throw makeOfflineError(422, 'VALIDATION_ERROR', 'Title and body must be non-empty plain text.')
     }
+    if ((postType === 'OFFICIAL_NOTICE' || postType === 'EMERGENCY') && !isBoardUser) {
+      throw makeOfflineError(
+        403,
+        'FORBIDDEN',
+        'Only Board members can publish notices or emergencies.',
+      )
+    }
     if (postType === 'APARTMENT_THREAD') {
       if (reqBody.author_apartment_id !== undefined && reqBody.author_apartment_id !== null) {
         throw makeOfflineError(
           422,
           'INVALID_AUTHOR_APARTMENT',
           'author_apartment_id is not allowed on APARTMENT_THREAD.',
+        )
+      }
+      if (reqBody.target_kinds != null) {
+        throw makeOfflineError(
+          422,
+          'INVALID_TARGET',
+          'target_kinds is not allowed on APARTMENT_THREAD.',
         )
       }
       const targetAptId = reqBody.target_apartment_ids?.[0]
@@ -208,13 +245,169 @@ export async function handleOfflineCommunication(ctx) {
           'author_apartment_id is not allowed on BOARD_TOPIC.',
         )
       }
+      if (
+        (reqBody.target_scope && reqBody.target_scope !== 'ALL_BUILDING') ||
+        reqBody.target_entrance ||
+        reqBody.target_apartment_ids ||
+        reqBody.target_kinds
+      ) {
+        throw makeOfflineError(422, 'INVALID_TARGET', 'BOARD_TOPIC does not accept target fields.')
+      }
     }
-    const nowIso = new Date().toISOString()
+
+    const resolvedTargetScope =
+      typeof reqBody.target_scope === 'string' && reqBody.target_scope
+        ? reqBody.target_scope
+        : 'ALL_BUILDING'
     const userMems = OFFLINE_MEMBERSHIPS_BY_USER[user.user_id] || []
+
+    if (postType === 'FORUM_TOPIC') {
+      const rawTargetKinds = Array.isArray(reqBody.target_kinds)
+        ? reqBody.target_kinds.map((k) => String(k).toUpperCase())
+        : null
+      if (
+        !canAuthorForumTopicTarget({
+          role: user.building_role,
+          memberships: userMems,
+          targetScope: resolvedTargetScope,
+          targetKinds: rawTargetKinds,
+        })
+      ) {
+        throw makeOfflineError(
+          403,
+          'FORBIDDEN',
+          'You are not allowed to publish a forum topic to this target.',
+        )
+      }
+    }
+
+    if (!VALID_POST_TARGET_SCOPES.includes(resolvedTargetScope)) {
+      throw makeOfflineError(422, 'INVALID_TARGET', 'Invalid target_scope.')
+    }
+
+    let targetEntrance =
+      typeof reqBody.target_entrance === 'number' ? reqBody.target_entrance : null
+    let targetApartmentIds = Array.isArray(reqBody.target_apartment_ids)
+      ? reqBody.target_apartment_ids.map(String)
+      : null
+    let targetKinds = null
+
+    if (postType !== 'BOARD_TOPIC' && postType !== 'APARTMENT_THREAD') {
+      const hasEntranceInput =
+        reqBody.target_entrance !== undefined && reqBody.target_entrance !== null
+      const hasApartmentListInput =
+        Array.isArray(reqBody.target_apartment_ids) && reqBody.target_apartment_ids.length > 0
+      const hasKindsInput = Array.isArray(reqBody.target_kinds) && reqBody.target_kinds.length > 0
+
+      if (resolvedTargetScope === 'ALL_BUILDING' || resolvedTargetScope === 'ALL_OBJECTS') {
+        if (hasEntranceInput || hasApartmentListInput || hasKindsInput) {
+          throw makeOfflineError(
+            422,
+            'INVALID_TARGET',
+            `target_entrance, target_apartment_ids, and target_kinds must be null for ${resolvedTargetScope}.`,
+          )
+        }
+        targetEntrance = null
+        targetApartmentIds = null
+        targetKinds = null
+      } else if (resolvedTargetScope === 'KINDS') {
+        if (hasEntranceInput || hasApartmentListInput || !hasKindsInput) {
+          throw makeOfflineError(
+            422,
+            'INVALID_TARGET',
+            'Non-empty target_kinds is required for KINDS scope.',
+          )
+        }
+        const availableKinds = getOfflineAvailableObjectKinds()
+        const dedupedKinds = Array.from(
+          new Set(reqBody.target_kinds.map((k) => String(k).toUpperCase())),
+        )
+        const unknownKinds = dedupedKinds.filter((k) => !availableKinds.includes(k))
+        if (unknownKinds.length > 0) {
+          throw makeOfflineError(422, 'INVALID_TARGET', 'Unknown object kind in target_kinds.', {
+            unknown_kinds: unknownKinds,
+          })
+        }
+        targetEntrance = null
+        targetApartmentIds = null
+        targetKinds = dedupedKinds
+      } else if (resolvedTargetScope === 'ENTRANCE') {
+        if (
+          postType === 'FORUM_TOPIC' ||
+          typeof targetEntrance !== 'number' ||
+          !Number.isInteger(targetEntrance) ||
+          hasApartmentListInput ||
+          hasKindsInput
+        ) {
+          throw makeOfflineError(
+            422,
+            'INVALID_TARGET',
+            postType === 'FORUM_TOPIC'
+              ? 'Forum topics only support ALL_BUILDING, ALL_OBJECTS, or KINDS.'
+              : 'Valid target_entrance is required for ENTRANCE scope.',
+          )
+        }
+        targetApartmentIds = null
+        targetKinds = null
+      } else if (resolvedTargetScope === 'APARTMENT_LIST') {
+        if (
+          postType === 'FORUM_TOPIC' ||
+          hasEntranceInput ||
+          hasKindsInput ||
+          !hasApartmentListInput
+        ) {
+          throw makeOfflineError(
+            422,
+            'INVALID_TARGET',
+            postType === 'FORUM_TOPIC'
+              ? 'Forum topics only support ALL_BUILDING, ALL_OBJECTS, or KINDS.'
+              : 'Non-empty target_apartment_ids is required for APARTMENT_LIST scope.',
+          )
+        }
+        targetEntrance = null
+        targetKinds = null
+      }
+    }
+
+    let resolvedAuthorAptId = null
+    if (postType === 'BOARD_TOPIC') {
+      resolvedAuthorAptId = null
+    } else if (postType === 'APARTMENT_THREAD') {
+      resolvedAuthorAptId = isBoardUser ? null : targetApartmentIds?.[0] || null
+    } else if (
+      (postType === 'OFFICIAL_NOTICE' || postType === 'EMERGENCY') &&
+      !reqBody.author_apartment_id
+    ) {
+      resolvedAuthorAptId = null
+    } else {
+      const authorResolution = resolveAuthorApartmentForTarget({
+        memberships: userMems,
+        target: {
+          target_scope: resolvedTargetScope,
+          target_entrance: targetEntrance,
+          target_apartment_ids: targetApartmentIds,
+          target_kinds: targetKinds,
+        },
+        requestedApartmentId: reqBody.author_apartment_id,
+      })
+      if (!authorResolution.ok) {
+        throw makeOfflineError(
+          authorResolution.status,
+          authorResolution.errorCode,
+          authorResolution.message,
+        )
+      }
+      resolvedAuthorAptId = authorResolution.apartmentId
+    }
+
+    const nowIso = new Date().toISOString()
     const boardFullNames = {
       '018f0000-0000-7000-8000-000000000101': 'Oleg Sidorov',
       '018f0000-0000-7000-8000-000000000105': 'Peeter Saar',
     }
+    const matchedAuthorMem = resolvedAuthorAptId
+      ? userMems.find((m) => m.apartment_id === resolvedAuthorAptId) || null
+      : null
     const authorBadge =
       postType === 'BOARD_TOPIC'
         ? {
@@ -226,9 +419,18 @@ export async function handleOfflineCommunication(ctx) {
               display_label: user.building_role === 'CHAIRMAN' ? 'Chairman' : 'Board',
               role_badge: 'BOARD',
             }
-          : userMems[0]?.preview_badge || {
-              display_label: user.label,
-              role_badge: isBoardUser ? 'BOARD' : 'OWNER',
+          : matchedAuthorMem?.preview_badge || {
+              display_label:
+                user.building_role === 'CHAIRMAN'
+                  ? 'Chairman'
+                  : user.building_role === 'BOARD'
+                    ? 'Board'
+                    : user.label,
+              role_badge: isBoardUser
+                ? 'BOARD'
+                : user.building_role === 'ACCOUNTANT'
+                  ? 'ACCOUNTANT'
+                  : 'OWNER',
             }
     const created = {
       id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
@@ -237,18 +439,12 @@ export async function handleOfflineCommunication(ctx) {
       title: cleanTitle,
       body: cleanBody,
       author_user_id: user.user_id,
-      author_apartment_id:
-        postType === 'BOARD_TOPIC'
-          ? null
-          : postType === 'APARTMENT_THREAD'
-            ? isBoardUser
-              ? null
-              : reqBody.target_apartment_ids?.[0] || null
-            : reqBody.author_apartment_id || null,
+      author_apartment_id: resolvedAuthorAptId,
       author_badge: authorBadge,
-      target_scope: reqBody.target_scope || 'ALL_BUILDING',
-      target_entrance: reqBody.target_entrance || null,
-      target_apartment_ids: reqBody.target_apartment_ids || null,
+      target_scope: resolvedTargetScope,
+      target_entrance: targetEntrance,
+      target_apartment_ids: targetApartmentIds,
+      target_kinds: targetKinds,
       is_active: true,
       comments_enabled: reqBody.comments_enabled !== false,
       created_at: nowIso,
@@ -267,9 +463,42 @@ export async function handleOfflineCommunication(ctx) {
         target_scope: created.target_scope,
         target_entrance: created.target_entrance,
         target_apartment_ids: created.target_apartment_ids,
+        target_kinds: created.target_kinds,
         author_user_id: user.user_id,
         created_at: nowIso,
       })
+    }
+    if (created.post_type === 'EMERGENCY') {
+      for (const demoUser of OFFLINE_DEMO_USERS) {
+        if (demoUser.user_id !== user.user_id) {
+          const demoMems = OFFLINE_MEMBERSHIPS_BY_USER[demoUser.user_id] || []
+          if (
+            !canViewerSeePost(created, {
+              viewerUserId: demoUser.user_id,
+              viewerRole: demoUser.building_role,
+              memberships: demoMems,
+            })
+          ) {
+            continue
+          }
+          const list = getOfflineUserNotifications(demoUser.user_id)
+          list.unshift({
+            id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+            user_id: demoUser.user_id,
+            event_type: 'EMERGENCY_PUBLISHED',
+            subject_type: 'post',
+            subject_id: created.id,
+            params: {
+              category: created.category,
+              target_scope: created.target_scope,
+              target_entrance: created.target_entrance,
+              target_kinds: created.target_scope === 'KINDS' ? (created.target_kinds ?? []) : [],
+            },
+            created_at: nowIso,
+            read_at: null,
+          })
+        }
+      }
     }
     return {
       id: created.id,
@@ -282,6 +511,7 @@ export async function handleOfflineCommunication(ctx) {
       target_scope: created.target_scope,
       target_entrance: created.target_entrance,
       target_apartment_ids: created.target_apartment_ids,
+      target_kinds: created.target_kinds ?? null,
       is_active: created.is_active,
       comments_enabled: created.comments_enabled,
       comments_count: 0,
@@ -325,6 +555,7 @@ export async function handleOfflineCommunication(ctx) {
       target_scope: post.target_scope,
       target_entrance: post.target_entrance,
       target_apartment_ids: post.target_apartment_ids,
+      target_kinds: post.target_kinds ?? null,
       is_active: post.is_active,
       comments_enabled: post.comments_enabled,
       comments_count: post.comments.length,
@@ -402,6 +633,7 @@ export async function handleOfflineCommunication(ctx) {
       throw makeOfflineError(422, 'VALIDATION_ERROR', 'Comment body must be non-empty plain text.')
     }
     const isBoardUser = ['CHAIRMAN', 'BOARD'].includes(user.building_role)
+    let resolvedCommentAptId = null
     if (post.post_type === 'APARTMENT_THREAD' || post.post_type === 'BOARD_TOPIC') {
       if (reqBody.author_apartment_id !== undefined && reqBody.author_apartment_id !== null) {
         throw makeOfflineError(
@@ -410,11 +642,34 @@ export async function handleOfflineCommunication(ctx) {
           'author_apartment_id is not allowed on this thread.',
         )
       }
+      resolvedCommentAptId =
+        post.post_type === 'APARTMENT_THREAD'
+          ? isBoardUser
+            ? null
+            : post.target_apartment_ids?.[0] || null
+          : null
+    } else {
+      const authorResolution = resolveAuthorApartmentForTarget({
+        memberships: userMems,
+        target: post,
+        requestedApartmentId: reqBody.author_apartment_id,
+      })
+      if (!authorResolution.ok) {
+        throw makeOfflineError(
+          authorResolution.status,
+          authorResolution.errorCode,
+          authorResolution.message,
+        )
+      }
+      resolvedCommentAptId = authorResolution.apartmentId
     }
     const boardFullNames = {
       '018f0000-0000-7000-8000-000000000101': 'Oleg Sidorov',
       '018f0000-0000-7000-8000-000000000105': 'Peeter Saar',
     }
+    const matchedCommentMem = resolvedCommentAptId
+      ? userMems.find((m) => m.apartment_id === resolvedCommentAptId) || null
+      : null
     const authorBadge =
       post.post_type === 'BOARD_TOPIC'
         ? {
@@ -426,23 +681,25 @@ export async function handleOfflineCommunication(ctx) {
               display_label: user.building_role === 'CHAIRMAN' ? 'Chairman' : 'Board',
               role_badge: 'BOARD',
             }
-          : userMems[0]?.preview_badge || {
-              display_label: user.label,
-              role_badge: isBoardUser ? 'BOARD' : 'OWNER',
+          : matchedCommentMem?.preview_badge || {
+              display_label:
+                user.building_role === 'CHAIRMAN'
+                  ? 'Chairman'
+                  : user.building_role === 'BOARD'
+                    ? 'Board'
+                    : user.label,
+              role_badge: isBoardUser
+                ? 'BOARD'
+                : user.building_role === 'ACCOUNTANT'
+                  ? 'ACCOUNTANT'
+                  : 'OWNER',
             }
     const newComment = {
       id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
       post_id: post.id,
       body: cleanCommentBody,
       author_user_id: user.user_id,
-      author_apartment_id:
-        post.post_type === 'BOARD_TOPIC'
-          ? null
-          : post.post_type === 'APARTMENT_THREAD'
-            ? isBoardUser
-              ? null
-              : post.target_apartment_ids?.[0] || null
-            : reqBody.author_apartment_id || null,
+      author_apartment_id: resolvedCommentAptId,
       author_badge: authorBadge,
       created_at: new Date().toISOString(),
       edited_at: null,
@@ -523,6 +780,7 @@ export async function handleOfflineCommunication(ctx) {
       target_scope: post.target_scope,
       target_entrance: post.target_entrance,
       target_apartment_ids: post.target_apartment_ids,
+      target_kinds: post.target_kinds ?? null,
       is_active: post.is_active,
       comments_enabled: post.comments_enabled,
       comments_count: post.comments.length,
@@ -716,6 +974,7 @@ export async function handleOfflineCommunication(ctx) {
       target_scope: post.target_scope,
       target_entrance: post.target_entrance,
       target_apartment_ids: post.target_apartment_ids,
+      target_kinds: post.target_kinds ?? null,
       is_active: post.is_active,
       comments_enabled: post.comments_enabled,
       comments_count: post.comments.length,
@@ -815,6 +1074,52 @@ export async function handleOfflineCommunication(ctx) {
     return {
       post_id: ackMatch[1],
       acknowledged_at: new Date().toISOString(),
+    }
+  }
+
+  const resolveMatch = pathname.match(/^\/communication\/emergencies\/([^/]+)\/resolve$/)
+  if (resolveMatch && method === 'POST') {
+    if (!['CHAIRMAN', 'BOARD'].includes(user.building_role)) {
+      throw makeOfflineError(403, 'FORBIDDEN', 'Only Board members can resolve emergencies.')
+    }
+    const post = OFFLINE_POSTS.find((p) => p.id === resolveMatch[1])
+    if (!post) {
+      throw makeOfflineError(404, 'POST_NOT_FOUND', 'Emergency alert not found.')
+    }
+    post.is_active = false
+    for (const demoUser of OFFLINE_DEMO_USERS) {
+      if (demoUser.user_id !== user.user_id) {
+        const demoMems = OFFLINE_MEMBERSHIPS_BY_USER[demoUser.user_id] || []
+        if (
+          !canViewerSeePost(post, {
+            viewerUserId: demoUser.user_id,
+            viewerRole: demoUser.building_role,
+            memberships: demoMems,
+          })
+        ) {
+          continue
+        }
+        const list = getOfflineUserNotifications(demoUser.user_id)
+        list.unshift({
+          id: `018f0000-0000-7000-8000-${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+          user_id: demoUser.user_id,
+          event_type: 'EMERGENCY_RESOLVED',
+          subject_type: 'post',
+          subject_id: post.id,
+          params: {
+            category: post.category,
+            target_scope: post.target_scope,
+            target_entrance: post.target_entrance,
+            target_kinds: post.target_scope === 'KINDS' ? (post.target_kinds ?? []) : [],
+          },
+          created_at: new Date().toISOString(),
+          read_at: null,
+        })
+      }
+    }
+    return {
+      post_id: post.id,
+      is_active: false,
     }
   }
 

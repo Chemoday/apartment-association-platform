@@ -13,6 +13,7 @@ import {
 } from '@/api/endpoints/meters.js'
 import { formatPeriodLabel } from '@/utils/dates.js'
 import { resolveSkippedMetersWithoutStart } from '@/utils/matrixStarts.js'
+import { objectShortName } from '@/utils/objectName.js'
 import { localizeError } from '@/locales/index.js'
 import PeriodToolbar from '@/views/readings/components/PeriodToolbar.vue'
 import MasterMeterKpi from '@/views/readings/components/MasterMeterKpi.vue'
@@ -37,6 +38,7 @@ function resolveTabFromQuery(rawTab) {
 }
 
 const periodCode = ref('')
+const selectedKind = ref('') // '' | 'APARTMENT' | 'PARKING' | 'GARAGE'
 const periodsList = ref([])
 const periodsLoaded = ref(false)
 const periodCodes = computed(() => periodsList.value.map((p) => p.period_code))
@@ -117,7 +119,10 @@ async function loadMatrix({ silent = false } = {}) {
       matrix.value = null
       return
     }
-    const data = await getPeriodMatrix(periodCode.value, { signal: controller.signal })
+    const data = await getPeriodMatrix(periodCode.value, {
+      kind: selectedKind.value || undefined,
+      signal: controller.signal,
+    })
     if (isUnmounted || seq !== loadMatrixSeq || controller.signal.aborted) return
     matrix.value = data
   } catch (err) {
@@ -184,7 +189,13 @@ function selectTab(nextTab) {
 }
 
 watch(
-  () => [session.actingUserId, session.sessionRevision, session.buildingRole, periodCode.value],
+  () => [
+    session.actingUserId,
+    session.sessionRevision,
+    session.buildingRole,
+    periodCode.value,
+    selectedKind.value,
+  ],
   ([newUser, newRev, newRole], oldTuple) => {
     const oldUser = oldTuple?.[0]
     const oldRev = oldTuple?.[1]
@@ -206,6 +217,7 @@ watch(
     if (sessionChanged) {
       periodsList.value = []
       periodsLoaded.value = false
+      selectedKind.value = ''
       if (periodCode.value !== '') {
         suppressPeriodWatch = true
         periodCode.value = ''
@@ -293,15 +305,16 @@ function formatSkippedMeterLine(item) {
     const resourceKey = `resources.${item.resource_type}`
     const translated = session.t(resourceKey)
     const resourceLabel = translated && translated !== resourceKey ? translated : item.resource_type
+    const objectLabel = objectShortName(item.apartment_kind, item.apartment_number, session.t)
     if (item.location_label) {
-      return session.t('accounting.estimateSkippedItemWithLocation', {
-        apartment: item.apartment_number,
+      return session.t('accounting.estimateSkippedObjectItemWithLocation', {
+        object: objectLabel,
         resource: resourceLabel,
         location: item.location_label,
       })
     }
-    return session.t('accounting.estimateSkippedItem', {
-      apartment: item.apartment_number,
+    return session.t('accounting.estimateSkippedObjectItem', {
+      object: objectLabel,
       resource: resourceLabel,
     })
   }
@@ -429,8 +442,8 @@ function openHistory(readingId, label) {
             <template v-if="activeTab !== 'consumption' && periodCode">
               {{ session.t('accounting.billingPeriod') }}
               {{ formatPeriodLabel(periodCode, session.lang) }}
-              <template v-if="apartments.length || session.knownBuildingApartmentsCount !== null">
-                • {{ apartments.length || session.knownBuildingApartmentsCount }} {{ session.t('accounting.unitsTotal') }}
+              <template v-if="selectedKind || apartments.length || session.knownBuildingApartmentsCount !== null">
+                • {{ selectedKind ? apartments.length : (apartments.length || session.knownBuildingApartmentsCount) }} {{ session.t('accounting.unitsTotal') }}
               </template>
             </template>
             <template v-else-if="session.knownBuildingApartmentsCount !== null">
@@ -547,11 +560,14 @@ function openHistory(readingId, label) {
         :period-code="periodCode"
         :period-status="period?.status || ''"
         :periods="periodCodes"
+        :selected-kind="selectedKind"
+        :available-kinds="session.availableObjectKinds"
         :missing-count="missingCount"
         :busy-action="busyAction"
         :loading="loading || !period"
         :csv-supported="csvSupported"
         @change-period="(code) => (periodCode = code)"
+        @change-kind="(kind) => (selectedKind = kind)"
         @change-status="handleStatusChange"
         @estimate-missing="handleEstimateMissing"
         @export-csv="handleExportCsv"
@@ -626,6 +642,7 @@ function openHistory(readingId, label) {
           :apartments="apartments"
           :period-code="periodCode"
           :period-status="period?.status || ''"
+          :filtered-by-kind="Boolean(selectedKind)"
           @master-saved="() => loadMatrix({ silent: true })"
           @open-history="openHistory"
         />
@@ -646,6 +663,7 @@ function openHistory(readingId, label) {
           :balances="balances"
           :master-meters="masterMeters"
           :period-code="periodCode"
+          :filtered-by-kind="Boolean(selectedKind)"
         />
       </template>
     </template>

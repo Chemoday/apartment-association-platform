@@ -1,62 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute, type RouteRecordRaw } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session.js'
-import { useRole } from '@/composables/useRole.js'
 import { unread } from '@/composables/useUnreadCount.js'
 import { useChatState } from '@/composables/useChatState.js'
-import { APP_ROUTES, NAV_GROUPS } from '@/router/routes.js'
+import { useNavigation } from '@/composables/useNavigation.js'
+import AppIcon from '@/components/base/AppIcon.vue'
 
 const route = useRoute()
 const session = useSessionStore()
-const { buildingRole } = useRole()
 const { canShowChat, recentCount: chatRecentCount } = useChatState()
+const { visibleNavGroups, isRouteActive, isGroupActive } = useNavigation()
 
 const activeSheetGroupId = ref<string | null>(null)
-
-type NavRouteItem = RouteRecordRaw & { meta: NonNullable<RouteRecordRaw['meta']> }
-
-const visibleNavRoutes = computed<NavRouteItem[]>(() =>
-  APP_ROUTES.filter((r): r is NavRouteItem => {
-    if (!r.meta?.navKey) return false
-    if (r.meta?.requiresChatEnabled && !canShowChat.value) {
-      return false
-    }
-    if (r.meta?.requiresApartmentOrBoard) {
-      const isBoardOrChairman = ['CHAIRMAN', 'BOARD'].includes(buildingRole.value)
-      const hasApartments = (session.memberships?.length || 0) > 0
-      if (!isBoardOrChairman && !hasApartments) return false
-    }
-    const allowed = r.meta?.navRoles || r.meta?.roles
-    if (!allowed || allowed.length === 0) return true
-    return allowed.includes(buildingRole.value)
-  }),
-)
-
-const visibleNavGroups = computed(() =>
-  NAV_GROUPS.map((group) => {
-    const items = visibleNavRoutes.value.filter(
-      (r) => (r.meta?.navGroup || 'services') === group.id,
-    )
-    return {
-      ...group,
-      items,
-    }
-  }).filter((group) => group.items.length > 0),
-)
 
 const activeSheetGroup = computed(
   () => visibleNavGroups.value.find((g) => g.id === activeSheetGroupId.value) || null,
 )
-
-function isRouteActive(item: RouteRecordRaw): boolean {
-  if (item.path === '/') return route.path === '/'
-  return route.path === item.path || route.path.startsWith(`${item.path}/`)
-}
-
-function isGroupActive(group: { items: RouteRecordRaw[] }): boolean {
-  return group.items.some((item) => isRouteActive(item))
-}
 
 function toggleSheet(groupId: string): void {
   activeSheetGroupId.value = activeSheetGroupId.value === groupId ? null : groupId
@@ -99,17 +59,15 @@ onBeforeUnmount(() => {
     @click="closeSheet"
   >
     <div
-      class="w-full bg-surface-container-lowest border-t border-surface-container rounded-t-2xl p-4 pb-20 shadow-2xl space-y-2.5 max-h-[75vh] overflow-y-auto"
+      class="w-full bg-surface-container-lowest border-t border-outline-variant/50 rounded-t-2xl p-4 pb-20 shadow-xl space-y-2.5 max-h-[75vh] overflow-y-auto"
       @click.stop
     >
-      <div class="w-10 h-1 rounded-full bg-surface-container-high mx-auto mb-1" />
+      <div class="w-10 h-1 rounded-full bg-outline-variant/70 mx-auto mb-1" />
 
-      <div class="flex items-center justify-between pb-2 border-b border-surface-container">
+      <div class="flex items-center justify-between pb-2 border-b border-outline-variant/40">
         <div class="flex items-center gap-2">
-          <span class="material-symbols-outlined text-[20px] text-primary" aria-hidden="true">
-            {{ activeSheetGroup.icon }}
-          </span>
-          <span class="font-headline-sm text-sm font-bold text-on-surface">
+          <AppIcon :name="activeSheetGroup.icon" :size="20" class="text-primary" />
+          <span class="font-headline-md text-base font-semibold text-on-surface">
             {{ session.t(`navGroups.${activeSheetGroup.labelKey}`) }}
           </span>
         </div>
@@ -119,7 +77,7 @@ onBeforeUnmount(() => {
           :aria-label="session.t('common.close')"
           @click="closeSheet"
         >
-          <span class="material-symbols-outlined text-[18px]" aria-hidden="true">close</span>
+          <AppIcon name="close" :size="18" />
         </button>
       </div>
 
@@ -129,25 +87,23 @@ onBeforeUnmount(() => {
           :key="item.name"
           :to="item.path"
           :data-testid="`mobile-nav-link-${item.meta.navKey}`"
-          class="w-full p-3 rounded-xl flex items-start gap-3 text-left transition-colors"
+          class="w-full p-3 rounded-[var(--radius-control)] flex items-start gap-3 text-left transition-colors border"
           :class="
             isRouteActive(item)
-              ? 'bg-primary-container/20 border border-primary/25 text-on-surface'
-              : 'bg-surface-container-low/60 hover:bg-surface-container text-on-surface'
+              ? 'bg-primary-fixed/50 border-primary/25 text-on-surface'
+              : 'bg-surface-container-low/70 border-transparent hover:bg-surface-container text-on-surface'
           "
           @click="closeSheet"
         >
           <div
-            class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
+            class="w-9 h-9 rounded-[var(--radius-control)] flex items-center justify-center shrink-0 mt-0.5"
             :class="
               isRouteActive(item)
                 ? 'bg-primary text-on-primary'
                 : 'bg-surface-container text-on-surface-variant'
             "
           >
-            <span class="material-symbols-outlined text-[19px]" aria-hidden="true">
-              {{ item.meta.icon }}
-            </span>
+            <AppIcon :name="String(item.meta.icon || '')" :size="19" />
           </div>
 
           <div class="flex-1 min-w-0">
@@ -170,7 +126,7 @@ onBeforeUnmount(() => {
               </span>
               <span
                 v-else-if="item.meta.navKey === 'accounting'"
-                class="inline-flex items-center px-1.5 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed font-label-md text-[10px] uppercase font-bold"
+                class="inline-flex items-center px-1.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-[10px] uppercase font-bold"
               >
                 {{ session.t('nav.newBadge') }}
               </span>
@@ -186,8 +142,8 @@ onBeforeUnmount(() => {
 
   <!-- Primary 4-Tab Mobile Bottom Bar with iOS Safe-Area support -->
   <nav
-    aria-label="Mobile Navigation"
-    class="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface-container-lowest/95 backdrop-blur-md border-t border-surface-container px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] flex items-center justify-around shadow-lg"
+    :aria-label="session.t('a11y.mobileNavigation')"
+    class="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-surface-container-lowest/95 backdrop-blur-md border-t border-outline-variant/50 px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] flex items-center justify-around shadow-lg"
   >
     <template v-for="group in visibleNavGroups" :key="group.id">
       <!-- Single-item group (e.g., Home Dashboard) -->
@@ -195,17 +151,15 @@ onBeforeUnmount(() => {
         v-if="group.items.length === 1"
         :to="group.items[0].path"
         :data-testid="`mobile-nav-group-${group.id}`"
-        class="flex flex-col items-center justify-center py-1 px-3 rounded-xl text-[11px] font-label-md transition-colors min-w-[68px] min-h-[46px]"
+        class="flex flex-col items-center justify-center py-1 px-3 rounded-[var(--radius-control)] text-[11px] font-label-md transition-colors min-w-[68px] min-h-[46px]"
         :class="
           isRouteActive(group.items[0]) && !activeSheetGroupId
-            ? 'text-primary font-bold bg-surface-container-high/60'
+            ? 'text-primary font-bold bg-primary-fixed/60'
             : 'text-on-surface-variant hover:text-on-surface'
         "
         @click="closeSheet"
       >
-        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">
-          {{ group.items[0].meta.icon }}
-        </span>
+        <AppIcon :name="String(group.items[0].meta.icon || '')" :size="20" />
         <span class="truncate max-w-[80px] mt-0.5">
           {{ session.t(`navGroupsShort.${group.shortLabelKey}`) }}
         </span>
@@ -217,10 +171,10 @@ onBeforeUnmount(() => {
         type="button"
         :data-testid="`mobile-nav-group-${group.id}`"
         :aria-expanded="activeSheetGroupId === group.id"
-        class="flex flex-col items-center justify-center py-1 px-3 rounded-xl text-[11px] font-label-md transition-colors min-w-[68px] min-h-[46px] cursor-pointer relative"
+        class="flex flex-col items-center justify-center py-1 px-3 rounded-[var(--radius-control)] text-[11px] font-label-md transition-colors min-w-[68px] min-h-[46px] cursor-pointer relative"
         :class="
           activeSheetGroupId === group.id || isGroupActive(group)
-            ? 'text-primary font-bold bg-surface-container-high/60'
+            ? 'text-primary font-bold bg-primary-fixed/60'
             : 'text-on-surface-variant hover:text-on-surface'
         "
         @click="toggleSheet(group.id)"
@@ -230,9 +184,7 @@ onBeforeUnmount(() => {
           class="absolute top-1 right-4 w-2 h-2 rounded-full"
           :class="unread > 0 ? 'bg-error' : 'bg-secondary'"
         />
-        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">
-          {{ group.icon }}
-        </span>
+        <AppIcon :name="group.icon" :size="20" />
         <span class="truncate max-w-[80px] mt-0.5">
           {{ session.t(`navGroupsShort.${group.shortLabelKey}`) }}
         </span>

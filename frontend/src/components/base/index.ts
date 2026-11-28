@@ -1,4 +1,5 @@
 export { default as AppErrorBoundary } from './AppErrorBoundary.vue'
+export { default as AppIcon } from './AppIcon.vue'
 export { default as BaseAlertBanner } from './BaseAlertBanner.vue'
 export { default as BaseButton } from './BaseButton.vue'
 export { default as BaseCard } from './BaseCard.vue'

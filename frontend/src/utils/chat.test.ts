@@ -125,7 +125,7 @@ test('validateChatAfterParam rejects non-integers and > 2^63-1 cursors', () => {
   assert.equal(validateChatLimitParam('201').ok, false)
 })
 
-test('canUserParticipateInChat excludes apartmentless accountants', () => {
+test('canUserParticipateInChat excludes apartmentless accountants and parking/garage-only users (#066)', () => {
   assert.equal(canUserParticipateInChat({ building_role: 'ACCOUNTANT' }, []), false)
   assert.equal(
     canUserParticipateInChat({ building_role: 'ACCOUNTANT' }, [{ apartment_id: 'a1' }]),
@@ -135,6 +135,18 @@ test('canUserParticipateInChat excludes apartmentless accountants', () => {
   assert.equal(canUserParticipateInChat({ building_role: 'BOARD' }, []), true)
   assert.equal(canUserParticipateInChat({ building_role: 'USER' }, []), false)
   assert.equal(canUserParticipateInChat({ building_role: 'USER' }, [{ apartment_id: 'a2' }]), true)
+  assert.equal(
+    canUserParticipateInChat({ building_role: 'USER' }, [
+      { apartment_id: 'g12', apartment_kind: 'GARAGE', relation_type: 'OWNER' },
+    ]),
+    false,
+  )
+  assert.equal(
+    canUserParticipateInChat({ building_role: 'USER' }, [
+      { apartment_id: 'p1', apartment_kind: 'PARKING', relation_type: 'TENANT' },
+    ]),
+    false,
+  )
 })
 
 test('evaluateChatRateLimit enforces 10/min and 60/hour with longer wait winning', () => {
